@@ -1,0 +1,26 @@
+# Build output
+bin/
+obj/
+
+# Visual Studio / Rider
+.vs/
+*.user
+*.suo
+.idea/
+
+# Logs
+*.log
+logs/
+
+# NuGet
+*.nupkg
+.nuget/
+packages/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Secrets / local config
+appsettings.local.json
+secrets.json

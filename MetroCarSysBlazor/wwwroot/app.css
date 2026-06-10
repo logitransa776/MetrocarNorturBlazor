@@ -1,0 +1,1081 @@
+html, body {
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    background: #F2F5F9;
+}
+
+/* ═══════════════════════════════════════════
+   LOGIN — fondo punteado + card moderna
+   ═══════════════════════════════════════════ */
+
+.login-bg {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #C8D4E3;
+    background-image: radial-gradient(rgba(255,255,255,0.45) 1px, transparent 1px);
+    background-size: 20px 20px;
+    font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif;
+}
+
+.login-card {
+    background: #ffffff;
+    padding: 2.5rem;
+    border-radius: 16px;
+    box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);
+    width: 100%;
+    max-width: 400px;
+    text-align: center;
+}
+
+.login-logo {
+    margin-bottom: 2rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.login-logo img {
+    max-width: 180px;
+    height: auto;
+}
+
+.login-logo-buslink {
+    width: 460px;
+    max-width: 100%;
+    height: auto;
+    display: block;
+}
+
+.login-logo-text {
+    font-size: 2rem;
+    font-weight: 900;
+    letter-spacing: 2px;
+    color: #1f2937;
+    text-transform: uppercase;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
+}
+
+.login-field {
+    margin-bottom: 1.5rem;
+    text-align: left;
+}
+
+.login-label {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: #1f2937;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.login-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.login-icon {
+    position: absolute;
+    left: 14px;
+    font-size: 1rem;
+    pointer-events: none;
+    line-height: 1;
+}
+
+.login-input {
+    width: 100%;
+    padding: 12px 40px;
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-family: inherit;
+    outline: none;
+    background: #f9fafb;
+    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.login-input:focus {
+    border-color: #003AA0;
+    background: #fff;
+    box-shadow: 0 0 0 4px rgba(0,58,160,0.1);
+}
+
+.login-eye {
+    position: absolute;
+    right: 14px;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.login-error {
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    color: #b91c1c;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 0.875rem;
+    margin-bottom: 1rem;
+    text-align: left;
+}
+
+.login-btn {
+    width: 100%;
+    padding: 14px;
+    background-color: #003AA0;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background-color 0.2s, transform 0.1s;
+    margin-top: 0.5rem;
+}
+
+.login-btn:hover:not(:disabled) {
+    background-color: #002880;
+}
+
+.login-btn:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.login-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.login-footer {
+    margin-top: 2rem;
+    color: #6b7280;
+    font-size: 0.85rem;
+    border-top: 1px solid #e5e7eb;
+    padding-top: 1rem;
+}
+
+.login-footer strong {
+    color: #003AA0;
+    display: block;
+    margin-top: 4px;
+    font-size: 0.9rem;
+}
+
+.page-header {
+    border-left: 4px solid #003AA0;
+    padding-left: 14px;
+}
+
+/* ═══════════════════════════════════════════
+   DRAWER DE NAVEGACIÓN — overlay puro
+   ═══════════════════════════════════════════ */
+
+/* Backdrop semitransparente */
+.nav-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 1200;
+    animation: fadeIn 0.18s ease;
+}
+
+/* Panel lateral */
+.nav-drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 270px;
+    background: #F4F6F9;
+    z-index: 1300;
+    box-shadow: 4px 0 24px rgba(0,0,0,0.18);
+    display: flex;
+    flex-direction: column;
+    transform: translateX(-100%);
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.nav-drawer--open {
+    transform: translateX(0);
+}
+
+/* Header del drawer */
+.nav-drawer__header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 16px;
+    height: 48px;
+    min-height: 48px;
+    background: linear-gradient(90deg, #112F5B 0%, #003AA0 100%);
+    flex-shrink: 0;
+}
+
+.nav-drawer__logo {
+    font-size: 1.05rem;
+    font-weight: 900;
+    letter-spacing: 0.1em;
+    color: white;
+}
+
+.nav-drawer__subtitle {
+    font-size: 0.7rem;
+    color: #8BA7CC;
+    border-left: 1px solid rgba(255,255,255,0.25);
+    padding-left: 10px;
+    line-height: 1.2;
+}
+
+/* Área de navegación */
+.nav-drawer__nav {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+
+/* Sección (grupo colapsable) */
+.nav-section {
+    margin: 2px 0;
+}
+
+.nav-section__title {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #1E3A5F;
+    transition: background 0.15s;
+}
+
+.nav-section__title:hover {
+    background: #E3EAF4;
+    border-radius: 6px;
+}
+
+.nav-section__icon {
+    color: #003AA0;
+    flex-shrink: 0;
+}
+
+.nav-section__chevron {
+    color: #7A9AC0;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+/* Ítems dentro de un grupo */
+.nav-section__items {
+    padding: 2px 0 4px 0;
+}
+
+/* Submenú nivel 3 — botón colapsable anidado */
+.nav-section__title--sub {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 16px 7px 36px;
+    font-size: 0.875rem;
+    color: #2D4A6E;
+    background: none;
+    border: none;
+    border-radius: 6px;
+    margin: 1px 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+    text-align: left;
+}
+
+.nav-section__title--sub:hover {
+    background: #E3EAF4;
+}
+
+.nav-section__title--sub .nav-section__chevron {
+    margin-left: auto;
+    flex-shrink: 0;
+    color: #7A9BBF;
+}
+
+/* Contenedor de ítems nivel 3 — sangría extra */
+.nav-section__items--sub {
+    padding: 2px 0 4px 0;
+}
+
+.nav-section__items--sub .nav-item {
+    padding-left: 52px;
+    font-size: 0.825rem;
+}
+
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px 8px 36px;
+    font-size: 0.875rem;
+    color: #2D4A6E;
+    text-decoration: none;
+    border-radius: 6px;
+    margin: 1px 8px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.nav-item:hover {
+    background: #DDE8F5;
+    color: #003AA0;
+}
+
+.nav-item--active {
+    background: #D0E3F7 !important;
+    color: #003AA0 !important;
+    font-weight: 700;
+    border-left: 3px solid #F99410;
+    padding-left: 33px;
+}
+
+.nav-item--disabled {
+    color: #A8BDD0;
+    cursor: default;
+    pointer-events: none;
+}
+
+.nav-item__icon {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.nav-divider {
+    height: 1px;
+    background: #D8E3EE;
+    margin: 6px 16px;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+/* ═══════════════════════════════════════════
+   TABLERO DE ALERTAS — franja debajo del AppBar
+   ═══════════════════════════════════════════ */
+
+.tablero-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    padding: 5px 16px;
+    background: #1A2B45;
+    border-bottom: 1px solid #2A3F60;
+    font-size: 0.76rem;
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+}
+
+.tablero-bar__sep {
+    width: 1px;
+    height: 22px;
+    background: rgba(255,255,255,0.15);
+    margin: 0 4px;
+    flex-shrink: 0;
+}
+
+.tablero-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: default;
+}
+
+/* Totales — azul neutro */
+.tablero-chip--total {
+    background: rgba(255,255,255,0.08);
+    color: #C7D6EC;
+    border: 1px solid rgba(255,255,255,0.1);
+}
+
+/* Próximos a vencer (≤30d) — amarillo */
+.tablero-chip--warn {
+    background: rgba(249,148,16,0.15);
+    color: #F9B44E;
+    border: 1px solid rgba(249,148,16,0.3);
+}
+
+/* Vencidos — rojo */
+.tablero-chip--danger {
+    background: rgba(220,38,38,0.18);
+    color: #FF7A7A;
+    border: 1px solid rgba(220,38,38,0.35);
+}
+
+/* Todo en orden — verde tenue */
+.tablero-chip--ok {
+    background: rgba(34,197,94,0.12);
+    color: #6EE7A0;
+    border: 1px solid rgba(34,197,94,0.25);
+}
+
+.tablero-chip__num {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.85rem;
+}
+
+.tablero-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.tablero-group__label {
+    font-size: 0.67rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #6A85A8;
+    margin-right: 2px;
+}
+
+/* ═══════════════════════════════════════════
+   GRILLA DE TRÁFICO — planilla de servicios
+   Estilo compacto tipo FoxPro, con scroll y header fijo
+   ═══════════════════════════════════════════ */
+
+.trafico-wrap {
+    max-height: calc(100vh - 230px);
+    overflow: auto;
+}
+
+.trafico-grid {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.80rem;
+    font-family: 'Consolas', 'Cascadia Mono', 'Segoe UI', Arial, sans-serif;
+    white-space: nowrap;
+}
+
+.trafico-grid thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #112F5B;
+    color: #fff;
+    font-weight: 700;
+    text-align: left;
+    padding: 5px 7px;
+    border: 1px solid #0c2347;
+    white-space: nowrap;
+    font-size: 0.75rem;
+    letter-spacing: 0.03em;
+}
+
+.trafico-grid thead th.c { text-align: center; }
+.trafico-grid thead th.r { text-align: right; }
+
+.trafico-grid tbody td {
+    padding: 3px 7px;
+    border: 1px solid #D8DEE6;
+    color: #1A2433;
+    overflow: visible;
+}
+
+.trafico-grid tbody td.c { text-align: center; }
+.trafico-grid tbody td.r { text-align: right; font-variant-numeric: tabular-nums; }
+.trafico-grid tbody td.nowrap { white-space: nowrap; }
+
+/* Hover sutil sin tapar el color de estado */
+.trafico-grid tbody tr:hover td {
+    filter: brightness(0.94);
+}
+
+/* Header clickeable para ordenar (panel Buses) */
+.trafico-grid thead th.sortable {
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.trafico-grid thead th.sortable:hover {
+    background: #1A4178;
+}
+
+/* ═══════════════════════════════════════════
+   PANEL BUSES — grid2 del FoxPro (checkbox verBuses)
+   Planilla a la izquierda + flota a la derecha
+   ═══════════════════════════════════════════ */
+
+.trafico-layout {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.trafico-layout__main {
+    flex: 1;
+    min-width: 0;   /* permite que la grilla principal se achique con scroll propio */
+}
+
+.buses-panel {
+    width: 480px;
+    flex-shrink: 0;
+}
+
+.buses-panel__header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: linear-gradient(90deg, #112F5B 0%, #003AA0 100%);
+    color: #fff;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+}
+
+.buses-panel__wrap {
+    max-height: calc(100vh - 270px);
+}
+
+/* En pantallas angostas el panel pasa abajo, a lo ancho */
+@media (max-width: 1500px) {
+    .trafico-layout {
+        flex-direction: column;
+    }
+    .buses-panel {
+        width: 100%;
+    }
+    .buses-panel__wrap {
+        max-height: 420px;
+    }
+}
+
+/* ═══════════════════════════════════════════
+   BOTONES DE FILTRO — Empresa / Turismo / Nortur / combos
+   ═══════════════════════════════════════════ */
+
+/* Combo-select nativo estilizado igual que filtro-btn */
+.filtro-combo {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px 4px 10px;
+    border-radius: 6px;
+    border: 1.5px solid #CBD5E1;
+    background: #F8FAFC;
+    color: #64748B;
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%2364748B' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 6px center;
+    padding-right: 22px;
+    min-width: 120px;
+    max-width: 160px;
+    height: 30px;
+    line-height: 1;
+}
+
+.filtro-combo:hover {
+    border-color: #003AA0;
+    color: #003AA0;
+    background-color: #EEF3FB;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%23003AA0' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+}
+
+.filtro-combo:focus {
+    outline: none;
+    border-color: #003AA0;
+    box-shadow: 0 0 0 2px rgba(0,58,160,0.15);
+}
+
+.filtro-combo:disabled {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+/* Cuando tiene valor seleccionado (activo) */
+.filtro-combo--activo {
+    border-color: #003AA0;
+    color: #003AA0;
+    background-color: #EEF3FB;
+    font-weight: 700;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%23003AA0' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+}
+
+.filtro-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1.5px solid #CBD5E1;
+    background: #F8FAFC;
+    color: #64748B;
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.filtro-btn:hover {
+    border-color: #003AA0;
+    color: #003AA0;
+    background: #EEF3FB;
+}
+
+.filtro-btn--on {
+    background: #003AA0;
+    border-color: #003AA0;
+    color: #ffffff;
+}
+
+.filtro-btn--on:hover {
+    background: #002F88;
+    border-color: #002F88;
+    color: #ffffff;
+}
+
+/* Contador de registros dentro del botón */
+.filtro-btn__count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    padding: 0 5px;
+    height: 16px;
+    border-radius: 10px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    background: rgba(0,0,0,0.12);
+    color: inherit;
+    line-height: 1;
+}
+
+.filtro-btn--on .filtro-btn__count {
+    background: rgba(255,255,255,0.25);
+    color: #fff;
+}
+
+/* Nortur: acento naranja cuando está activo */
+.filtro-btn--nortur-on {
+    background: #003AA0;
+    border-color: #003AA0;
+}
+
+/* Cxl (servicios cancelados): acento rojo cuando está activo */
+.filtro-btn--cxl-on {
+    background: #DC2626;
+    border-color: #DC2626;
+}
+
+.filtro-btn--cxl-on:hover {
+    background: #B91C1C;
+    border-color: #B91C1C;
+    color: #ffffff;
+}
+
+/* Botón de filtro deshabilitado (mientras la vista cancelados está activa) */
+.filtro-btn:disabled {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+/* Chips de leyenda de estados */
+.leyenda {
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(0,0,0,0.15);
+    color: #1A2433;
+    font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════
+   CHIPS DE ESTADO — columna Estado en grilla de tráfico
+   ═══════════════════════════════════════════ */
+
+.estado-chip {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+    border: 1px solid transparent;
+}
+
+/* Cada estado con su color — misma paleta que RowStyle */
+.estado-chip--sin-asignar {
+    background: #FFF3CD;
+    color: #7C5C00;
+    border-color: #F0D070;
+}
+.estado-chip--asignado {
+    background: #FFFF80;
+    color: #5C5000;
+    border-color: #C8C800;
+}
+.estado-chip--curso {
+    background: #FF80FF;
+    color: #5C005C;
+    border-color: #C800C8;
+}
+.estado-chip--chequeo {
+    background: #52CEFE;
+    color: #003D5C;
+    border-color: #009ED4;
+}
+.estado-chip--finalizado {
+    background: #C0C0C0;
+    color: #2A2A2A;
+    border-color: #909090;
+}
+.estado-chip--facturado {
+    background: #98C5BF;
+    color: #1A3C38;
+    border-color: #5A9C94;
+}
+.estado-chip--cancelado {
+    background: #FFD5D5;
+    color: #8C1212;
+    border-color: #E87070;
+}
+
+a, .btn-link {
+    color: #006bb7;
+}
+
+.btn-primary {
+    color: #fff;
+    background-color: #1b6ec2;
+    border-color: #1861ac;
+}
+
+.btn:focus, .btn:active:focus, .btn-link.nav-link:focus, .form-control:focus, .form-check-input:focus {
+  box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
+}
+
+.content {
+    padding-top: 1.1rem;
+}
+
+h1:focus {
+    outline: none;
+}
+
+.valid.modified:not([type=checkbox]) {
+    outline: 1px solid #26b050;
+}
+
+.invalid {
+    outline: 1px solid #e50000;
+}
+
+.validation-message {
+    color: #e50000;
+}
+
+.blazor-error-boundary {
+    background: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTYiIGhlaWdodD0iNDkiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgeG1sbnM6eGxpbms9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkveGxpbmsiIG92ZXJmbG93PSJoaWRkZW4iPjxkZWZzPjxjbGlwUGF0aCBpZD0iY2xpcDAiPjxyZWN0IHg9IjIzNSIgeT0iNTEiIHdpZHRoPSI1NiIgaGVpZ2h0PSI0OSIvPjwvY2xpcFBhdGg+PC9kZWZzPjxnIGNsaXAtcGF0aD0idXJsKCNjbGlwMCkiIHRyYW5zZm9ybT0idHJhbnNsYXRlKC0yMzUgLTUxKSI+PHBhdGggZD0iTTI2My41MDYgNTFDMjY0LjcxNyA1MSAyNjUuODEzIDUxLjQ4MzcgMjY2LjYwNiA1Mi4yNjU4TDI2Ny4wNTIgNTIuNzk4NyAyNjcuNTM5IDUzLjYyODMgMjkwLjE4NSA5Mi4xODMxIDI5MC41NDUgOTIuNzk1IDI5MC42NTYgOTIuOTk2QzI5MC44NzcgOTMuNTEzIDI5MSA5NC4wODE1IDI5MSA5NC42NzgyIDI5MSA5Ny4wNjUxIDI4OS4wMzggOTkgMjg2LjYxNyA5OUwyNDAuMzgzIDk5QzIzNy45NjMgOTkgMjM2IDk3LjA2NTEgMjM2IDk0LjY3ODIgMjM2IDk0LjM3OTkgMjM2LjAzMSA5NC4wODg2IDIzNi4wODkgOTMuODA3MkwyMzYuMzM4IDkzLjAxNjIgMjM2Ljg1OCA5Mi4xMzE0IDI1OS40NzMgNTMuNjI5NCAyNTkuOTYxIDUyLjc5ODUgMjYwLjQwNyA1Mi4yNjU4QzI2MS4yIDUxLjQ4MzcgMjYyLjI5NiA1MSAyNjMuNTA2IDUxWk0yNjMuNTg2IDY2LjAxODNDMjYwLjczNyA2Ni4wMTgzIDI1OS4zMTMgNjcuMTI0NSAyNTkuMzEzIDY5LjMzNyAyNTkuMzEzIDY5LjYxMDIgMjU5LjMzMiA2OS44NjA4IDI1OS4zNzEgNzAuMDg4N0wyNjEuNzk1IDg0LjAxNjEgMjY1LjM4IDg0LjAxNjEgMjY3LjgyMSA2OS43NDc1QzI2Ny44NiA2OS43MzA5IDI2Ny44NzkgNjkuNTg3NyAyNjcuODc5IDY5LjMxNzkgMjY3Ljg3OSA2Ny4xMTgyIDI2Ni40NDggNjYuMDE4MyAyNjMuNTg2IDY2LjAxODNaTTI2My41NzYgODYuMDU0N0MyNjEuMDQ5IDg2LjA1NDcgMjU5Ljc4NiA4Ny4zMDA1IDI1OS43ODYgODkuNzkyMSAyNTkuNzg2IDkyLjI4MzcgMjYxLjA0OSA5My41Mjk1IDI2My41NzYgOTMuNTI5NSAyNjYuMTE2IDkzLjUyOTUgMjY3LjM4NyA5Mi4yODM3IDI2Ny4zODcgODkuNzkyMSAyNjcuMzg3IDg3LjMwMDUgMjY2LjExNiA4Ni4wNTQ3IDI2My41NzYgODYuMDU0N1oiIGZpbGw9IiNGRkU1MDAiIGZpbGwtcnVsZT0iZXZlbm9kZCIvPjwvZz48L3N2Zz4=) no-repeat 1rem/1.8rem, #b32121;
+    padding: 1rem 1rem 1rem 3.7rem;
+    color: white;
+}
+
+    .blazor-error-boundary::after {
+        content: "An error has occurred."
+    }
+
+.darker-border-checkbox.form-check-input {
+    border-color: #929292;
+}
+
+.form-floating > .form-control-plaintext::placeholder, .form-floating > .form-control::placeholder {
+    color: var(--bs-secondary-color);
+    text-align: end;
+}
+
+.form-floating > .form-control-plaintext:focus::placeholder, .form-floating > .form-control:focus::placeholder {
+    text-align: start;
+}
+
+/* ════════════════════════════════════════════════════════════
+   Zoom del Viaje — tema claro NORTUR
+   Solo lectura. Layout: 2 columnas + secciones compactas.
+   ════════════════════════════════════════════════════════════ */
+
+:root {
+    --z-bg:        #F4F6FA;   /* fondo principal — gris muy claro */
+    --z-bg-box:    #FFFFFF;   /* fondo del área de contenido */
+    --z-bg-adic:   #F0F4FB;   /* fondo columna adicionales */
+    --z-border:    #D1D9E6;   /* bordes */
+    --z-label:     #6B7A99;   /* etiquetas — gris azulado medio */
+    --z-value:     #1A2A45;   /* valores — azul oscuro NORTUR */
+    --z-acento:    #F99410;   /* naranja NORTUR */
+    --z-sep:       #E2E8F4;   /* separador de sección */
+    --z-header-bg: #003AA0;   /* header del diálogo — azul NORTUR */
+}
+
+/* ── MudDialog shell ── */
+.zoom-viaje-dialog .mud-dialog {
+    background: var(--z-bg) !important;
+    color: var(--z-value) !important;
+    border-radius: 10px !important;
+    overflow: hidden !important;
+}
+.zoom-viaje-dialog .mud-dialog-title {
+    background: var(--z-header-bg) !important;
+    border-bottom: none !important;
+    padding: 10px 18px !important;
+}
+.zoom-viaje-dialog .mud-dialog-content {
+    background: var(--z-bg) !important;
+    padding: 12px 16px 8px !important;
+    overflow-y: auto !important;
+    max-height: calc(100vh - 140px) !important;
+}
+.zoom-viaje-dialog .mud-dialog-actions {
+    background: var(--z-bg) !important;
+    border-top: 1px solid var(--z-border) !important;
+    padding: 8px 16px !important;
+}
+
+/* Ancho máximo */
+.zoom-viaje-dialog { max-width: 1020px; }
+
+/* ── Barra de título (fondo azul NORTUR) ── */
+.zoom-title-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 1rem;
+    color: #fff;
+}
+.zoom-title-bar__text { color: #fff; }
+.zoom-title-bar__nro {
+    margin-left: 8px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #fff;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.3);
+    padding: 2px 10px;
+    border-radius: 999px;
+}
+
+/* ── Banda de estado ── */
+.zoom-estado-banda {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0 18px;
+    border-radius: 6px;
+    padding: 7px 14px;
+    margin-bottom: 10px;
+    border: 1px solid transparent;
+}
+.zoom-estado-banda__label {
+    font-size: 0.60rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: rgba(0,0,0,0.45);
+    display: block;
+    margin-bottom: 1px;
+}
+.zoom-estado-banda__valor {
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: #1A2A45;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}
+.zoom-estado-banda__sep {
+    width: 1px;
+    height: 32px;
+    background: rgba(0,0,0,0.15);
+    margin: 0 2px;
+}
+.zoom-estado-banda__item { display: flex; flex-direction: column; }
+.zoom-estado-banda__valor2 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #1A2A45;
+}
+.zoom-estado-banda__nro {
+    font-size: 1rem;
+    font-weight: 800;
+    color: #003AA0;
+    letter-spacing: 0.5px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Grid principal: columna datos + columna adicionales ── */
+.zoom-grid {
+    display: grid;
+    grid-template-columns: 1fr 200px;
+    gap: 10px;
+    align-items: start;
+}
+.zoom-col { display: flex; flex-direction: column; gap: 0; }
+.zoom-col--right { position: sticky; top: 0; }
+
+@media (max-width: 800px) {
+    .zoom-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Contenedor blanco principal (columna izquierda) ── */
+.zoom-panel {
+    background: var(--z-bg-box);
+    border: 1px solid var(--z-border);
+    border-radius: 6px;
+    padding: 0;
+    overflow: hidden;
+}
+
+/* ── Sección dentro del panel (reemplaza zoom-box) ── */
+.zoom-sec {
+    padding: 5px 12px 6px;
+    border-bottom: 1px solid var(--z-sep);
+}
+.zoom-sec:last-child { border-bottom: none; }
+
+/* Título de sección: línea con label inline tipo fieldset */
+.zoom-sec__title {
+    font-size: 0.60rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--z-acento);
+    margin-bottom: 4px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid var(--z-sep);
+    display: block;
+}
+
+/* ── Filas de campos ── */
+.zoom-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 14px;
+    margin-bottom: 4px;
+}
+.zoom-row:last-child { margin-bottom: 0; }
+
+/* ── Campo etiqueta + valor ── */
+.zoom-field          { flex: 1 1 0; min-width: 90px; }
+.zoom-field--2       { flex: 2 1 0; }
+.zoom-field--3       { flex: 3 1 0; }
+
+.zoom-field__label {
+    font-size: 0.58rem;
+    color: var(--z-label);
+    text-transform: uppercase;
+    letter-spacing: 0.35px;
+    margin-bottom: 1px;
+    font-weight: 600;
+    display: block;
+    white-space: nowrap;
+}
+.zoom-field__value {
+    font-size: 0.82rem;
+    color: var(--z-value);
+    font-weight: 600;
+    padding-bottom: 2px;
+    min-height: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+}
+.zoom-field__value--acento { color: var(--z-acento); font-weight: 700; }
+
+/* ── Bloques financiero y chofer (ancho completo, debajo del grid) ── */
+.zoom-box {
+    background: var(--z-bg-box);
+    border: 1px solid var(--z-border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 8px;
+}
+.zoom-box__label {
+    font-size: 0.60rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--z-acento);
+    padding: 4px 12px 3px;
+    border-bottom: 1px solid var(--z-sep);
+    background: #F8FAFF;
+    display: block;
+}
+.zoom-box > .zoom-row {
+    padding: 5px 12px;
+    margin-bottom: 0;
+    border-bottom: 1px solid var(--z-sep);
+}
+.zoom-box > .zoom-row:last-child { border-bottom: none; }
+.zoom-box--fin    { border-left: 3px solid var(--z-acento); }
+.zoom-box--chofer { border-left: 3px solid #003AA0; }
+
+/* ── Columna de adicionales ── */
+.zoom-box--adic {
+    background: var(--z-bg-adic);
+    border: 1px solid var(--z-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.zoom-adic { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.zoom-adic th {
+    text-align: left;
+    font-size: 0.60rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--z-acento);
+    border-bottom: 1px solid var(--z-border);
+    padding: 5px 8px;
+    font-weight: 700;
+    background: #F0F4FB;
+}
+.zoom-adic td {
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--z-sep);
+    color: var(--z-value);
+    font-size: 0.78rem;
+}
+.zoom-adic tr:last-child td { border-bottom: none; }
+.zoom-adic .r { text-align: right; }
+.zoom-adic__empty {
+    color: var(--z-label);
+    font-size: 0.78rem;
+    font-style: italic;
+    padding: 10px 10px;
+    display: block;
+}

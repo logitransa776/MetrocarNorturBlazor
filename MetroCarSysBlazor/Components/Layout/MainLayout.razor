@@ -1,0 +1,1142 @@
+@inherits LayoutComponentBase
+@inject NorturAuthStateProvider AuthState
+@inject NavigationManager Nav
+
+<MudThemeProvider Theme="NorturTheme.Theme" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<AuthorizeView>
+    <Authorized>
+
+        @* ── Overlay backdrop (cierra el drawer al clickear afuera) ── *@
+        @if (_drawerOpen)
+        {
+            <div class="nav-backdrop" @onclick="ToggleDrawer"></div>
+        }
+
+        @* ── Drawer lateral — FUERA del MudLayout para posición fixed real ── *@
+        <div class="nav-drawer @(_drawerOpen ? "nav-drawer--open" : "")">
+
+            <div class="nav-drawer__header">
+                <img src="images/logo.png" alt="NORTUR" style="height:20px; filter:brightness(0) invert(1);" />
+                <span class="nav-drawer__subtitle">Informes y Reportes</span>
+                <MudIconButton Icon="@Icons.Material.Filled.Close"
+                               Size="Size.Small"
+                               Style="color:white; margin-left:auto;"
+                               OnClick="ToggleDrawer" />
+            </div>
+
+            <nav class="nav-drawer__nav">
+
+                @* ── RESERVAS ── *@
+                <div class="nav-section">
+                    <button class="nav-section__title @(_reservasExpanded ? "nav-section__title--open" : "")"
+                            @onclick="() => _reservasExpanded = !_reservasExpanded">
+                        <MudIcon Icon="@Icons.Material.Filled.EventNote" Size="Size.Small" Class="nav-section__icon" />
+                        <span>Reservas</span>
+                        <MudIcon Icon="@(_reservasExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                 Size="Size.Small" Class="nav-section__chevron" />
+                    </button>
+                    @if (_reservasExpanded)
+                    {
+                        <div class="nav-section__items">
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.AddBox" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Reservas Especiales</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Reservas por Plantillas</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Clientes</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.SupportAgent" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Operadores</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Groups" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Grupos</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Destinos</span>
+                            </span>
+                            @* Plantillas — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_plantillasExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _plantillasExpanded = !_plantillasExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.Article" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Plantillas</span>
+                                <MudIcon Icon="@(_plantillasExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_plantillasExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.NoteAdd" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Crear Plantillas</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Tune" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Mantenimiento Plantillas</span>
+                                    </span>
+                                </div>
+                            }
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.UploadFile" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Importa Reservas desde Excel</span>
+                            </span>
+                            @* Informes sobre Reservas — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_informesReservasExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _informesReservasExpanded = !_informesReservasExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.BarChart" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Informes sobre Reservas</span>
+                                <MudIcon Icon="@(_informesReservasExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_informesReservasExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <a href="/reservas-fecha-servicio"
+                                       class="nav-item @(Nav.Uri.Contains("reservas-fecha-servicio") ? "nav-item--active" : "")"
+                                       @onclick="ToggleDrawer">
+                                        <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Reservas por fecha y servicio</span>
+                                    </a>
+                                    <a href="/reservas-banda-horaria"
+                                       class="nav-item @(Nav.Uri.Contains("reservas-banda-horaria") ? "nav-item--active" : "")"
+                                       @onclick="ToggleDrawer">
+                                        <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Reservas por fecha y banda horaria</span>
+                                    </a>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.AccessTime" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Bandas Horarios</span>
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="nav-divider"></div>
+
+                @* ── TRÁFICO ── *@
+                <div class="nav-section">
+                    <button class="nav-section__title @(_traficoExpanded ? "nav-section__title--open" : "")"
+                            @onclick="() => _traficoExpanded = !_traficoExpanded">
+                        <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Size="Size.Small" Class="nav-section__icon" />
+                        <span>Tráfico</span>
+                        <MudIcon Icon="@(_traficoExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                 Size="Size.Small" Class="nav-section__chevron" />
+                    </button>
+                    @if (_traficoExpanded)
+                    {
+                        <div class="nav-section__items">
+                            <a href="/planilla-trafico"
+                               class="nav-item @(Nav.Uri.Contains("planilla-trafico") ? "nav-item--active" : "")"
+                               @onclick="ToggleDrawer">
+                                <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Operación de Tráfico Nueva Versión</span>
+                            </a>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Flight" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Web de Aeropuertos 2000</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.AltRoute" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Cabeceras - Recorridos</span>
+                            </span>
+                            @* Francos — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_francosExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _francosExpanded = !_francosExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.EventBusy" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Francos</span>
+                                <MudIcon Icon="@(_francosExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_francosExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.AddCircleOutline" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Ingreso de Francos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.EditCalendar" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Mantenimiento de Francos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.ManageSearch" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Auditoría Francos</span>
+                                    </span>
+                                </div>
+                            }
+                            @* Viáticos — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_viaticosExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _viaticosExpanded = !_viaticosExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.AttachMoney" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Viáticos</span>
+                                <MudIcon Icon="@(_viaticosExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_viaticosExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Payments" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Viáticos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Category" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Motivo</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.AccountBalance" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Forma Liquidación</span>
+                                    </span>
+                                </div>
+                            }
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.ConfirmationNumber" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Voucher Recepción</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Security" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Guardia</span>
+                            </span>
+                            @* Contactos y Proveedores — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_contactosExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _contactosExpanded = !_contactosExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.Contacts" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Contactos y Proveedores</span>
+                                <MudIcon Icon="@(_contactosExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_contactosExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.ContactPage" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Contactos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Folder" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Rubros de contactos</span>
+                                    </span>
+                                </div>
+                            }
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.PeopleAlt" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Lista de pasajeros</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.FactCheck" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Controles sobre los estados de las reservas</span>
+                            </span>
+                            @* Adicionales Stock — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_adicionalesStockExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _adicionalesStockExpanded = !_adicionalesStockExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.Inventory" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Adicionales Stock</span>
+                                <MudIcon Icon="@(_adicionalesStockExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_adicionalesStockExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Settings" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Mantenimiento</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Input" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Ingreso</span>
+                                    </span>
+                                </div>
+                            }
+                            @* Libro de Novedades — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_libroNovedadesExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _libroNovedadesExpanded = !_libroNovedadesExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.MenuBook" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Libro de Novedades</span>
+                                <MudIcon Icon="@(_libroNovedadesExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_libroNovedadesExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Book" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Libro de Novedades</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Email" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Envío de correos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.MarkEmailRead" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Correos Electrónicos Parámetros</span>
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="nav-divider"></div>
+
+                @* ── VEHÍCULOS Y CHOFERES ── *@
+                <div class="nav-section">
+                    <button class="nav-section__title @(_vehiculosExpanded ? "nav-section__title--open" : "")"
+                            @onclick="() => _vehiculosExpanded = !_vehiculosExpanded">
+                        <MudIcon Icon="@Icons.Material.Filled.AirportShuttle" Size="Size.Small" Class="nav-section__icon" />
+                        <span>Vehículos y Choferes</span>
+                        <MudIcon Icon="@(_vehiculosExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                 Size="Size.Small" Class="nav-section__chevron" />
+                    </button>
+                    @if (_vehiculosExpanded)
+                    {
+                        <div class="nav-section__items">
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Choferes</span>
+                            </span>
+                            @* Apercibimientos — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_apercibimientosExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _apercibimientosExpanded = !_apercibimientosExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.GppBad" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Apercibimientos</span>
+                                <MudIcon Icon="@(_apercibimientosExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_apercibimientosExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.ReportProblem" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Apercibimientos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.List" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Motivos</span>
+                                    </span>
+                                </div>
+                            }
+                            @* Capacitaciones — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_capacitacionesExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _capacitacionesExpanded = !_capacitacionesExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.School" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Capacitaciones</span>
+                                <MudIcon Icon="@(_capacitacionesExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_capacitacionesExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Search" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Consulta</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.LibraryAdd" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Armado de capacitaciones</span>
+                                    </span>
+                                </div>
+                            }
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Speed" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Odómetros</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.CarCrash" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Siniestros</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Vehículos - Flota</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.CalendarToday" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Agenda de Vencimientos</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Fleteros</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Category" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Tipo de Vehículos</span>
+                            </span>
+                        </div>
+                    }
+                </div>
+
+                <div class="nav-divider"></div>
+
+                @* ── FACTURACIÓN ── *@
+                <div class="nav-section">
+                    <button class="nav-section__title @(_facturacionExpanded ? "nav-section__title--open" : "")"
+                            @onclick="() => _facturacionExpanded = !_facturacionExpanded">
+                        <MudIcon Icon="@Icons.Material.Filled.Receipt" Size="Size.Small" Class="nav-section__icon" />
+                        <span>Facturación</span>
+                        <MudIcon Icon="@(_facturacionExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                 Size="Size.Small" Class="nav-section__chevron" />
+                    </button>
+                    @if (_facturacionExpanded)
+                    {
+                        <div class="nav-section__items">
+                            @* Clientes — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_factuCliExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _factuCliExpanded = !_factuCliExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Clientes</span>
+                                <MudIcon Icon="@(_factuCliExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_factuCliExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.ManageAccounts" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>ABM - Clientes</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.PriceChange" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Clientes Tarifas</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Discount" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Clientes Descuentos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Business" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Clientes - Empresa Facturación</span>
+                                    </span>
+                                </div>
+                            }
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Fleteros</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Groups" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Grupos</span>
+                            </span>
+                            @* Tarifario de Venta — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_tarifaVentaExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _tarifaVentaExpanded = !_tarifaVentaExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.PriceCheck" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Tarifario de Venta</span>
+                                <MudIcon Icon="@(_tarifaVentaExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_tarifaVentaExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.AddBox" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Altas y Copias de Lista de Precios</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Mantenimiento de Precios</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.ListAlt" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Definición de Lista de Precio</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Print" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Listadores</span>
+                                    </span>
+                                </div>
+                            }
+                            @* Tarifario de Choferes — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_tarifaChofExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _tarifaChofExpanded = !_tarifaChofExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.PersonSearch" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Tarifario de Choferes</span>
+                                <MudIcon Icon="@(_tarifaChofExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_tarifaChofExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.AddBox" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Altas y Copia de Tarifarios</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Mantenimiento</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.ListAlt" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Definición Tarifario Choferes</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Print" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Listadores</span>
+                                    </span>
+                                </div>
+                            }
+                            @* Adicionales — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_adicionalesExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _adicionalesExpanded = !_adicionalesExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.AddShoppingCart" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Adicionales</span>
+                                <MudIcon Icon="@(_adicionalesExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_adicionalesExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Sell" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Tarifarios Ventas</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Payments" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Tarifarios Pagos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Add" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Adicionales</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Folder" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Rubro Adicionales</span>
+                                    </span>
+                                </div>
+                            }
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Summarize" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Resumen de Liquidaciones</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.RequestPage" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Liquidación a Clientes</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Liquidación a Fleteros</span>
+                            </span>
+                            @* Liquidación a Choferes — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_liquidChofExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _liquidChofExpanded = !_liquidChofExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Liquidación a Choferes</span>
+                                <MudIcon Icon="@(_liquidChofExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_liquidChofExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Genera Liquidación</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Settings" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Parámetros Liquidación</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.AddCard" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Ingreso de Adelantos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.ManageHistory" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Mantenimiento de Adelantos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Label" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Motivo de Adelantos</span>
+                                    </span>
+                                </div>
+                            }
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Assessment" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Liquidaciones estimadas</span>
+                            </span>
+                        </div>
+                    }
+                </div>
+
+                <div class="nav-divider"></div>
+
+                @* ── TALLER ── *@
+                <div class="nav-section">
+                    <button class="nav-section__title @(_tallerExpanded ? "nav-section__title--open" : "")"
+                            @onclick="() => _tallerExpanded = !_tallerExpanded">
+                        <MudIcon Icon="@Icons.Material.Filled.Build" Size="Size.Small" Class="nav-section__icon" />
+                        <span>Taller</span>
+                        <MudIcon Icon="@(_tallerExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                 Size="Size.Small" Class="nav-section__chevron" />
+                    </button>
+                    @if (_tallerExpanded)
+                    {
+                        <div class="nav-section__items">
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Construction" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Mantenimiento</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.NotificationsActive" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Agenda de Vencimiento</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Assignment" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Órdenes de trabajo: Ingreso</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.AssignmentTurnedIn" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Órdenes de trabajo: Egreso</span>
+                            </span>
+                            @* Stock — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_stockExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _stockExpanded = !_stockExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.Inventory2" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Stock</span>
+                                <MudIcon Icon="@(_stockExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_stockExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Search" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Consulta</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.SwapHoriz" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Ingresos / Egresos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.MoveDown" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Movimiento entre depósitos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Warehouse" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Depósitos</span>
+                                    </span>
+                                </div>
+                            }
+                            @* Chequeo de unidades — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_chequeoExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _chequeoExpanded = !_chequeoExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.CheckBox" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Chequeo de unidades</span>
+                                <MudIcon Icon="@(_chequeoExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_chequeoExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Search" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Consulta</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Input" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Ingreso</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Print" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Impresión</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Checklist" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Parámetros de ítem a chequear</span>
+                                    </span>
+                                </div>
+                            }
+                            @* Artículos — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_articulosExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _articulosExpanded = !_articulosExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.Widgets" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Artículos</span>
+                                <MudIcon Icon="@(_articulosExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_articulosExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Inventory" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Artículos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Tipo Vehículos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Settings" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Grupo Motor</span>
+                                    </span>
+                                </div>
+                            }
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.BuildCircle" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Ítem del service</span>
+                            </span>
+                        </div>
+                    }
+                </div>
+
+                <div class="nav-divider"></div>
+
+                @* ── COMBUSTIBLE ── *@
+                <div class="nav-section">
+                    <button class="nav-section__title @(_combustibleExpanded ? "nav-section__title--open" : "")"
+                            @onclick="() => _combustibleExpanded = !_combustibleExpanded">
+                        <MudIcon Icon="@Icons.Material.Filled.LocalGasStation" Size="Size.Small" Class="nav-section__icon" />
+                        <span>Combustible</span>
+                        <MudIcon Icon="@(_combustibleExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                 Size="Size.Small" Class="nav-section__chevron" />
+                    </button>
+                    @if (_combustibleExpanded)
+                    {
+                        <div class="nav-section__items">
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.BarChart" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Promedio de Consumos</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Sync" Size="Size.Small" Class="nav-item__icon" />
+                                <span>ABM y Conciliación cargas</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.AccountBalance" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Saldos de Estaciones</span>
+                            </span>
+                            @* Depósitos en Estaciones — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_depositosExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _depositosExpanded = !_depositosExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.LocalGasStation" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Depósitos en Estaciones</span>
+                                <MudIcon Icon="@(_depositosExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_depositosExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.AddCircle" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Carga de Depósitos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Mantenimiento de Depósitos</span>
+                                    </span>
+                                </div>
+                            }
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Store" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Estaciones</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Category" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Rubro de Consumos</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.ListAlt" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Artículos por Rubro de Consumo</span>
+                            </span>
+                        </div>
+                    }
+                </div>
+
+                <div class="nav-divider"></div>
+
+                @* ── ABM DEL SISTEMA ── *@
+                <div class="nav-section">
+                    <button class="nav-section__title @(_abmExpanded ? "nav-section__title--open" : "")"
+                            @onclick="() => _abmExpanded = !_abmExpanded">
+                        <MudIcon Icon="@Icons.Material.Filled.ManageAccounts" Size="Size.Small" Class="nav-section__icon" />
+                        <span>ABM del sistema</span>
+                        <MudIcon Icon="@(_abmExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                 Size="Size.Small" Class="nav-section__chevron" />
+                    </button>
+                    @if (_abmExpanded)
+                    {
+                        <div class="nav-section__items">
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.CalendarViewWeek" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Cronogramas de Servicio</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.MiscellaneousServices" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Servicios</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.FlightTakeoff" Size="Size.Small" Class="nav-item__icon" />
+                                <span>IATA</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.School" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Cursos - Descripción</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Tour" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Guías</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.AccountCircle" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Dueños</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Permisos</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Map" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Zonas</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Flag" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Nacionalidades</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Work" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Profesiones</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.BeachAccess" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Feriados</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Cancel" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Motivos de Cancelaciones de Reservas</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.SwapHoriz" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Motivos de Cambio de Cronogramas</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.HourglassBottom" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Motivos de Llegadas Tardes</span>
+                            </span>
+                            @* Parámetros Generales — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_parametrosExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _parametrosExpanded = !_parametrosExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.Tune" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Parámetros Generales</span>
+                                <MudIcon Icon="@(_parametrosExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_parametrosExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Settings" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Parámetros Generales</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Business" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Parámetros Empresa</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.DesktopWindows" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Parámetros Pantalla Tráfico</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.GpsFixed" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Parámetros SQL Server para GPS</span>
+                                    </span>
+                                </div>
+                            }
+                            @* Facturación — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_abmFacturacionExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _abmFacturacionExpanded = !_abmFacturacionExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.Receipt" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Facturación</span>
+                                <MudIcon Icon="@(_abmFacturacionExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_abmFacturacionExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Business" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Empresas para Facturar</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.CurrencyExchange" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Tipo de Monedas</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.TrendingUp" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Cotizaciones</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.AccountBalance" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Bancos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Percent" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Impuestos sobre Ventas</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Description" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Tipos de Comprobantes</span>
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="nav-divider"></div>
+
+                @* ── UTILITARIOS ── *@
+                <div class="nav-section">
+                    <button class="nav-section__title @(_utilitariosExpanded ? "nav-section__title--open" : "")"
+                            @onclick="() => _utilitariosExpanded = !_utilitariosExpanded">
+                        <MudIcon Icon="@Icons.Material.Filled.Tune" Size="Size.Small" Class="nav-section__icon" />
+                        <span>Utilitarios</span>
+                        <MudIcon Icon="@(_utilitariosExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                 Size="Size.Small" Class="nav-section__chevron" />
+                    </button>
+                    @if (_utilitariosExpanded)
+                    {
+                        <div class="nav-section__items">
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Scheduler</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.ContactPhone" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Agenda</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Calendario</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Calculadora</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Image" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Editor de Imagen</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Backup" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Backup</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.BackupTable" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Backup Minimiza</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Article" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Editor Log Back-Up</span>
+                            </span>
+                            @* Reparaciones y Utilitarios — submenú nivel 3 *@
+                            <button class="nav-section__title nav-section__title--sub @(_reparacionesExpanded ? "nav-section__title--open" : "")"
+                                    @onclick="() => _reparacionesExpanded = !_reparacionesExpanded">
+                                <MudIcon Icon="@Icons.Material.Filled.BuildCircle" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Reparaciones y Utilitarios</span>
+                                <MudIcon Icon="@(_reparacionesExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" Class="nav-section__chevron" />
+                            </button>
+                            @if (_reparacionesExpanded)
+                            {
+                                <div class="nav-section__items nav-section__items--sub">
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Speed" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Normaliza Km en Servicio de turismo</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.DeleteSweep" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Elimina Lotes de Carga</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.CalendarViewWeek" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Cronograma en las Plantillas</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Viajes</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Storage" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Indexa Base de Tráfico</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Transform" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Pasa Excel a Viajes (normaliza)</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Compress" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Compacta Base de Datos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Destinos</span>
+                                    </span>
+                                    <span class="nav-item nav-item--disabled">
+                                        <MudIcon Icon="@Icons.Material.Filled.Tour" Size="Size.Small" Class="nav-item__icon" />
+                                        <span>Guías</span>
+                                    </span>
+                                </div>
+                            }
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.BugReport" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Editor Log Errores</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.PersonSearch" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Reservas por Cliente</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Viajes por Choferes</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Route" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Km Unidades Vs Servicios</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.PeopleAlt" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Conectados al sistema</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Chat" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Chat - Conversar</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Hub" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Chat - Server</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Http" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Servicio XML</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.Language" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Configuración Regional</span>
+                            </span>
+                            <span class="nav-item nav-item--disabled">
+                                <MudIcon Icon="@Icons.Material.Filled.SocialDistance" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Km entre Localidades</span>
+                            </span>
+                        </div>
+                    }
+                </div>
+
+            </nav>
+        </div>
+
+        @* ── Layout principal ── *@
+        <MudLayout>
+            <MudAppBar Elevation="2" Dense="true"
+                       Style="@($"background:linear-gradient(90deg,{NorturColors.AzulNoche} 0%,{NorturColors.Azul} 100%);")">
+
+                <MudIconButton Icon="@Icons.Material.Filled.Menu"
+                               Color="Color.Inherit"
+                               Edge="Edge.Start"
+                               OnClick="ToggleDrawer" />
+
+                <img src="images/logo.png" alt="NORTUR" Class="ml-2" style="height:20px; filter:brightness(0) invert(1);" />
+                <MudText Typo="Typo.body2" Class="ml-4"
+                         Style="color:#C7D6EC; border-left:1px solid rgba(255,255,255,0.3); padding-left:16px;">
+                    Informes y Reportes · Sistema de gestión
+                </MudText>
+
+                <MudSpacer />
+
+                <MudText Typo="Typo.body2" Style="color:#C7D6EC;" Class="mr-3">
+                    <strong style="color:#fff;">Usuario:</strong> @AuthState.UsuarioActual
+                </MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                           OnClick="CerrarSesion" Size="Size.Small"
+                           Style="text-transform:none;">
+                    Cerrar sesión
+                </MudButton>
+            </MudAppBar>
+
+            <MudMainContent>
+                <TableroAlertas />
+                <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="mt-4 mb-8">
+                    @Body
+                </MudContainer>
+            </MudMainContent>
+        </MudLayout>
+
+    </Authorized>
+    <NotAuthorized>
+        @Body
+    </NotAuthorized>
+</AuthorizeView>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code {
+    private bool _drawerOpen = false;
+
+    // Secciones principales
+    private bool _reservasExpanded = true;
+    private bool _traficoExpanded = false;
+    private bool _vehiculosExpanded = false;
+    private bool _facturacionExpanded = false;
+    private bool _tallerExpanded = false;
+    private bool _combustibleExpanded = false;
+    private bool _abmExpanded = false;
+    private bool _utilitariosExpanded = false;
+
+    // Submenús nivel 3 — Reservas
+    private bool _plantillasExpanded = false;
+    private bool _informesReservasExpanded = true;
+
+    // Submenús nivel 3 — Tráfico
+    private bool _francosExpanded = false;
+    private bool _viaticosExpanded = false;
+    private bool _contactosExpanded = false;
+    private bool _adicionalesStockExpanded = false;
+    private bool _libroNovedadesExpanded = false;
+
+    // Submenús nivel 3 — Vehículos y Choferes
+    private bool _apercibimientosExpanded = false;
+    private bool _capacitacionesExpanded = false;
+
+    // Submenús nivel 3 — Facturación
+    private bool _factuCliExpanded = false;
+    private bool _tarifaVentaExpanded = false;
+    private bool _tarifaChofExpanded = false;
+    private bool _adicionalesExpanded = false;
+    private bool _liquidChofExpanded = false;
+
+    // Submenús nivel 3 — Taller
+    private bool _stockExpanded = false;
+    private bool _chequeoExpanded = false;
+    private bool _articulosExpanded = false;
+
+    // Submenús nivel 3 — Combustible
+    private bool _depositosExpanded = false;
+
+    // Submenús nivel 3 — ABM del sistema
+    private bool _parametrosExpanded = false;
+    private bool _abmFacturacionExpanded = false;
+
+    // Submenús nivel 3 — Utilitarios
+    private bool _reparacionesExpanded = false;
+
+    private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
+
+    private void CerrarSesion()
+    {
+        AuthState.CerrarSesion();
+        Nav.NavigateTo("/login", forceLoad: false);
+    }
+}

@@ -1,0 +1,44 @@
+@inject ReportService ReportSvc
+
+@if (_datos is not null)
+{
+    <div class="tablero-bar">
+
+        @* ── VEHÍCULOS ── *@
+        <div class="tablero-group">
+            <span class="tablero-group__label">Vehículos</span>
+            <span class="tablero-chip tablero-chip--total">
+                <MudIcon Icon="@Icons.Material.Filled.AirportShuttle" Style="font-size:13px;" />
+                <span class="tablero-chip__num">@_datos.Vehiculos</span>
+            </span>
+        </div>
+
+        <ChipAlerta Label="VTV" ProxVencer="@_datos.VtvProxVencer" Vencidos="@_datos.VtvVencidos" />
+        <ChipAlerta Label="Matafuegos" ProxVencer="@_datos.MatProxVencer" Vencidos="@_datos.MatVencidos" />
+
+        <div class="tablero-bar__sep"></div>
+
+        @* ── CHOFERES ── *@
+        <div class="tablero-group">
+            <span class="tablero-group__label">Choferes</span>
+            <span class="tablero-chip tablero-chip--total">
+                <MudIcon Icon="@Icons.Material.Filled.Person" Style="font-size:13px;" />
+                <span class="tablero-chip__num">@_datos.Choferes</span>
+            </span>
+        </div>
+
+        <ChipAlerta Label="Registro" ProxVencer="@_datos.RegProxVencer" Vencidos="@_datos.RegVencidos" />
+        <ChipAlerta Label="CNRT" ProxVencer="@_datos.CnrtProxVencer" Vencidos="@_datos.CnrtVencidos" />
+        <ChipAlerta Label="AEP" ProxVencer="@_datos.AepProxVencer" Vencidos="@_datos.AepVencidos" />
+
+    </div>
+}
+
+@code {
+    private TableroDto? _datos;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _datos = await ReportSvc.GetTableroAsync();
+    }
+}

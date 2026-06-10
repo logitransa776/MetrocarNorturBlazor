@@ -1,0 +1,29 @@
+@* Chip de alerta: muestra rojo si hay vencidos, amarillo si hay próximos, verde si todo OK *@
+
+<div class="tablero-group">
+    <span class="tablero-group__label">@Label</span>
+    @if (Vencidos > 0)
+    {
+        <span class="tablero-chip tablero-chip--danger" title="@Vencidos vencidos · @(ProxVencer - Vencidos) vencen en 30 días">
+            <span class="tablero-chip__num">@Vencidos</span>
+        </span>
+    }
+    else if (ProxVencer > 0)
+    {
+        <span class="tablero-chip tablero-chip--warn" title="@ProxVencer vencen en los próximos 30 días">
+            <span class="tablero-chip__num">@ProxVencer</span>
+        </span>
+    }
+    else
+    {
+        <span class="tablero-chip tablero-chip--ok" title="Todo en orden">
+            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Style="font-size:12px;" />
+        </span>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter, EditorRequired] public int ProxVencer { get; set; }
+    [Parameter, EditorRequired] public int Vencidos { get; set; }
+}

@@ -1,0 +1,756 @@
+@page "/planilla-trafico"
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject IDialogService DialogService
+@rendermode InteractiveServer
+
+<PageTitle>Planilla de servicios — Tráfico</PageTitle>
+
+@* ════════════ Barra superior: navegación de día + acciones ════════════ *@
+<MudPaper Class="pa-3 mb-3" Elevation="2" Style="border-radius:12px;">
+    <div class="d-flex align-center flex-wrap" style="gap:12px;">
+
+        @* Navegación de día (<<  fecha  >>) *@
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft"
+                           Variant="Variant.Filled" Color="Color.Primary"
+                           Title="Día anterior" OnClick="DiaAnterior" Disabled="_cargando" />
+            <MudDatePicker Date="_fecha" DateFormat="dddd dd/MM/yyyy"
+                           Editable="true" Style="min-width:210px;"
+                           MinDate="_min" MaxDate="_max"
+                           Culture="@_ar" PickerVariant="PickerVariant.Dialog"
+                           DateChanged="OnFechaChanged" />
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight"
+                           Variant="Variant.Filled" Color="Color.Primary"
+                           Title="Día siguiente" OnClick="DiaSiguiente" Disabled="_cargando" />
+            <MudButton Variant="Variant.Text" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Today"
+                       OnClick="IrHoy" Disabled="_cargando">Hoy</MudButton>
+        </div>
+
+        <MudDivider Vertical="true" FlexItem="true" />
+
+        @* Unidades (réplica de los combos cronogramaCbio/cronograma + botones S/C y Cxl del FoxPro) *@
+        <div class="d-flex align-center" style="gap:6px;">
+            @* Combo 1 — Unidad Programada (interno por empresa) → filtra U/Pr *@
+            <select class="filtro-combo @(!string.IsNullOrEmpty(_selUPr) ? "filtro-combo--activo" : "")"
+                    disabled="@_verCancelados"
+                    value="@_selUPr"
+                    @onchange="@(e => OnUPrChanged(e.Value?.ToString() ?? ""))"
+                    title="Unidad Programada — interno por empresa (columna U/Pr)">
+                <option value="">U/Programada</option>
+                @foreach (var u in _combos.Programadas)
+                {
+                    <option value="@u">@u</option>
+                }
+            </select>
+
+            @* Combo 2 — Unidad Asignada (todos los internos) → filtra U/Cb *@
+            <select class="filtro-combo @(!string.IsNullOrEmpty(_selUCb) ? "filtro-combo--activo" : "")"
+                    disabled="@_verCancelados"
+                    value="@_selUCb"
+                    @onchange="@(e => OnUCbChanged(e.Value?.ToString() ?? ""))"
+                    title="Unidad Asignada — todos los internos (columna U/Cb)">
+                <option value="">U/Asignada</option>
+                @foreach (var u in _combos.Asignadas)
+                {
+                    <option value="@u">@u</option>
+                }
+            </select>
+
+            @* S/C — servicios sin unidad asignada (cronograma = 'S/C') *@
+            <button class="filtro-btn @(_soloSinCronograma ? "filtro-btn--on" : "")"
+                    disabled="@_verCancelados"
+                    @onclick="ToggleSinCronograma"
+                    title="S/C — servicios sin unidad asignada (sin cronograma)">
+                <MudIcon Icon="@Icons.Material.Filled.EventBusy" Style="font-size:1rem;" />
+                <span>S/C</span>
+                <span class="filtro-btn__count">@_filas.Count(f => f.UCb == "S/C")</span>
+            </button>
+
+            @* Cxl — vista de servicios cancelados del día *@
+            <button class="filtro-btn @(_verCancelados ? "filtro-btn--on filtro-btn--cxl-on" : "")"
+                    @onclick="ToggleCancelados"
+                    title="Cxl — ver los servicios cancelados del día (con motivo)">
+                <MudIcon Icon="@Icons.Material.Filled.Cancel" Style="font-size:1rem;" />
+                <span>Cxl</span>
+                <span class="filtro-btn__count">@_cancelados.Count</span>
+            </button>
+        </div>
+
+        <MudDivider Vertical="true" FlexItem="true" />
+
+        @* Filtros de tipo de ingreso (réplica de los botones Emp/Tur + checkbox Nortur del FoxPro) *@
+        <div class="d-flex align-center" style="gap:6px;">
+            <button class="filtro-btn @(_verEmpresa ? "filtro-btn--on" : "")"
+                    disabled="@_verCancelados"
+                    @onclick="@(() => { _verEmpresa = !_verEmpresa; })"
+                    title="Empresa — servicios de plantilla (origen P)">
+                <MudIcon Icon="@Icons.Material.Filled.Business" Style="font-size:1rem;" />
+                <span>Empresa</span>
+                <span class="filtro-btn__count">@_filas.Count(f => f.Origen == "P")</span>
+                @if (_verEmpresa) {
+                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Style="font-size:0.85rem; opacity:0.9;" />
+                }
+            </button>
+
+            <button class="filtro-btn @(_verTurismo ? "filtro-btn--on" : "")"
+                    disabled="@_verCancelados"
+                    @onclick="@(() => { _verTurismo = !_verTurismo; })"
+                    title="Turismo — transportación turística (origen T)">
+                <MudIcon Icon="@Icons.Material.Filled.Flight" Style="font-size:1rem;" />
+                <span>Turismo</span>
+                <span class="filtro-btn__count">@_filas.Count(f => f.Origen == "T")</span>
+                @if (_verTurismo) {
+                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Style="font-size:0.85rem; opacity:0.9;" />
+                }
+            </button>
+
+            <button class="filtro-btn filtro-btn--nortur @(_verNortur ? "filtro-btn--on filtro-btn--nortur-on" : "")"
+                    disabled="@_verCancelados"
+                    @onclick="@(() => { _verNortur = !_verNortur; })"
+                    title="Servicios internos de NORTUR">
+                <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Style="font-size:1rem;" />
+                <span>Nortur</span>
+                <span class="filtro-btn__count">@_filas.Count(f => f.EsNortur)</span>
+                @if (_verNortur) {
+                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Style="font-size:0.85rem; opacity:0.9;" />
+                }
+            </button>
+
+            @* Buses — réplica del checkbox verBuses: abre el panel de flota (grid2) a la derecha *@
+            <button class="filtro-btn @(_verBuses ? "filtro-btn--on" : "")"
+                    disabled="@_verCancelados"
+                    @onclick="ToggleBuses"
+                    title="Buses — estado actual de la flota (unidad, chofer, franco)">
+                <MudIcon Icon="@Icons.Material.Filled.DepartureBoard" Style="font-size:1rem;" />
+                <span>Buses</span>
+                @if (_verBuses) {
+                    <span class="filtro-btn__count">@_buses.Count</span>
+                }
+            </button>
+        </div>
+
+        <MudDivider Vertical="true" FlexItem="true" />
+
+        @* Buscador *@
+        <MudTextField @bind-Value="_filtro" @bind-Value:after="StateHasChanged"
+                      Placeholder="Buscar recorrido, chofer, cliente, vuelo..."
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Immediate="true" Clearable="true" Variant="Variant.Outlined"
+                      Margin="Margin.Dense" Style="min-width:240px; flex:1;" />
+
+        <MudSpacer />
+
+        <MudButton Variant="Variant.Filled" Color="Color.Success"
+                   StartIcon="@Icons.Material.Filled.Download"
+                   OnClick="DescargarExcel"
+                   Disabled="@(_cargando || (_verCancelados ? _cancelados.Count == 0 : _filas.Count == 0))">
+            Excel
+        </MudButton>
+    </div>
+</MudPaper>
+
+@{
+    // Filas tras aplicar Emp/Tur/Nortur + unidades + buscador. Los KPIs y la grilla usan este mismo conjunto.
+    var visibles = FilasVisibles();
+    var canceladosVisibles = CanceladosVisibles();
+}
+
+@if (_verCancelados)
+{
+    @* ════════════ Vista cancelados — réplica del caption "... SERVICIOS CANCELADOS" ════════════ *@
+    <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="mb-2" Dense="true">
+        SERVICIOS CANCELADOS — @TituloFecha — Cantidad de Servicios: @canceladosVisibles.Count
+    </MudAlert>
+}
+else
+{
+    @* ════════════ KPIs del día ════════════ *@
+    <div class="d-flex mb-2" style="gap:10px;">
+        <div style="flex:1;">
+            <KpiCard Label="Servicios" Value="@Fmt(visibles.Count)"
+                     Sub="@TituloFecha" Color="@NorturColors.Azul" />
+        </div>
+        <div style="flex:1;">
+            <KpiCard Label="Total pax" Value="@Fmt(visibles.Sum(f => f.Pax ?? 0))"
+                     Sub="pasajeros del día" Color="@NorturColors.Verde" />
+        </div>
+        <div style="flex:1;">
+            <KpiCard Label="Choferes" Value="@visibles.Where(f => !string.IsNullOrWhiteSpace(f.Chofer)).Select(f => f.Chofer).Distinct().Count().ToString()"
+                     Sub="distintos asignados" Color="@NorturColors.Naranja" />
+        </div>
+        <div style="flex:1;">
+            <KpiCard Label="Sin asignar" Value="@visibles.Count(f => f.Estado == "SIN ASIGNAR").ToString()"
+                     Sub="servicios pendientes" Color="@NorturColors.Rojo" />
+        </div>
+    </div>
+}
+
+@* ════════════ Grilla ════════════ *@
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="my-8" />
+}
+else if (_verCancelados)
+{
+    @* Grilla de cancelados — columnas según arma_grid_viaje_sup_cnl del FoxPro *@
+    @if (_cancelados.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info">
+            No hay servicios cancelados para @TituloFecha.
+        </MudAlert>
+    }
+    else
+    {
+        <MudPaper Elevation="2" Style="border-radius:8px; overflow:hidden;">
+            <div class="trafico-wrap">
+                <table class="trafico-grid">
+                    <thead>
+                        <tr>
+                            <th class="r" style="width:28px;">#</th>
+                            <th class="c">Ob</th>
+                            <th class="c">Ad</th>
+                            <th>Reserva</th>
+                            <th>H.Ini</th>
+                            <th>H.Fin</th>
+                            <th>H.Avi</th>
+                            <th>H.Cie</th>
+                            <th>U/Pr</th>
+                            <th>U/Cb</th>
+                            <th>U/As</th>
+                            <th class="c">Chq</th>
+                            <th>Recorrido</th>
+                            <th>Motivo</th>
+                            <th>Veh</th>
+                            <th>Cliente</th>
+                            <th class="r">Pax</th>
+                            <th>Comentario</th>
+                            <th>Grupo</th>
+                            <th>Vuelo</th>
+                            <th>Guia</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @{ int _nroCxl = 0; }
+                        @foreach (var f in canceladosVisibles)
+                        {
+                            _nroCxl++;
+                            var esActivaCxl = _filaActiva == f.IdViaje;
+                            <tr style="cursor:pointer; @(esActivaCxl ? "outline:2px solid #DC2626; outline-offset:-2px; filter:brightness(0.88);" : "")"
+                                title="Doble click para ver el detalle del viaje"
+                                @onclick="() => _filaActiva = (_filaActiva == f.IdViaje ? 0 : f.IdViaje)"
+                                @ondblclick="() => AbrirZoom(f.IdViaje)">
+                                <td class="r" style="color:#9AA7BC; font-size:0.72rem;">@_nroCxl</td>
+                                <td class="c">@f.Ob</td>
+                                <td class="c">@f.Ad</td>
+                                <td>@f.Fecha.ToString("dd/MM/yyyy")</td>
+                                <td>@f.HIni</td>
+                                <td>@f.HFin</td>
+                                <td>@f.HAvi</td>
+                                <td>@f.HCie</td>
+                                <td>@f.UPr</td>
+                                <td>@f.UCb</td>
+                                <td>@f.UAs</td>
+                                <td class="c">@f.Chq</td>
+                                <td class="nowrap">@f.Recorrido</td>
+                                <td class="nowrap" style="color:#DC2626; font-weight:600;">@f.Motivo</td>
+                                <td>@f.Veh</td>
+                                <td>@f.Cliente</td>
+                                <td class="r">@f.Pax</td>
+                                <td class="nowrap">@f.Comentario</td>
+                                <td>@(string.IsNullOrWhiteSpace(f.Grupo) ? "SIN GRUPO" : f.Grupo)</td>
+                                <td>@(string.IsNullOrWhiteSpace(f.Vuelo) ? "SIN VUELO" : f.Vuelo)</td>
+                                <td>@(string.IsNullOrWhiteSpace(f.Guia) ? "SIN GUIA" : f.Guia)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </MudPaper>
+
+        <div class="d-flex align-center flex-wrap mt-2" style="gap:14px; font-size:0.78rem; color:#5B6B82;">
+            <span style="margin-left:auto;">@canceladosVisibles.Count de @_cancelados.Count servicios cancelados</span>
+        </div>
+    }
+}
+else
+{
+    @* Layout flexible: planilla a la izquierda + panel Buses (grid2) a la derecha,
+       igual que el FoxPro cuando se tilda verBuses (grid1 se achica, grid2 aparece). *@
+    <div class="trafico-layout">
+    <div class="trafico-layout__main">
+
+    @if (_filas.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info">
+            No hay servicios cargados para @TituloFecha. Usá las flechas para cambiar de día.
+        </MudAlert>
+    }
+    else
+    {
+    <MudPaper Elevation="2" Style="border-radius:8px; overflow:hidden;">
+        <div class="trafico-wrap">
+            <table class="trafico-grid">
+                <thead>
+                    <tr>
+                        <th class="r" style="width:28px;">#</th>
+                        <th>Estado</th>
+                        <th>Reserva</th>
+                        <th>H.Pre</th>
+                        <th>H.Ini</th>
+                        <th>H.Fin</th>
+                        <th>H.Avi</th>
+                        <th>H.Cie</th>
+                        <th>U/Pr</th>
+                        <th>U/Cb</th>
+                        <th>U/As</th>
+                        <th class="c">Chq</th>
+                        <th class="c">Ag</th>
+                        <th>Recorrido</th>
+                        <th>Fletero</th>
+                        <th>Chofer</th>
+                        <th>Veh</th>
+                        <th>Cliente</th>
+                        <th class="r">Pax</th>
+                        <th class="c">Agua</th>
+                        <th class="c">Adj</th>
+                        <th>Comentario</th>
+                        <th>Grupo</th>
+                        <th>Vuelo</th>
+                        <th>Guia</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{ int _nro = 0; }
+                    @foreach (var f in visibles)
+                    {
+                        _nro++;
+                        var esActiva = _filaActiva == f.IdViaje;
+                        <tr style="@RowStyle(f.Estado) cursor:pointer; @(esActiva ? "outline:2px solid #003AA0; outline-offset:-2px; filter:brightness(0.88);" : "")"
+                            title="Doble click para ver el detalle del viaje"
+                            @onclick="() => _filaActiva = (_filaActiva == f.IdViaje ? 0 : f.IdViaje)"
+                            @ondblclick="() => AbrirZoom(f.IdViaje)">
+                            <td class="r" style="color:#9AA7BC; font-size:0.72rem;">@_nro</td>
+                            <td><span class="estado-chip estado-chip--@f.Estado.ToLowerInvariant().Replace(" ", "-")">@f.Estado</span></td>
+                            <td>@f.Fecha.ToString("dd/MM/yyyy")</td>
+                            <td>@f.HPre</td>
+                            <td>@f.HIni</td>
+                            <td>@f.HFin</td>
+                            <td>@f.HAvi</td>
+                            <td>@f.HCie</td>
+                            <td>@f.UPr</td>
+                            <td>@f.UCb</td>
+                            <td>@f.UAs</td>
+                            <td class="c">@f.Chq</td>
+                            <td class="c">@f.Ag</td>
+                            <td class="nowrap">@f.Recorrido</td>
+                            <td>@f.Fletero</td>
+                            <td>@f.Chofer</td>
+                            <td>@f.Veh</td>
+                            <td>@f.Cliente</td>
+                            <td class="r">@f.Pax</td>
+                            <td class="c">@f.Agua</td>
+                            <td class="c">@f.Adj</td>
+                            <td class="nowrap">@f.Comentario</td>
+                            <td>@(string.IsNullOrWhiteSpace(f.Grupo) ? "SIN GRUPO" : f.Grupo)</td>
+                            <td>@(string.IsNullOrWhiteSpace(f.Vuelo) ? "SIN VUELO" : f.Vuelo)</td>
+                            <td>@(string.IsNullOrWhiteSpace(f.Guia) ? "SIN GUIA" : f.Guia)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </MudPaper>
+
+    @* Referencia de colores (leyenda) *@
+    <div class="d-flex align-center flex-wrap mt-2" style="gap:14px; font-size:0.78rem; color:#5B6B82;">
+        <span style="font-weight:600;">Estados:</span>
+        <span class="leyenda" style="background:#FFFF80;">ASIGNADO</span>
+        <span class="leyenda" style="background:#FF80FF;">CURSO</span>
+        <span class="leyenda" style="background:#C0C0C0;">FINALIZADO</span>
+        <span class="leyenda" style="background:#98C5BF;">FACTURADO</span>
+        <span class="leyenda" style="background:#52CEFE;">CHEQUEO</span>
+        <span style="margin-left:auto;">@visibles.Count de @_filas.Count servicios</span>
+    </div>
+    }
+
+    </div>
+
+    @* ════════════ Panel Buses — réplica de grid2 (arma_grid_vehiculo) ════════════ *@
+    @if (_verBuses)
+    {
+        <MudPaper Elevation="2" Class="buses-panel" Style="border-radius:8px; overflow:hidden;">
+            <div class="buses-panel__header">
+                <MudIcon Icon="@Icons.Material.Filled.DepartureBoard" Style="font-size:1rem;" />
+                <span>Buses — estado de flota</span>
+                <span style="margin-left:auto; font-weight:400; opacity:.85;">@_buses.Count unidades</span>
+                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                               Style="color:#fff; margin:-4px -6px -4px 0;"
+                               title="Cerrar panel" OnClick="ToggleBuses" />
+            </div>
+            <div class="trafico-wrap buses-panel__wrap">
+                <table class="trafico-grid">
+                    <thead>
+                        <tr>
+                            <th class="sortable" @onclick='() => OrdenarBuses("Fletero")'>Fletero@(SortFlecha("Fletero"))</th>
+                            <th class="sortable r" @onclick='() => OrdenarBuses("Interno")'>Interno@(SortFlecha("Interno"))</th>
+                            <th class="sortable" @onclick='() => OrdenarBuses("Chofer")'>Chofer@(SortFlecha("Chofer"))</th>
+                            <th class="sortable" @onclick='() => OrdenarBuses("Chofer2")'>2ª Chofer@(SortFlecha("Chofer2"))</th>
+                            <th class="sortable c" @onclick='() => OrdenarBuses("Franco")'>Franco@(SortFlecha("Franco"))</th>
+                            <th class="sortable" @onclick='() => OrdenarBuses("Estado")'>Estado@(SortFlecha("Estado"))</th>
+                            <th class="sortable r" @onclick='() => OrdenarBuses("IdViaje")'>Nº Viaje@(SortFlecha("IdViaje"))</th>
+                            <th class="sortable" @onclick='() => OrdenarBuses("Zona")'>Zona@(SortFlecha("Zona"))</th>
+                            <th class="sortable" @onclick='() => OrdenarBuses("Nextel")'>Nextel@(SortFlecha("Nextel"))</th>
+                            <th class="sortable r" @onclick='() => OrdenarBuses("Pax")'>Pax@(SortFlecha("Pax"))</th>
+                            <th class="sortable" @onclick='() => OrdenarBuses("Vehiculo")'>Vehiculo@(SortFlecha("Vehiculo"))</th>
+                            <th class="sortable" @onclick='() => OrdenarBuses("HsInicio")'>Hs. Inicio@(SortFlecha("HsInicio"))</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var b in BusesVisibles())
+                        {
+                            <tr style="@BusRowStyle(b.Estado)">
+                                <td>@b.Fletero</td>
+                                <td class="r">@b.Interno</td>
+                                <td>@b.Chofer</td>
+                                <td>@b.Chofer2</td>
+                                <td class="c">@b.Franco</td>
+                                <td>@b.Estado</td>
+                                <td class="r">@(b.IdViaje is > 0 ? b.IdViaje : null)</td>
+                                <td>@b.Zona</td>
+                                <td>@b.Nextel</td>
+                                <td class="r">@b.Pax</td>
+                                <td>@b.Vehiculo</td>
+                                <td>@(b.HsInicio?.ToString("dd/MM HH:mm") ?? "")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </MudPaper>
+    }
+
+    </div>
+}
+
+@code {
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+
+    private DateTime? _fecha = DateTime.Today;
+    private string _filtro = "";
+    private List<PlanillaTraficoRow> _filas = new();
+    private bool _cargando;
+    private int _filaActiva;   // IdViaje de la fila seleccionada por click (0 = ninguna)
+
+    // Filtros de tipo de ingreso (réplica de Emp/Tur/Nortur del FoxPro).
+    // Por defecto todo visible, igual que el form original (Nortur tildado).
+    private bool _verEmpresa = true;   // origen 'P'
+    private bool _verTurismo = true;   // origen 'T'
+    private bool _verNortur = true;    // mostrar servicios internos de NORTUR
+
+    // Filtros de unidad (réplica de los combos cronogramaCbio/cronograma + botón S/C).
+    // Son mutuamente excluyentes, igual que en el FoxPro (GotFocus limpia el otro combo).
+    private CombosUnidadesTrafico _combos = new(new(), new());
+    private string? _selUPr;                 // combo 1 — Unidad Programada (interno por empresa)
+    private string? _selUCb;                 // combo 2 — Unidad Asignada (todos los internos)
+    private bool _soloSinCronograma;         // botón S/C → cronograma = 'S/C'
+
+    // Vista cancelados (réplica del botón Cxl → arma_grid_viaje caso CANCELADO).
+    private bool _verCancelados;
+    private List<TraficoCanceladoRow> _cancelados = new();
+
+    // Panel Buses (réplica del checkbox verBuses → grid2 / arma_grid_vehiculo).
+    private bool _verBuses;
+    private List<PanelBusRow> _buses = new();
+    private string _busesOrdenCol = "";    // orden por click en header (réplica de ClickMHeader2)
+    private bool _busesOrdenAsc = true;
+
+    private string TituloFecha => _fecha?.ToString("dddd dd/MM/yyyy", _ar) ?? "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState.UsuarioActual is null)
+        {
+            Nav.NavigateTo("/login", forceLoad: false);
+            return;
+        }
+        // Combos de unidades (réplica del Init de trafico2: cursorCronogramaTrafico/Diagrama)
+        _combos = await Reports.GetCombosUnidadesTraficoAsync();
+        await Cargar();
+    }
+
+    private async Task Cargar()
+    {
+        if (_fecha is null) return;
+        _cargando = true;
+        StateHasChanged();
+
+        var dia = DateOnly.FromDateTime(_fecha.Value);
+        _filaActiva = 0;
+        _filas = await Reports.GetPlanillaTraficoAsync(dia);
+        // Cancelados del día: alimenta el contador del botón Cxl y la vista cancelados.
+        _cancelados = await Reports.GetTraficoCanceladosAsync(dia);
+        // El FoxPro rearma grid2 tras cada operación; acá se refresca al recargar (caché 5 min).
+        if (_verBuses)
+            _buses = await Reports.GetPanelBusesAsync();
+
+        _cargando = false;
+    }
+
+    private async Task OnFechaChanged(DateTime? nueva)
+    {
+        _fecha = nueva;
+        await Cargar();
+    }
+
+    private async Task DiaAnterior()
+    {
+        _fecha = (_fecha ?? DateTime.Today).AddDays(-1);
+        await Cargar();
+    }
+
+    private async Task DiaSiguiente()
+    {
+        _fecha = (_fecha ?? DateTime.Today).AddDays(1);
+        await Cargar();
+    }
+
+    private async Task IrHoy()
+    {
+        _fecha = DateTime.Today;
+        await Cargar();
+    }
+
+    // ── Combos de unidad: mutuamente excluyentes (réplica del GotFocus del FoxPro) ──
+
+    private void OnUPrChanged(string? valor)
+    {
+        _selUPr = valor;
+        if (!string.IsNullOrEmpty(valor))
+        {
+            _selUCb = null;
+            _soloSinCronograma = false;
+        }
+    }
+
+    private void OnUCbChanged(string? valor)
+    {
+        _selUCb = valor;
+        if (!string.IsNullOrEmpty(valor))
+        {
+            _selUPr = null;
+            _soloSinCronograma = false;
+        }
+    }
+
+    // Botón S/C: filtra cronograma = 'S/C' y limpia los combos (réplica de bSinCronograma.Click)
+    private void ToggleSinCronograma()
+    {
+        _soloSinCronograma = !_soloSinCronograma;
+        if (_soloSinCronograma)
+        {
+            _selUPr = null;
+            _selUCb = null;
+        }
+    }
+
+    // Botón Cxl: alterna la vista de cancelados. Igual que el FoxPro (Command3.Click):
+    // limpia los combos y deja solo la navegación de día activa.
+    private void ToggleCancelados()
+    {
+        _verCancelados = !_verCancelados;
+        if (_verCancelados)
+        {
+            _selUPr = null;
+            _selUCb = null;
+            _soloSinCronograma = false;
+            _verBuses = false;   // el FoxPro apaga verBuses al entrar a cancelados
+        }
+    }
+
+    // ── Panel Buses (checkbox verBuses del FoxPro) ──
+
+    private async Task ToggleBuses()
+    {
+        _verBuses = !_verBuses;
+        if (_verBuses && _buses.Count == 0)
+            _buses = await Reports.GetPanelBusesAsync();
+    }
+
+    private void OrdenarBuses(string col)
+    {
+        if (_busesOrdenCol == col)
+            _busesOrdenAsc = !_busesOrdenAsc;
+        else
+        {
+            _busesOrdenCol = col;
+            _busesOrdenAsc = true;
+        }
+    }
+
+    private string SortFlecha(string col) =>
+        _busesOrdenCol != col ? "" : (_busesOrdenAsc ? " ▲" : " ▼");
+
+    private List<PanelBusRow> BusesVisibles()
+    {
+        if (string.IsNullOrEmpty(_busesOrdenCol)) return _buses;
+        Func<PanelBusRow, object> clave = _busesOrdenCol switch
+        {
+            "Fletero"  => b => b.Fletero,
+            "Interno"  => b => b.Interno,
+            "Chofer"   => b => b.Chofer,
+            "Chofer2"  => b => b.Chofer2,
+            "Franco"   => b => b.Franco,
+            "Estado"   => b => b.Estado,
+            "IdViaje"  => b => b.IdViaje ?? 0,
+            "Zona"     => b => b.Zona,
+            "Nextel"   => b => b.Nextel,
+            "Pax"      => b => b.Pax ?? 0,
+            "Vehiculo" => b => b.Vehiculo,
+            "HsInicio" => b => b.HsInicio ?? DateTime.MinValue,
+            _          => b => b.Interno
+        };
+        return (_busesOrdenAsc ? _buses.OrderBy(clave) : _buses.OrderByDescending(clave)).ToList();
+    }
+
+    // Color de fila del panel Buses — réplica de grid_color_vehiculo (funcion.prg):
+    // amarillo ASIGNADO, rosa CURSO, blanco el resto.
+    private static string BusRowStyle(string estado) => estado switch
+    {
+        "ASIGNADO" => "background:#FFFF80;",
+        "CURSO"    => "background:#FF80FF;",
+        _          => ""
+    };
+
+    private List<PlanillaTraficoRow> FilasVisibles()
+    {
+        IEnumerable<PlanillaTraficoRow> q = _filas;
+
+        // ── Filtro de tipo de ingreso (Emp = origen 'P', Tur = origen 'T') ──
+        // Si ambos están activos no filtra nada; si solo uno, deja ese origen.
+        if (_verEmpresa ^ _verTurismo)
+        {
+            var origen = _verEmpresa ? "P" : "T";
+            q = q.Where(f => f.Origen == origen);
+        }
+        else if (!_verEmpresa && !_verTurismo)
+        {
+            // Ninguno activo → no se muestra ningún servicio de transporte.
+            q = Enumerable.Empty<PlanillaTraficoRow>();
+        }
+
+        // ── Filtro Nortur (réplica de chkNortur): destildado oculta servicios internos ──
+        if (!_verNortur)
+            q = q.Where(f => !f.EsNortur);
+
+        // ── Filtro de unidad (réplica de los filtros CRONOGRAMA / _CRONOGRAMACBIO) ──
+        // S/C y los dos combos son excluyentes entre sí, igual que en el FoxPro.
+        if (_soloSinCronograma)
+            q = q.Where(f => f.UCb == "S/C");
+        else if (!string.IsNullOrEmpty(_selUCb))
+            q = q.Where(f => f.UCb == _selUCb);
+        else if (!string.IsNullOrEmpty(_selUPr))
+            q = q.Where(f => f.UPr == _selUPr);
+
+        // ── Buscador de texto ──
+        if (!string.IsNullOrWhiteSpace(_filtro))
+        {
+            var t = _filtro.Trim().ToUpperInvariant();
+            q = q.Where(f =>
+                (f.Recorrido?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.Chofer?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.Cliente?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.Fletero?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.Vuelo?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.UPr?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.UAs?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.Grupo?.ToUpperInvariant().Contains(t) ?? false));
+        }
+
+        return q.ToList();
+    }
+
+    // Cancelados visibles: aplica solo el buscador de texto (los demás filtros
+    // quedan deshabilitados en esta vista, igual que en el FoxPro).
+    private List<TraficoCanceladoRow> CanceladosVisibles()
+    {
+        if (!_verCancelados) return new();
+
+        IEnumerable<TraficoCanceladoRow> q = _cancelados;
+        if (!string.IsNullOrWhiteSpace(_filtro))
+        {
+            var t = _filtro.Trim().ToUpperInvariant();
+            q = q.Where(f =>
+                (f.Recorrido?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.Motivo?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.Cliente?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.Comentario?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.Vuelo?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.UPr?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.UCb?.ToUpperInvariant().Contains(t) ?? false) ||
+                (f.Grupo?.ToUpperInvariant().Contains(t) ?? false));
+        }
+        return q.ToList();
+    }
+
+    // Doble click en una fila → abre el modal "Zoom del Viaje" (solo lectura),
+    // réplica del form FoxPro trafico_zoom.scx.
+    private async Task AbrirZoom(int idViaje)
+    {
+        var parametros = new DialogParameters<ZoomViajeDialog>
+        {
+            { x => x.IdViaje, idViaje }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+            CloseButton = true,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<ZoomViajeDialog>("Zoom del Viaje", parametros, opciones);
+    }
+
+    private async Task DescargarExcel()
+    {
+        if (_fecha is null) return;
+        var dia = DateOnly.FromDateTime(_fecha.Value);
+        // Exporta lo que se ve en pantalla (respeta los filtros activos y el buscador).
+        byte[] bytes;
+        string nombre;
+        if (_verCancelados)
+        {
+            bytes = Excel.TraficoCancelados(CanceladosVisibles(), dia);
+            nombre = $"trafico_cancelados_{dia:yyyyMMdd}.xlsx";
+        }
+        else
+        {
+            bytes = Excel.PlanillaTrafico(FilasVisibles(), dia);
+            nombre = $"planilla_trafico_{dia:yyyyMMdd}.xlsx";
+        }
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    // Color de fila según estado — misma paleta que grid_color_viaje (funcion.prg)
+    private static string RowStyle(string estado) => estado switch
+    {
+        "ASIGNADO"    => "background:#FFFF80;",  // amarillo claro
+        "CURSO"       => "background:#FF80FF;",  // rosa
+        "FINALIZADO"  => "background:#C0C0C0;",  // gris claro
+        "FACTURADO"   => "background:#98C5BF;",  // verde grisáceo
+        "CHEQUEO"     => "background:#52CEFE;",  // celeste
+        _             => ""                       // blanco
+    };
+
+    private string Fmt(int n) => n.ToString("#,0", _ar);
+}

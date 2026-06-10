@@ -1,0 +1,311 @@
+@page "/reservas-fecha-servicio"
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Reservas por fecha y servicio</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+        Reservas por fecha y servicio
+    </MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Metrocar Nortur · datos en vivo desde replicaVPF
+    </MudText>
+</div>
+
+<MudGrid Spacing="3">
+
+    @* ── Filtros ── *@
+    <MudItem xs="12" md="3">
+        <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+            <MudText Typo="Typo.subtitle2" Class="mb-3" Style="color:#003AA0; font-weight:800; letter-spacing:0.05em; text-transform:uppercase;">Filtros</MudText>
+
+            <MudDatePicker Label="Desde" @bind-Date="_desde"
+                           Class="mb-2" MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy" />
+            <MudDatePicker Label="Hasta" @bind-Date="_hasta"
+                           Class="mb-3" MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy" />
+
+            <div class="d-flex align-center justify-space-between mb-1">
+                <MudText Typo="Typo.caption" Style="color:#7A90AD; font-weight:600;">Servicios</MudText>
+                <MudButton Size="MudSize.Small" Variant="Variant.Text" Color="MudColor.Primary"
+                           OnClick="ToggleTodosServicios">
+                    @(_todosSeleccionados ? "Ninguno" : "Todos")
+                </MudButton>
+            </div>
+            <MudSelect T="string" MultiSelection="true"
+                       @bind-SelectedValues="_serviciosSel" Class="mb-3"
+                       MultiSelectionTextFunc="@(s => s.Count == _servicios.Count ? "Todos" : $"{s.Count} servicio(s)")">
+                @foreach (var s in _servicios)
+                {
+                    <MudSelectItem T="string" Value="@s.IdServici">@s.Nombre</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudSwitch T="bool" @bind-Value="_incluirCanceladas" Label="Incluir canceladas"
+                       Color="MudColor.Primary" Class="mb-2" />
+
+            <MudRadioGroup T="string" @bind-Value="_metrica" Class="mb-4">
+                <MudRadio T="string" Value="@("Reservas")" Color="MudColor.Primary">Reservas</MudRadio>
+                <MudRadio T="string" Value="@("Pax")" Color="MudColor.Primary">Pax</MudRadio>
+            </MudRadioGroup>
+
+            <MudButton FullWidth="true" Variant="Variant.Filled" Color="MudColor.Primary"
+                       OnClick="Cargar" Disabled="_cargando" StartIcon="@Icons.Material.Filled.Search"
+                       Style="border-radius:8px;">
+                @(_cargando ? "Cargando..." : "Aplicar filtros")
+            </MudButton>
+        </MudPaper>
+    </MudItem>
+
+    @* ── Contenido principal ── *@
+    <MudItem xs="12" md="9">
+        @if (_cargando)
+        {
+            <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
+        }
+        else if (_detalle.Count == 0)
+        {
+            <MudAlert Severity="Severity.Warning" Style="border-radius:12px;">No hay reservas para los filtros seleccionados.</MudAlert>
+        }
+        else
+        {
+            @* ── KPIs ── *@
+            <MudGrid Spacing="3" Class="mb-3">
+                <MudItem xs="6" sm="3">
+                    <KpiCard Label="Total reservas" Value="@Fmt(_totalRes)" Sub="@PeriodoTxt" Color="@NorturColors.Azul" />
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <KpiCard Label="Total pax" Value="@Fmt(_totalPax)" Sub="pasajeros" Color="@NorturColors.Verde" />
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <KpiCard Label="Canceladas" Value="@Fmt(_totalCan)" Sub="@($"{_pctCan:0.0}% del total")" Color="@NorturColors.Rojo" />
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <KpiCard Label="Servicios distintos" Value="@_nServicios.ToString()" Sub="en el período" Color="@NorturColors.Naranja" />
+                </MudItem>
+            </MudGrid>
+
+            @* ── Gráficos ── *@
+            <MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
+                <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
+                    <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                        <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:700; color:#112F5B;">
+                            @_metrica por servicio — top 10
+                        </MudText>
+                        <ApexChart TItem="BarItem" Options="_optsBar" Height="380">
+                            <ApexPointSeries TItem="BarItem"
+                                             Items="_barItems"
+                                             Name="@_metrica"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="@(x => x.Servicio)"
+                                             YValue="@(x => x.Valor)" />
+                        </ApexChart>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" md="5" Style="display:flex; flex-direction:column;">
+                    <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                        <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:700; color:#112F5B;">
+                            Distribución — top 12
+                        </MudText>
+                        <ApexChart TItem="PieItem" Options="_optsPie" Height="380">
+                            <ApexPointSeries TItem="PieItem"
+                                             Items="_pieItems"
+                                             Name="@_metrica"
+                                             SeriesType="SeriesType.Donut"
+                                             XValue="@(x => x.Servicio)"
+                                             YValue="@(x => x.Valor)" />
+                        </ApexChart>
+                    </MudPaper>
+                </MudItem>
+            </MudGrid>
+
+            @* ── Tabla pivote ── *@
+            <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
+                <div class="d-flex justify-space-between align-center mb-3">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                        Detalle: @_metrica.ToLower() por fecha y servicio
+                    </MudText>
+                    <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                               StartIcon="@Icons.Material.Filled.Download"
+                               OnClick="DescargarExcel"
+                               Style="border-radius:8px; text-transform:none;">
+                        Descargar Excel
+                    </MudButton>
+                </div>
+                <div style="overflow-x:auto;">
+                    <MudSimpleTable Dense="true" Hover="true" Striped="true">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                @foreach (var s in _pivServicios)
+                                {
+                                    <th style="text-align:right; white-space:nowrap;">@s</th>
+                                }
+                                <th style="text-align:right; font-weight:800; white-space:nowrap;">TOTAL</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var f in _pivFechas)
+                            {
+                                <tr>
+                                    <td style="white-space:nowrap;">@f.ToString("dd/MM/yyyy")</td>
+                                    @foreach (var s in _pivServicios)
+                                    {
+                                        <td style="text-align:right;">@Fmt(PivVal(f, s))</td>
+                                    }
+                                    <td style="text-align:right; font-weight:800;">@Fmt(_pivServicios.Sum(s => PivVal(f, s)))</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                </div>
+            </MudPaper>
+        }
+    </MudItem>
+</MudGrid>
+
+@code {
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+
+    private DateTime? _desde = DateTime.Today.AddMonths(-2);
+    private DateTime? _hasta = DateTime.Today;
+    private IReadOnlyCollection<string> _serviciosSel = new HashSet<string>();
+    private bool _todosSeleccionados => _servicios.Count > 0 && _serviciosSel.Count == _servicios.Count;
+    private bool _incluirCanceladas = true;
+    private string _metrica = "Reservas";
+
+    private List<ServicioDto> _servicios = new();
+    private List<ReservaFechaServicioRow> _detalle = new();
+    private bool _cargando;
+
+    // KPIs
+    private int _totalRes, _totalPax, _totalCan, _nServicios;
+    private double _pctCan;
+    private string PeriodoTxt => $"{_desde:dd/MM/yyyy} – {_hasta:dd/MM/yyyy}";
+
+    // Gráficos ApexCharts
+    private record BarItem(string Servicio, decimal Valor);
+    private record PieItem(string Servicio, decimal Valor);
+    private List<BarItem> _barItems = new();
+    private List<PieItem> _pieItems = new();
+
+    private static readonly List<string> _palette = new()
+    {
+        "#003AA0", "#F99410", "#16A34A", "#DC2626",
+        "#0EA5E9", "#7C3AED", "#D97706", "#059669",
+        "#DB2777", "#2563EB", "#EA580C", "#0891B2"
+    };
+
+    private ApexChartOptions<BarItem> _optsBar = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent" },
+        PlotOptions = new()
+        {
+            Bar = new() { Horizontal = true, BorderRadius = 4, BorderRadiusApplication = BorderRadiusApplication.End }
+        },
+        Colors = new List<string> { "#003AA0" },
+        Xaxis = new() { Labels = new() { Style = new() { FontSize = "11px" } } },
+        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px" }, MaxWidth = 160 } } },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
+        Theme = new() { Mode = Mode.Light },
+    };
+
+    private ApexChartOptions<PieItem> _optsPie = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent" },
+        Colors = _palette,
+        Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px" },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+    };
+
+    // Pivote
+    private List<DateOnly> _pivFechas = new();
+    private List<string> _pivServicios = new();
+    private Dictionary<(DateOnly, string), int> _pivMap = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState.UsuarioActual is null)
+        {
+            Nav.NavigateTo("/login", forceLoad: false);
+            return;
+        }
+        _servicios = await Reports.GetServiciosAsync();
+        _serviciosSel = new HashSet<string>(_servicios.Select(s => s.IdServici));
+        await Cargar();
+    }
+
+    private void ToggleTodosServicios()
+    {
+        _serviciosSel = _todosSeleccionados
+            ? new HashSet<string>()
+            : new HashSet<string>(_servicios.Select(s => s.IdServici));
+    }
+
+    private async Task Cargar()
+    {
+        if (_desde is null || _hasta is null) return;
+        _cargando = true;
+
+        var desde = DateOnly.FromDateTime(_desde.Value);
+        var hasta = DateOnly.FromDateTime(_hasta.Value);
+        var sel = _todosSeleccionados ? new List<string>() : _serviciosSel.ToList();
+
+        _detalle = await Reports.GetReservasPorFechaServicioAsync(desde, hasta, sel, _incluirCanceladas);
+        Recalcular();
+
+        _cargando = false;
+    }
+
+    private void Recalcular()
+    {
+        _totalRes = _detalle.Sum(d => d.Reservas);
+        _totalPax = _detalle.Sum(d => d.Pax);
+        _totalCan = _detalle.Sum(d => d.Canceladas);
+        _nServicios = _detalle.Select(d => d.Servicio).Distinct().Count();
+        _pctCan = _totalRes > 0 ? _totalCan * 100.0 / _totalRes : 0;
+
+        Func<ReservaFechaServicioRow, int> val = _metrica == "Pax" ? r => r.Pax : r => r.Reservas;
+
+        var ranking = _detalle
+            .GroupBy(d => d.Servicio)
+            .Select(g => new { Servicio = g.Key, Valor = g.Sum(val) })
+            .OrderByDescending(x => x.Valor)
+            .ToList();
+
+        _barItems = ranking.Take(10)
+            .Select(x => new BarItem(x.Servicio, (decimal)x.Valor))
+            .ToList();
+
+        _pieItems = ranking.Take(12)
+            .Select(x => new PieItem(x.Servicio, (decimal)x.Valor))
+            .ToList();
+
+        _pivFechas = _detalle.Select(d => d.Fecha).Distinct().OrderBy(f => f).ToList();
+        _pivServicios = _detalle.Select(d => d.Servicio).Distinct().OrderBy(s => s).ToList();
+        _pivMap = _detalle.ToDictionary(d => (d.Fecha, d.Servicio), val);
+    }
+
+    private int PivVal(DateOnly f, string s) => _pivMap.TryGetValue((f, s), out var v) ? v : 0;
+
+    private async Task DescargarExcel()
+    {
+        var bytes = Excel.ReservasFechaServicio(_detalle, _metrica);
+        var nombre = $"reservas_{_desde:yyyyMMdd}_{_hasta:yyyyMMdd}.xlsx";
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    private static string Fmt(int n) => n.ToString("#,0", System.Globalization.CultureInfo.GetCultureInfo("es-AR"));
+}

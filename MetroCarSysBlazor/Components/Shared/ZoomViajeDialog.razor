@@ -1,0 +1,280 @@
+@inject ReportService Reports
+@implements IDisposable
+
+<MudDialog Class="zoom-viaje-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar">
+            <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Zoom del Viaje</span>
+            @if (_d is not null)
+            {
+                <span class="zoom-title-bar__nro">Reserva&nbsp;#@_d.IdViaje</span>
+            }
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:220px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#F99410;" />
+            </div>
+        }
+        else if (_d is null)
+        {
+            <MudAlert Severity="Severity.Warning">No se encontró el detalle del viaje.</MudAlert>
+        }
+        else
+        {
+            @* ── Banda de estado (siempre visible, bien destacada) ── *@
+            <div class="zoom-estado-banda" style="@EstadoBanda(_d.Estado)">
+                <div class="zoom-estado-banda__label">ESTADO</div>
+                <div class="zoom-estado-banda__valor">@_d.Estado</div>
+                <div class="zoom-estado-banda__sep"></div>
+                <div class="zoom-estado-banda__item">
+                    <span class="zoom-estado-banda__label">NRO. RESERVA</span>
+                    <span class="zoom-estado-banda__nro">@IdViaje</span>
+                </div>
+                <div class="zoom-estado-banda__sep"></div>
+                <div class="zoom-estado-banda__item">
+                    <span class="zoom-estado-banda__label">F. PEDIDO</span>
+                    <span class="zoom-estado-banda__valor2">@Fecha(_d.FPedido)</span>
+                </div>
+                <div class="zoom-estado-banda__item">
+                    <span class="zoom-estado-banda__label">TIPO DE SERVICIO</span>
+                    <span class="zoom-estado-banda__valor2">@_d.TipoServicio</span>
+                </div>
+                <div class="zoom-estado-banda__item">
+                    <span class="zoom-estado-banda__label">N° VOUCHER</span>
+                    <span class="zoom-estado-banda__valor2">@(_d.Voucher?.ToString() ?? "0")</span>
+                </div>
+            </div>
+
+            <div class="zoom-grid">
+
+                @* ══════ Columna izquierda — panel unificado ══════ *@
+                <div class="zoom-col">
+                    <div class="zoom-panel">
+
+                        @* Horarios *@
+                        <div class="zoom-sec">
+                            <span class="zoom-sec__title">Horarios</span>
+                            <div class="zoom-row">
+                                @F("Fecha inicio",   Fecha(_d.FReserva))
+                                @F("Hora inicio",    Hora(_d.HsInicio))
+                                @F("Presentación",   _d.Presentacion)
+                                @F("Hora prox. fin", FechaHora(_d.HsFinAprox))
+                                @F("Finalizó",       FechaHora(_d.HsFin))
+                                @F("Duración",       Str(_d.Duracion))
+                            </div>
+                        </div>
+
+                        @* Cliente *@
+                        <div class="zoom-sec">
+                            <span class="zoom-sec__title">Cliente</span>
+                            <div class="zoom-row">
+                                @F("Código",   Str(_d.IdCliente), acento: true)
+                                @F("Nombre",   Str(_d.NombreCliente), acento: true, ancho: 2)
+                                @F("Operador", string.IsNullOrWhiteSpace(_d.IdOperador) ? "—" : _d.IdOperador)
+                                @F("",         string.IsNullOrWhiteSpace(_d.NombreOperador) ? "—" : _d.NombreOperador)
+                            </div>
+                        </div>
+
+                        @* Servicios *@
+                        <div class="zoom-sec">
+                            <span class="zoom-sec__title">Servicios</span>
+                            <div class="zoom-row">
+                                @F("1° Servicio",    Serv(_d.IdServicio1, _d.Servicio1), acento: true, ancho: 2)
+                                @F("2° Servicio",    Serv(_d.IdServicio2, _d.Servicio2))
+                                @F("3° Servicio",    Serv(_d.IdServicio3, _d.Servicio3))
+                                @F("Cód. Cabecera",  Str(_d.Cabecera), acento: true)
+                                @F("Kilómetros",     (_d.Km ?? 0).ToString("N0"))
+                            </div>
+                        </div>
+
+                        @* Vehículo + Pax + Vuelo (una sola sección) *@
+                        <div class="zoom-sec">
+                            <span class="zoom-sec__title">Vehículo / Pax / Vuelo</span>
+                            <div class="zoom-row">
+                                @F("Tipo Vehículo", Str(_d.TipoVehiculo))
+                                @F("Capac",  (_d.Capacidad ?? 0).ToString())
+                                @F("Pax",    (_d.Pax ?? 0).ToString())
+                                @F("Aguas",  (_d.Agua ?? 0).ToString())
+                                @F("Horas",  (_d.Horas ?? 0).ToString())
+                                @F("Vuelo",  string.IsNullOrWhiteSpace(_d.Vuelo) ? "SIN VUELO" : _d.Vuelo)
+                                @F("Guía",   Str(_d.Guia), ancho: 2)
+                            </div>
+                        </div>
+
+                        @* Grupo *@
+                        <div class="zoom-sec">
+                            <span class="zoom-sec__title">Grupo</span>
+                            <div class="zoom-row">
+                                @F("Grupo",   _d.TieneGrupo ? "AGREGA" : "SIN GRUPO")
+                                @F("Nombre",  string.IsNullOrWhiteSpace(_d.NombreGrupo) ? _d.Grupo : _d.NombreGrupo, acento: true, ancho: 2)
+                                @F("F. Fin",  Fecha(_d.FGrupoFin))
+                                @F("F. Fact", Fecha(_d.FGrupoFactura))
+                            </div>
+                        </div>
+
+                        @* Ruta / Odómetros *@
+                        <div class="zoom-sec">
+                            <span class="zoom-sec__title">Ruta</span>
+                            <div class="zoom-row">
+                                @F("Salida Ruta",   FechaHora(_d.HsIniRuta))
+                                @F("Llegada Ruta",  FechaHora(_d.HsFinRuta))
+                                @F("Id. Ruta",      (_d.IdRuta ?? 0).ToString())
+                                @F("Odo. Inicio",   (_d.OdometroIni ?? 0).ToString("N0"))
+                                @F("Odo. Fin",      (_d.OdometroFin ?? 0).ToString("N0"))
+                                @F("Km Recorrido",  (_d.KmRecorrido ?? 0).ToString("N0"))
+                            </div>
+                        </div>
+
+                        @* Recorrido *@
+                        <div class="zoom-sec">
+                            <span class="zoom-sec__title">Recorrido</span>
+                            <div class="zoom-row">
+                                @F("Desde",          Str(_d.Desde), ancho: 2)
+                                @F("Hasta",          Str(_d.Hasta), ancho: 2)
+                                @F("Distrito Inicio",Str(_d.Distrito))
+                                @F("Rec. Celular",   Str(_d.RecorridoCelular), ancho: 2)
+                            </div>
+                            <div class="zoom-row">
+                                @F("Comentario", Str(_d.Comentario), ancho: 3)
+                                @F("Documento",  _d.TieneAdjunto ? _d.Adjunto : "Sin Adjunto")
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                @* ══════ Columna derecha: Adicionales ══════ *@
+                <div class="zoom-col zoom-col--right">
+                    <div class="zoom-box--adic">
+                        <div class="zoom-box__label" style="padding:5px 10px 4px; background:#EEF3FB; border-bottom:1px solid var(--z-border); display:block; font-size:0.60rem; font-weight:700; text-transform:uppercase; letter-spacing:0.8px; color:var(--z-acento);">Adicionales</div>
+                        @if (_adicionales.Count == 0)
+                        {
+                            <span class="zoom-adic__empty">Sin adicionales</span>
+                        }
+                        else
+                        {
+                            <table class="zoom-adic">
+                                <thead>
+                                    <tr><th>Nombre</th><th class="r">Cant.</th></tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var a in _adicionales)
+                                    {
+                                        <tr>
+                                            <td>@a.Nombre</td>
+                                            <td class="r">@a.Cantidad</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+                    </div>
+                </div>
+
+            </div>
+
+            @* ══════ Chofer / Unidad — ancho completo ══════ *@
+            <div class="zoom-box zoom-box--chofer">
+                <span class="zoom-box__label">Chofer / Unidad</span>
+                <div class="zoom-row">
+                    @F("Chofer",      Str(_d.NombreChofer), ancho: 2)
+                    @F("Id Chofer",   Str(_d.IdChofer))
+                    @F("Tipo Chofer", Str(_d.TipoChofer))
+                    @F("Vehículo",    Str(_d.Vehiculo))
+                    @F("Fletero",     Str(_d.Fletero), ancho: 2)
+                </div>
+            </div>
+
+            @* ══════ Financiero — ancho completo ══════ *@
+            <div class="zoom-box zoom-box--fin">
+                <span class="zoom-box__label">Valores del Servicio</span>
+                <div class="zoom-row">
+                    @F("Moneda Liquidar",       Str(_d.MonedaLiquidar))
+                    @F("Importe a Liquidar",    _d.ImporteLiquidar.ToString("N2"))
+                    @F("Porc. Descuento",       _d.PorcDescuento.ToString("N2") + " %")
+                    @F("Bonif. Cliente",        _d.BonificadoCliente ? "Sí" : "No")
+                    @F("Moneda Pago",           Str(_d.MonedaPago))
+                    @F("Importe a Pagar",       _d.ImportePago.ToString("N2"))
+                    @F("Bonif. Empresa",        _d.BonificadoEmpresa ? "Sí" : "No")
+                </div>
+            </div>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cerrar" Variant="Variant.Filled"
+                   Style="background:#F99410;color:#fff;font-weight:700;"
+                   StartIcon="@Icons.Material.Filled.Close">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public int IdViaje { get; set; }
+
+    private DetalleViajeDto? _d;
+    private List<AdicionalViajeRow> _adicionales = new();
+    private bool _cargando = true;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override async Task OnInitializedAsync()
+    {
+        _d = await Reports.GetDetalleViajeAsync(IdViaje);
+        if (_d is not null)
+            _adicionales = await Reports.GetAdicionalesViajeAsync(IdViaje);
+        _cargando = false;
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    // ── Helpers de formato ──
+    private string Fecha(DateOnly? f) => f is null ? "—" : f.Value.ToString("dd/MM/yyyy", _ar);
+    private string Hora(DateTime? d) => d is null ? "—" : d.Value.ToString("HH:mm", _ar);
+    private string FechaHora(DateTime? d) => d is null ? "—" : d.Value.ToString("dd/MM/yyyy HH:mm", _ar);
+    private string Str(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+
+    private string Serv(string id, string nombre)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return "—";
+        return string.IsNullOrWhiteSpace(nombre) ? id : $"{id} · {nombre}";
+    }
+
+    // Campo label+valor. ancho=columnas que ocupa (1..n), acento=naranja NORTUR.
+    private RenderFragment F(string label, string valor, bool acento = false, int ancho = 1) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", $"zoom-field zoom-field--{ancho}");
+        if (!string.IsNullOrEmpty(label))
+        {
+            b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label");
+            b.AddContent(4, label); b.CloseElement();
+        }
+        b.OpenElement(5, "div");
+        b.AddAttribute(6, "class", acento ? "zoom-field__value zoom-field__value--acento" : "zoom-field__value");
+        b.AddContent(7, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+
+    // Banda de estado: pastel claro para el tema claro
+    private string EstadoBanda(string estado) => estado switch
+    {
+        "ASIGNADO"    => "background:#FFFBDD; border:1px solid #E8D800; border-left:4px solid #C8B800;",
+        "CURSO"       => "background:#FDF0FF; border:1px solid #DDA0EE; border-left:4px solid #B450FF;",
+        "FINALIZADO"  => "background:#F2F2F2; border:1px solid #C0C0C0; border-left:4px solid #909090;",
+        "FACTURADO"   => "background:#EAF7F3; border:1px solid #7ECFBC; border-left:4px solid #2A9D87;",
+        "CHEQUEO"     => "background:#E8F6FF; border:1px solid #7EC8F0; border-left:4px solid #1EA0FF;",
+        "CANCELADO"   => "background:#FFF0F0; border:1px solid #F0A0A0; border-left:4px solid #DC2626;",
+        "SIN ASIGNAR" => "background:#FFF8EE; border:1px solid #F0C870; border-left:4px solid #F99410;",
+        _             => "background:#F4F8FF; border:1px solid #B0C8E8; border-left:4px solid #003AA0;",
+    };
+
+    public void Dispose() { }
+}

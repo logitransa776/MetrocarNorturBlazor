@@ -1,0 +1,12 @@
+@page "/"
+@inject NorturAuthStateProvider AuthState
+@inject NavigationManager Nav
+
+@code {
+    protected override void OnInitialized()
+    {
+        // Redirige al reporte si hay sesión; al login si no.
+        var destino = AuthState.UsuarioActual is not null ? "/planilla-trafico" : "/login";
+        Nav.NavigateTo(destino, forceLoad: false);
+    }
+}
