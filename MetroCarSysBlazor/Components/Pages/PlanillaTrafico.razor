@@ -5,6 +5,7 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject IDialogService DialogService
+@implements IDisposable
 @rendermode InteractiveServer
 
 <PageTitle>Planilla de servicios — Tráfico</PageTitle>
@@ -240,7 +241,9 @@ else if (_verCancelados)
                         {
                             _nroCxl++;
                             var esActivaCxl = _filaActiva == f.IdViaje;
-                            <tr style="cursor:pointer; @(esActivaCxl ? "outline:2px solid #DC2626; outline-offset:-2px; filter:brightness(0.88);" : "")"
+                            <tr @key="f.IdViaje"
+                                class="@(esActivaCxl ? "fila-activa" : "")"
+                                style="cursor:pointer;"
                                 title="Doble click para ver el detalle del viaje"
                                 @onclick="() => _filaActiva = (_filaActiva == f.IdViaje ? 0 : f.IdViaje)"
                                 @ondblclick="() => AbrirZoom(f.IdViaje)">
@@ -330,7 +333,9 @@ else
                     {
                         _nro++;
                         var esActiva = _filaActiva == f.IdViaje;
-                        <tr style="@RowStyle(f.Estado) cursor:pointer; @(esActiva ? "outline:2px solid #003AA0; outline-offset:-2px; filter:brightness(0.88);" : "")"
+                        <tr @key="f.IdViaje"
+                            class="@EstadoCss(f.Estado) @(esActiva ? "fila-activa" : "") @(_filasCambiadas.Contains(f.IdViaje) ? "fila-flash" : "")"
+                            style="cursor:pointer;"
                             title="Doble click para ver el detalle del viaje"
                             @onclick="() => _filaActiva = (_filaActiva == f.IdViaje ? 0 : f.IdViaje)"
                             @ondblclick="() => AbrirZoom(f.IdViaje)">
@@ -366,7 +371,7 @@ else
         </div>
     </MudPaper>
 
-    @* Referencia de colores (leyenda) *@
+    @* Referencia de colores (leyenda) + estado del auto-refresh *@
     <div class="d-flex align-center flex-wrap mt-2" style="gap:14px; font-size:0.78rem; color:#5B6B82;">
         <span style="font-weight:600;">Estados:</span>
         <span class="leyenda" style="background:#FFFF80;">ASIGNADO</span>
@@ -374,7 +379,15 @@ else
         <span class="leyenda" style="background:#C0C0C0;">FINALIZADO</span>
         <span class="leyenda" style="background:#98C5BF;">FACTURADO</span>
         <span class="leyenda" style="background:#52CEFE;">CHEQUEO</span>
-        <span style="margin-left:auto;">@visibles.Count de @_filas.Count servicios</span>
+        <span style="margin-left:auto;">
+            @visibles.Count de @_filas.Count servicios
+            @if (_ultimoRefresh is not null)
+            {
+                <span title="La planilla chequea cambios en la base cada 60 segundos y se actualiza sola">
+                    · <span style="color:#16A34A;">●</span> actualizado @_ultimoRefresh.Value.ToString("HH:mm:ss") · auto 60s
+                </span>
+            }
+        </span>
     </div>
     }
 
@@ -413,7 +426,7 @@ else
                     <tbody>
                         @foreach (var b in BusesVisibles())
                         {
-                            <tr style="@BusRowStyle(b.Estado)">
+                            <tr class="@EstadoCss(b.Estado)">
                                 <td>@b.Fletero</td>
                                 <td class="r">@b.Interno</td>
                                 <td>@b.Chofer</td>
@@ -472,6 +485,14 @@ else
     private string _busesOrdenCol = "";    // orden por click en header (réplica de ClickMHeader2)
     private bool _busesOrdenAsc = true;
 
+    // Auto-refresh inteligente: cada 60s una query liviana (GetTraficoVersionAsync) chequea
+    // si algo cambió en la base; solo entonces se recarga la grilla. Las filas nuevas o
+    // modificadas se resaltan 3s con .fila-flash y la grilla se reordena sola por horario.
+    private PeriodicTimer? _timerRefresh;
+    private TraficoVersion? _version;
+    private HashSet<int> _filasCambiadas = new();
+    private DateTime? _ultimoRefresh;
+
     private string TituloFecha => _fecha?.ToString("dddd dd/MM/yyyy", _ar) ?? "";
 
     protected override async Task OnInitializedAsync()
@@ -484,6 +505,7 @@ else
         // Combos de unidades (réplica del Init de trafico2: cursorCronogramaTrafico/Diagrama)
         _combos = await Reports.GetCombosUnidadesTraficoAsync();
         await Cargar();
+        _ = AutoRefreshLoop();   // fire-and-forget: vive mientras viva el circuito
     }
 
     private async Task Cargar()
@@ -494,15 +516,98 @@ else
 
         var dia = DateOnly.FromDateTime(_fecha.Value);
         _filaActiva = 0;
+        _filasCambiadas.Clear();
         _filas = await Reports.GetPlanillaTraficoAsync(dia);
         // Cancelados del día: alimenta el contador del botón Cxl y la vista cancelados.
         _cancelados = await Reports.GetTraficoCanceladosAsync(dia);
-        // El FoxPro rearma grid2 tras cada operación; acá se refresca al recargar (caché 5 min).
+        // El FoxPro rearma grid2 tras cada operación; acá lo refresca el auto-refresh.
         if (_verBuses)
             _buses = await Reports.GetPanelBusesAsync();
 
+        // Token de versión inicial: contra esto compara el auto-refresh.
+        _version = await Reports.GetTraficoVersionAsync(dia);
+        _ultimoRefresh = DateTime.Now;
+
         _cargando = false;
     }
+
+    // ── Auto-refresh inteligente (timer 60s) ──
+
+    private async Task AutoRefreshLoop()
+    {
+        _timerRefresh = new PeriodicTimer(TimeSpan.FromSeconds(60));
+        try
+        {
+            while (await _timerRefresh.WaitForNextTickAsync())
+            {
+                if (_cargando || _fecha is null) continue;
+                try
+                {
+                    var dia = DateOnly.FromDateTime(_fecha.Value);
+                    var version = await Reports.GetTraficoVersionAsync(dia);
+
+                    if (_version is not null && version == _version)
+                    {
+                        // Sin cambios en la base: solo actualizar el reloj de la leyenda.
+                        _ultimoRefresh = DateTime.Now;
+                        await InvokeAsync(StateHasChanged);
+                        continue;
+                    }
+
+                    _version = version;
+                    await RefrescarConFlash(dia);
+                }
+                catch
+                {
+                    // Tick fallido (réplica caída, timeout): se reintenta en el próximo.
+                }
+            }
+        }
+        catch (ObjectDisposedException) { /* la página se cerró */ }
+    }
+
+    private async Task RefrescarConFlash(DateOnly dia)
+    {
+        // Forzar datos frescos aunque el TTL del caché (55s) no haya vencido.
+        Reports.InvalidarCacheTrafico(dia);
+
+        var previas = _filas.ToDictionary(f => f.IdViaje);
+        var filas = await Reports.GetPlanillaTraficoAsync(dia);
+        var cancelados = await Reports.GetTraficoCanceladosAsync(dia);
+        var buses = _verBuses ? await Reports.GetPanelBusesAsync() : _buses;
+
+        // PlanillaTraficoRow es record → la igualdad por valor detecta cualquier
+        // campo modificado. Fila nueva o distinta ⇒ flash.
+        var cambiadas = filas
+            .Where(f => !previas.TryGetValue(f.IdViaje, out var ant) || ant != f)
+            .Select(f => f.IdViaje)
+            .ToHashSet();
+
+        await InvokeAsync(() =>
+        {
+            // La query ya viene ordenada por hs_inicio ⇒ reordenamiento automático.
+            _filas = filas;
+            _cancelados = cancelados;
+            _buses = buses;
+            _filasCambiadas = cambiadas;
+            _ultimoRefresh = DateTime.Now;
+            StateHasChanged();
+        });
+
+        if (cambiadas.Count > 0)
+        {
+            // Quitar la clase .fila-flash cuando termina la animación (3s) para que
+            // un próximo cambio sobre la misma fila vuelva a destellar.
+            await Task.Delay(3500);
+            await InvokeAsync(() =>
+            {
+                _filasCambiadas.Clear();
+                StateHasChanged();
+            });
+        }
+    }
+
+    public void Dispose() => _timerRefresh?.Dispose();
 
     private async Task OnFechaChanged(DateTime? nueva)
     {
@@ -620,13 +725,17 @@ else
         return (_busesOrdenAsc ? _buses.OrderBy(clave) : _buses.OrderByDescending(clave)).ToList();
     }
 
-    // Color de fila del panel Buses — réplica de grid_color_vehiculo (funcion.prg):
-    // amarillo ASIGNADO, rosa CURSO, blanco el resto.
-    private static string BusRowStyle(string estado) => estado switch
+    // Clase CSS de fila según estado — mismo código de color que grid_color_viaje /
+    // grid_color_vehiculo (funcion.prg), pero con la paleta desaturada "Ops Densa"
+    // (tinte de fondo + barra de acento a la izquierda, definidos en app.css).
+    private static string EstadoCss(string estado) => estado switch
     {
-        "ASIGNADO" => "background:#FFFF80;",
-        "CURSO"    => "background:#FF80FF;",
-        _          => ""
+        "ASIGNADO"   => "fila-estado--asignado",
+        "CURSO"      => "fila-estado--curso",
+        "FINALIZADO" => "fila-estado--finalizado",
+        "FACTURADO"  => "fila-estado--facturado",
+        "CHEQUEO"    => "fila-estado--chequeo",
+        _            => ""    // SIN ASIGNAR y otros: fila blanca
     };
 
     private List<PlanillaTraficoRow> FilasVisibles()
@@ -712,7 +821,7 @@ else
         {
             MaxWidth = MaxWidth.Large,
             FullWidth = true,
-            CloseButton = true,
+            CloseButton = false,
             CloseOnEscapeKey = true,
             BackdropClick = true
         };
@@ -740,17 +849,6 @@ else
         using var streamRef = new DotNetStreamReference(stream);
         await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
     }
-
-    // Color de fila según estado — misma paleta que grid_color_viaje (funcion.prg)
-    private static string RowStyle(string estado) => estado switch
-    {
-        "ASIGNADO"    => "background:#FFFF80;",  // amarillo claro
-        "CURSO"       => "background:#FF80FF;",  // rosa
-        "FINALIZADO"  => "background:#C0C0C0;",  // gris claro
-        "FACTURADO"   => "background:#98C5BF;",  // verde grisáceo
-        "CHEQUEO"     => "background:#52CEFE;",  // celeste
-        _             => ""                       // blanco
-    };
 
     private string Fmt(int n) => n.ToString("#,0", _ar);
 }

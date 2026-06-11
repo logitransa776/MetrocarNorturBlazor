@@ -46,9 +46,25 @@ SIN ASIGNAR ──asignar──► ASIGNADO ──fin──► FINALIZADO ──
 | **Panel Buses** (grid2: flota viva, franco, colores) | ídem + `GetPanelBusesAsync` |
 | Zoom del Viaje (solo lectura) | `Components/Shared/ZoomViajeDialog.razor` |
 | Export Excel (planilla y cancelados) | `ExcelExportService` |
+| **Auto-refresh inteligente 60s** (token de versión + flash de cambios) | `PlanillaTrafico.razor` + `GetTraficoVersionAsync` |
+| Grilla estilo "Ops Densa" (barra de estado + tinte, paleta desaturada) | clases `fila-estado--*` en `app.css` |
 
 Queries del módulo en `ReportService.cs`: `GetPlanillaTraficoAsync`,
-`GetTraficoCanceladosAsync`, `GetCombosUnidadesTraficoAsync`, `GetPanelBusesAsync`.
+`GetTraficoCanceladosAsync`, `GetCombosUnidadesTraficoAsync`, `GetPanelBusesAsync`,
+`GetTraficoVersionAsync` (liviana, sin caché) + `InvalidarCacheTrafico`.
+
+### Auto-refresh de la planilla (patrón, jun 2026)
+
+- Las queries de tráfico usan **TTL 55s** (`CacheTtlTrafico`), no los 5 min globales.
+- `PlanillaTrafico.razor` corre un `PeriodicTimer` de 60s: pide `GetTraficoVersionAsync(dia)`
+  (COUNT + MAX(_updated_at) de `viaje` del día + MAX(_updated_at) de `vehiculo`, SIN caché);
+  si el token (record, igualdad por valor) no cambió, solo refresca el reloj de la leyenda.
+- Si cambió: `InvalidarCacheTrafico(dia)` → recarga → diff por record-equality de
+  `PlanillaTraficoRow` → set `_filasCambiadas` → clase `.fila-flash` (animación CSS 3s)
+  → a los 3.5s se limpia el set para que un próximo cambio vuelva a destellar.
+- Las filas usan `@key="f.IdViaje"` para que el diff de Blazor mueva nodos al reordenar.
+- Los colores de estado van por clase (`EstadoCss(estado)` → `fila-estado--asignado` etc.),
+  ya NO por style inline. La paleta desaturada vive en `app.css`.
 
 ## Documentación de lógica FoxPro (leer cuando se necesite el detalle)
 

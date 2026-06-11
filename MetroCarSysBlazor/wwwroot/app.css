@@ -213,7 +213,7 @@ html, body {
     padding: 0 16px;
     height: 48px;
     min-height: 48px;
-    background: linear-gradient(90deg, #112F5B 0%, #003AA0 100%);
+    background: linear-gradient(90deg, var(--nt-panel-grad-a) 0%, var(--nt-panel-grad-b) 100%);
     flex-shrink: 0;
 }
 
@@ -453,6 +453,43 @@ html, body {
 }
 
 /* ═══════════════════════════════════════════
+   THEMES — variables de la grilla de Tráfico
+   "NORTUR clásico" (default) y "Compacto gris"
+   (body.theme-gris, switcher en el AppBar)
+   ═══════════════════════════════════════════ */
+
+:root {
+    --nt-grid-header-bg: #112F5B;
+    --nt-grid-header-fg: #FFFFFF;
+    --nt-grid-header-border: #0C2347;
+    --nt-grid-header-hover: #1A4178;
+    --nt-grid-row-border: #E5EAF1;
+    --nt-grid-fg: #1A2433;
+    --nt-grid-zebra: #F8FAFC;
+    --nt-grid-sel: #003AA0;
+    --nt-panel-grad-a: #112F5B;
+    --nt-panel-grad-b: #003AA0;
+}
+
+body.theme-gris {
+    --nt-grid-header-bg: #374151;
+    --nt-grid-header-fg: #F3F4F6;
+    --nt-grid-header-border: #1F2937;
+    --nt-grid-header-hover: #4B5563;
+    --nt-grid-row-border: #E5E7EB;
+    --nt-grid-fg: #111827;
+    --nt-grid-zebra: #F9FAFB;
+    --nt-grid-sel: #374151;
+    --nt-panel-grad-a: #374151;
+    --nt-panel-grad-b: #4B5563;
+}
+
+/* El AppBar lleva el degradado azul inline (MainLayout) → en gris se pisa con !important */
+body.theme-gris .mud-appbar {
+    background: linear-gradient(90deg, #374151 0%, #4B5563 100%) !important;
+}
+
+/* ═══════════════════════════════════════════
    GRILLA DE TRÁFICO — planilla de servicios
    Estilo compacto tipo FoxPro, con scroll y header fijo
    ═══════════════════════════════════════════ */
@@ -465,8 +502,8 @@ html, body {
 .trafico-grid {
     border-collapse: collapse;
     width: 100%;
-    font-size: 0.80rem;
-    font-family: 'Consolas', 'Cascadia Mono', 'Segoe UI', Arial, sans-serif;
+    font-size: 0.78rem;
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     white-space: nowrap;
 }
 
@@ -474,24 +511,27 @@ html, body {
     position: sticky;
     top: 0;
     z-index: 2;
-    background: #112F5B;
-    color: #fff;
+    background: var(--nt-grid-header-bg);
+    color: var(--nt-grid-header-fg);
     font-weight: 700;
     text-align: left;
     padding: 5px 7px;
-    border: 1px solid #0c2347;
+    border: 1px solid var(--nt-grid-header-border);
     white-space: nowrap;
-    font-size: 0.75rem;
+    font-size: 0.82rem;
     letter-spacing: 0.03em;
+    color: #FFFFFF;
+    outline: 2px solid rgba(255, 255, 255, 0.45);
+    outline-offset: -2px;
 }
 
 .trafico-grid thead th.c { text-align: center; }
 .trafico-grid thead th.r { text-align: right; }
 
 .trafico-grid tbody td {
-    padding: 3px 7px;
-    border: 1px solid #D8DEE6;
-    color: #1A2433;
+    padding: 1px 7px;
+    border: 1px solid var(--nt-grid-row-border);
+    color: var(--nt-grid-fg);
     overflow: visible;
 }
 
@@ -504,6 +544,21 @@ html, body {
     filter: brightness(0.94);
 }
 
+/* Fila seleccionada por click */
+.trafico-grid tbody tr.fila-activa td {
+    background-image: linear-gradient(rgba(0, 58, 160, 0.13), rgba(0, 58, 160, 0.13));
+    border-top: 2px solid var(--nt-grid-sel) !important;
+    border-bottom: 2px solid var(--nt-grid-sel) !important;
+    border-left: none !important;
+    border-right: none !important;
+}
+.trafico-grid tbody tr.fila-activa td:first-child {
+    border-left: 2px solid var(--nt-grid-sel) !important;
+}
+.trafico-grid tbody tr.fila-activa td:last-child {
+    border-right: 2px solid var(--nt-grid-sel) !important;
+}
+
 /* Header clickeable para ordenar (panel Buses) */
 .trafico-grid thead th.sortable {
     cursor: pointer;
@@ -512,7 +567,31 @@ html, body {
 }
 
 .trafico-grid thead th.sortable:hover {
-    background: #1A4178;
+    background: var(--nt-grid-header-hover);
+}
+
+/* ═══════════════════════════════════════════
+   FILAS POR ESTADO — paleta original del FoxPro
+   ═══════════════════════════════════════════ */
+
+.trafico-grid tbody tr.fila-estado--asignado   { background: #FFFF80; }
+.trafico-grid tbody tr.fila-estado--curso       { background: #FF80FF; }
+.trafico-grid tbody tr.fila-estado--finalizado  { background: #C0C0C0; }
+.trafico-grid tbody tr.fila-estado--facturado   { background: #98C5BF; }
+.trafico-grid tbody tr.fila-estado--chequeo     { background: #52CEFE; }
+
+/* ═══════════════════════════════════════════
+   FLASH DE CAMBIOS — auto-refresh (filas nuevas o modificadas)
+   ═══════════════════════════════════════════ */
+
+@keyframes fila-flash {
+    0%   { background-color: #FFE9C2; }
+    60%  { background-color: #FFE9C2; }
+    100% { background-color: transparent; }
+}
+
+.trafico-grid tbody tr.fila-flash td {
+    animation: fila-flash 3s ease-out 1;
 }
 
 /* ═══════════════════════════════════════════
@@ -541,7 +620,7 @@ html, body {
     align-items: center;
     gap: 6px;
     padding: 6px 10px;
-    background: linear-gradient(90deg, #112F5B 0%, #003AA0 100%);
+    background: linear-gradient(90deg, var(--nt-panel-grad-a) 0%, var(--nt-panel-grad-b) 100%);
     color: #fff;
     font-size: 0.78rem;
     font-weight: 700;
@@ -731,7 +810,7 @@ html, body {
     border: 1px solid transparent;
 }
 
-/* Cada estado con su color — misma paleta que RowStyle */
+/* Cada estado con su color — paleta original FoxPro */
 .estado-chip--sin-asignar {
     background: #FFF3CD;
     color: #7C5C00;
@@ -831,15 +910,15 @@ h1:focus {
    ════════════════════════════════════════════════════════════ */
 
 :root {
-    --z-bg:        #F4F6FA;   /* fondo principal — gris muy claro */
+    --z-bg:        #DDE4EF;   /* fondo principal — gris azulado más oscuro */
     --z-bg-box:    #FFFFFF;   /* fondo del área de contenido */
-    --z-bg-adic:   #F0F4FB;   /* fondo columna adicionales */
-    --z-border:    #D1D9E6;   /* bordes */
-    --z-label:     #6B7A99;   /* etiquetas — gris azulado medio */
+    --z-bg-adic:   #E8EFF8;   /* fondo columna adicionales */
+    --z-border:    #B8C4D8;   /* bordes — más visibles */
+    --z-label:     #5A6A88;   /* etiquetas — gris azulado */
     --z-value:     #1A2A45;   /* valores — azul oscuro NORTUR */
-    --z-acento:    #F99410;   /* naranja NORTUR */
-    --z-sep:       #E2E8F4;   /* separador de sección */
-    --z-header-bg: #003AA0;   /* header del diálogo — azul NORTUR */
+    --z-acento:    #003AA0;   /* azul NORTUR (antes naranja) */
+    --z-sep:       #CDD6E8;   /* separador de sección — más marcado */
+    --z-header-bg: #112F5B;   /* header del diálogo — azul noche NORTUR */
 }
 
 /* ── MudDialog shell ── */
@@ -856,18 +935,13 @@ h1:focus {
 }
 .zoom-viaje-dialog .mud-dialog-content {
     background: var(--z-bg) !important;
-    padding: 12px 16px 8px !important;
+    padding: 12px 16px 14px !important;
     overflow-y: auto !important;
-    max-height: calc(100vh - 140px) !important;
-}
-.zoom-viaje-dialog .mud-dialog-actions {
-    background: var(--z-bg) !important;
-    border-top: 1px solid var(--z-border) !important;
-    padding: 8px 16px !important;
+    max-height: calc(100vh - 100px) !important;
 }
 
 /* Ancho máximo */
-.zoom-viaje-dialog { max-width: 1020px; }
+.zoom-viaje-dialog { max-width: 920px; }
 
 /* ── Barra de título (fondo azul NORTUR) ── */
 .zoom-title-bar {
@@ -902,16 +976,16 @@ h1:focus {
     border: 1px solid transparent;
 }
 .zoom-estado-banda__label {
-    font-size: 0.60rem;
+    font-size: 0.72rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.7px;
-    color: rgba(0,0,0,0.45);
+    color: rgba(0,0,0,0.5);
     display: block;
     margin-bottom: 1px;
 }
 .zoom-estado-banda__valor {
-    font-size: 1.05rem;
+    font-size: 1.18rem;
     font-weight: 800;
     color: #1A2A45;
     letter-spacing: 0.8px;
@@ -925,60 +999,38 @@ h1:focus {
 }
 .zoom-estado-banda__item { display: flex; flex-direction: column; }
 .zoom-estado-banda__valor2 {
-    font-size: 0.85rem;
+    font-size: 0.98rem;
     font-weight: 600;
     color: #1A2A45;
 }
 .zoom-estado-banda__nro {
-    font-size: 1rem;
+    font-size: 1.14rem;
     font-weight: 800;
-    color: #003AA0;
+    color: #F99410;
     letter-spacing: 0.5px;
     font-variant-numeric: tabular-nums;
 }
 
-/* ── Grid principal: columna datos + columna adicionales ── */
+/* ── Grid principal: columna datos + columna derecha (adicionales + valores) ── */
 .zoom-grid {
     display: grid;
-    grid-template-columns: 1fr 200px;
+    grid-template-columns: 1fr 175px;
     gap: 10px;
     align-items: start;
 }
 .zoom-col { display: flex; flex-direction: column; gap: 0; }
-.zoom-col--right { position: sticky; top: 0; }
+.zoom-col--right {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
 
 @media (max-width: 800px) {
     .zoom-grid { grid-template-columns: 1fr; }
 }
 
-/* ── Contenedor blanco principal (columna izquierda) ── */
-.zoom-panel {
-    background: var(--z-bg-box);
-    border: 1px solid var(--z-border);
-    border-radius: 6px;
-    padding: 0;
-    overflow: hidden;
-}
-
-/* ── Sección dentro del panel (reemplaza zoom-box) ── */
-.zoom-sec {
-    padding: 5px 12px 6px;
-    border-bottom: 1px solid var(--z-sep);
-}
-.zoom-sec:last-child { border-bottom: none; }
-
-/* Título de sección: línea con label inline tipo fieldset */
-.zoom-sec__title {
-    font-size: 0.60rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: var(--z-acento);
-    margin-bottom: 4px;
-    padding-bottom: 2px;
-    border-bottom: 1px solid var(--z-sep);
-    display: block;
-}
 
 /* ── Filas de campos ── */
 .zoom-row {
@@ -995,7 +1047,7 @@ h1:focus {
 .zoom-field--3       { flex: 3 1 0; }
 
 .zoom-field__label {
-    font-size: 0.58rem;
+    font-size: 0.72rem;
     color: var(--z-label);
     text-transform: uppercase;
     letter-spacing: 0.35px;
@@ -1005,11 +1057,11 @@ h1:focus {
     white-space: nowrap;
 }
 .zoom-field__value {
-    font-size: 0.82rem;
+    font-size: 0.96rem;
     color: var(--z-value);
     font-weight: 600;
     padding-bottom: 2px;
-    min-height: 18px;
+    min-height: 20px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1017,7 +1069,7 @@ h1:focus {
 }
 .zoom-field__value--acento { color: var(--z-acento); font-weight: 700; }
 
-/* ── Bloques financiero y chofer (ancho completo, debajo del grid) ── */
+/* ── Bloques de la columna izquierda ── */
 .zoom-box {
     background: var(--z-bg-box);
     border: 1px solid var(--z-border);
@@ -1026,55 +1078,107 @@ h1:focus {
     margin-top: 8px;
 }
 .zoom-box__label {
-    font-size: 0.60rem;
-    font-weight: 700;
+    font-size: 0.78rem;
+    font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: 0.8px;
+    letter-spacing: 0.7px;
     color: var(--z-acento);
     padding: 4px 12px 3px;
     border-bottom: 1px solid var(--z-sep);
-    background: #F8FAFF;
+    background: #EEF3FB;
     display: block;
 }
 .zoom-box > .zoom-row {
-    padding: 5px 12px;
+    padding: 4px 12px;
     margin-bottom: 0;
     border-bottom: 1px solid var(--z-sep);
 }
 .zoom-box > .zoom-row:last-child { border-bottom: none; }
-.zoom-box--fin    { border-left: 3px solid var(--z-acento); }
-.zoom-box--chofer { border-left: 3px solid #003AA0; }
+.zoom-box--sec    { border-left: 3px solid #003AA0; margin-top: 6px; }
+.zoom-box--sec:first-child { margin-top: 0; }
+.zoom-box--chofer { border-left: 3px solid #003AA0; margin-top: 6px; }
+
+/* ── Panel naranja: Valores del Servicio (columna derecha) ── */
+.zoom-box--valores {
+    border: 1px solid #F99410;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #fff;
+}
+.zoom-valores__header {
+    background: #F99410;
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    padding: 5px 10px 4px;
+}
+.zoom-valores__body {
+    padding: 6px 8px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.zoom-valores__field {
+    display: flex;
+    flex-direction: column;
+}
+.zoom-valores__label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: rgba(0,0,0,0.45);
+    line-height: 1.2;
+}
+.zoom-valores__value {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #1A2A45;
+    line-height: 1.3;
+}
+.zoom-valores__sep {
+    height: 1px;
+    background: rgba(249,148,16,0.3);
+    margin: 2px 0;
+}
 
 /* ── Columna de adicionales ── */
 .zoom-box--adic {
-    background: var(--z-bg-adic);
-    border: 1px solid var(--z-border);
+    background: #fff;
+    border: 1px solid #F99410;
     border-radius: 6px;
     overflow: hidden;
 }
-.zoom-adic { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.zoom-box--adic .zoom-box__label {
+    background: #F99410;
+    color: #fff;
+    border-bottom-color: #F99410;
+}
+.zoom-adic { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 .zoom-adic th {
     text-align: left;
-    font-size: 0.60rem;
+    font-size: 0.78rem;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: var(--z-acento);
-    border-bottom: 1px solid var(--z-border);
+    color: #F99410;
+    border-bottom: 1px solid rgba(249,148,16,0.3);
     padding: 5px 8px;
-    font-weight: 700;
-    background: #F0F4FB;
+    font-weight: 800;
+    background: #FFF7ED;
 }
 .zoom-adic td {
     padding: 4px 8px;
-    border-bottom: 1px solid var(--z-sep);
+    border-bottom: 1px solid rgba(249,148,16,0.2);
     color: var(--z-value);
-    font-size: 0.78rem;
+    font-size: 0.92rem;
 }
 .zoom-adic tr:last-child td { border-bottom: none; }
 .zoom-adic .r { text-align: right; }
 .zoom-adic__empty {
     color: var(--z-label);
-    font-size: 0.78rem;
+    font-size: 0.9rem;
     font-style: italic;
     padding: 10px 10px;
     display: block;

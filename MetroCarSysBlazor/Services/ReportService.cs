@@ -18,6 +18,9 @@ public class ReportService
     public static readonly DateOnly FechaMinValida = new(2021, 1, 1);
     public static readonly DateOnly FechaMaxValida = new(2027, 12, 31);
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+    // Tráfico es operación viva: TTL menor al timer de auto-refresh (60s) para que
+    // cada tick del timer encuentre el caché vencido y traiga datos frescos.
+    private static readonly TimeSpan CacheTtlTrafico = TimeSpan.FromSeconds(55);
 
     public ReportService(IDbContextFactory<NorturDbContext> dbFactory, IMemoryCache cache)
     {
@@ -121,7 +124,7 @@ public class ReportService
         var key = $"trafico|{dia:yyyyMMdd}";
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
-            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlTrafico;
             await using var db = await _dbFactory.CreateDbContextAsync();
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
@@ -226,6 +229,49 @@ public class ReportService
     }
 
     /// <summary>
+    /// Token de versión de los datos de Tráfico de un día. Query ultraliviana SIN caché:
+    /// la usa el auto-refresh de la planilla (cada 60s) para saber si algo cambió en la
+    /// base antes de recargar la grilla completa. Sin filtro _deleted: un borrado lógico
+    /// también debe disparar el refresh. Incluye vehiculo porque el panel Buses muestra
+    /// el estado vivo de la flota.
+    /// </summary>
+    public async Task<TraficoVersion> GetTraficoVersionAsync(DateOnly dia)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        var sql = $"""
+            SELECT
+                (SELECT COUNT(*)           FROM viaje    WHERE f_reserva = '{dia:yyyy-MM-dd}') AS CantViajes,
+                (SELECT MAX(_updated_at)   FROM viaje    WHERE f_reserva = '{dia:yyyy-MM-dd}') AS UltViaje,
+                (SELECT MAX(_updated_at)   FROM vehiculo)                                       AS UltVehiculo
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        using var reader = await cmd.ExecuteReaderAsync();
+        if (await reader.ReadAsync())
+        {
+            DateTime? D(int i) => reader.IsDBNull(i) ? null : reader.GetDateTime(i);
+            return new TraficoVersion(reader.GetInt32(0), D(1), D(2));
+        }
+        return new TraficoVersion(0, null, null);
+    }
+
+    /// <summary>
+    /// Borra del caché las entradas de Tráfico de un día. La llama el auto-refresh
+    /// cuando detecta cambios, para que la recarga siguiente vaya directo a la base
+    /// aunque el TTL de 55s no haya vencido todavía.
+    /// </summary>
+    public void InvalidarCacheTrafico(DateOnly dia)
+    {
+        _cache.Remove($"trafico|{dia:yyyyMMdd}");
+        _cache.Remove($"trafico-cxl|{dia:yyyyMMdd}");
+        _cache.Remove($"trafico-buses|{DateOnly.FromDateTime(DateTime.Today):yyyyMMdd}");
+    }
+
+    /// <summary>
     /// Listas de unidades para los combos de la pantalla de Tráfico (réplica del Init de trafico2.scx):
     ///   - Asignadas (cursorCronogramaTrafico): todos los internos activos,
     ///     ordenados por empresa (fletero.orden) y nº de interno. Filtra "U/Cb" (viaje.cronograma).
@@ -307,7 +353,7 @@ public class ReportService
         var key = $"trafico-buses|{hoy:yyyyMMdd}";
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
-            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlTrafico;
             await using var db = await _dbFactory.CreateDbContextAsync();
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
@@ -392,7 +438,7 @@ public class ReportService
         var key = $"trafico-cxl|{dia:yyyyMMdd}";
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
-            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlTrafico;
             await using var db = await _dbFactory.CreateDbContextAsync();
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
@@ -939,6 +985,9 @@ public record PlanillaTraficoRow(
 /// Programadas = "interno por empresas" (filtra U/Pr), Asignadas = "todos los internos" (filtra U/Cb).
 /// </summary>
 public record CombosUnidadesTrafico(List<string> Programadas, List<string> Asignadas);
+
+/// <summary>Token de versión para el auto-refresh de Tráfico (detección de cambios).</summary>
+public record TraficoVersion(int CantViajes, DateTime? UltimoCambioViaje, DateTime? UltimoCambioVehiculo);
 
 /// <summary>
 /// Una fila del panel "Buses" de la pantalla de Tráfico (grid2 de trafico2.scx,

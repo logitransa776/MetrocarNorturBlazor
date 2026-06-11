@@ -1,6 +1,7 @@
 @inherits LayoutComponentBase
 @inject NorturAuthStateProvider AuthState
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 
 <MudThemeProvider Theme="NorturTheme.Theme" />
 <MudPopoverProvider />
@@ -1052,6 +1053,13 @@
 
                 <MudSpacer />
 
+                @* Switcher de theme: NORTUR clásico ↔ Compacto gris (persiste en localStorage) *@
+                <MudTooltip Text="@(_themeGris ? "Theme: Compacto gris — click para NORTUR clásico" : "Theme: NORTUR clásico — click para Compacto gris")">
+                    <MudIconButton Icon="@Icons.Material.Filled.Palette"
+                                   Color="Color.Inherit" Size="Size.Small"
+                                   Class="mr-2" OnClick="CambiarTheme" />
+                </MudTooltip>
+
                 <MudText Typo="Typo.body2" Style="color:#C7D6EC;" Class="mr-3">
                     <strong style="color:#fff;">Usuario:</strong> @AuthState.UsuarioActual
                 </MudText>
@@ -1133,6 +1141,29 @@
     private bool _reparacionesExpanded = false;
 
     private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
+
+    // ── Theme switcher (clases CSS en app.css; theme.js aplica y persiste) ──
+    private bool _themeGris;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Sincroniza el ícono con el theme guardado en el navegador.
+            var theme = await JS.InvokeAsync<string>("norturTheme.get");
+            if (theme == "gris" && !_themeGris)
+            {
+                _themeGris = true;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task CambiarTheme()
+    {
+        _themeGris = !_themeGris;
+        await JS.InvokeVoidAsync("norturTheme.set", _themeGris ? "gris" : "clasico");
+    }
 
     private void CerrarSesion()
     {

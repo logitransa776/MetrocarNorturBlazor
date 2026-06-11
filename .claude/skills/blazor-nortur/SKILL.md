@@ -335,6 +335,19 @@ MetroCarSysBlazor/
 
 ---
 
+## Themes (switcher en el AppBar)
+
+Dos themes claros: **NORTUR clásico** (default) y **Compacto gris** (`body.theme-gris`).
+
+- Variables CSS `--nt-*` definidas en `app.css` (`:root` = clásico, `body.theme-gris` = gris).
+  Las usan la grilla de tráfico, el header del panel Buses y el drawer header.
+- `wwwroot/theme.js` aplica la clase en `<body>` y persiste en `localStorage` (`nortur-theme`).
+- Botón paleta en el AppBar (`MainLayout.razor`): `CambiarTheme()` → `JS norturTheme.set(...)`;
+  `OnAfterRenderAsync(firstRender)` sincroniza el estado con `norturTheme.get()`.
+- El AppBar tiene el degradado azul inline → el theme gris lo pisa con
+  `body.theme-gris .mud-appbar { background: ... !important; }`.
+- Para que un componente nuevo respete el theme: usar `var(--nt-...)`, no colores fijos.
+
 ## CSS del drawer (wwwroot/app.css)
 
 Las clases del drawer son CSS puro (no MudBlazor). Las principales:

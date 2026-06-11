@@ -3,13 +3,19 @@
 
 <MudDialog Class="zoom-viaje-dialog">
     <TitleContent>
-        <div class="zoom-title-bar">
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
             <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Class="me-2" Style="color:#F99410;" />
             <span class="zoom-title-bar__text">Zoom del Viaje</span>
             @if (_d is not null)
             {
                 <span class="zoom-title-bar__nro">Reserva&nbsp;#@_d.IdViaje</span>
             }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
         </div>
     </TitleContent>
 
@@ -17,7 +23,7 @@
         @if (_cargando)
         {
             <div class="d-flex justify-center align-center" style="min-height:220px;">
-                <MudProgressCircular Indeterminate="true" Style="color:#F99410;" />
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
             </div>
         }
         else if (_d is null)
@@ -52,106 +58,112 @@
 
             <div class="zoom-grid">
 
-                @* ══════ Columna izquierda — panel unificado ══════ *@
+                @* ══════ Columna izquierda — bloques independientes ══════ *@
                 <div class="zoom-col">
-                    <div class="zoom-panel">
 
-                        @* Horarios *@
-                        <div class="zoom-sec">
-                            <span class="zoom-sec__title">Horarios</span>
-                            <div class="zoom-row">
-                                @F("Fecha inicio",   Fecha(_d.FReserva))
-                                @F("Hora inicio",    Hora(_d.HsInicio))
-                                @F("Presentación",   _d.Presentacion)
-                                @F("Hora prox. fin", FechaHora(_d.HsFinAprox))
-                                @F("Finalizó",       FechaHora(_d.HsFin))
-                                @F("Duración",       Str(_d.Duracion))
-                            </div>
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Horarios</span>
+                        <div class="zoom-row">
+                            @F("Fecha inicio",   Fecha(_d.FReserva))
+                            @F("Hora inicio",    Hora(_d.HsInicio))
+                            @F("Presentación",   _d.Presentacion)
+                            @F("Hora prox. fin", FechaHora(_d.HsFinAprox))
+                            @F("Finalizó",       FechaHora(_d.HsFin))
+                            @F("Duración",       Str(_d.Duracion))
                         </div>
-
-                        @* Cliente *@
-                        <div class="zoom-sec">
-                            <span class="zoom-sec__title">Cliente</span>
-                            <div class="zoom-row">
-                                @F("Código",   Str(_d.IdCliente), acento: true)
-                                @F("Nombre",   Str(_d.NombreCliente), acento: true, ancho: 2)
-                                @F("Operador", string.IsNullOrWhiteSpace(_d.IdOperador) ? "—" : _d.IdOperador)
-                                @F("",         string.IsNullOrWhiteSpace(_d.NombreOperador) ? "—" : _d.NombreOperador)
-                            </div>
-                        </div>
-
-                        @* Servicios *@
-                        <div class="zoom-sec">
-                            <span class="zoom-sec__title">Servicios</span>
-                            <div class="zoom-row">
-                                @F("1° Servicio",    Serv(_d.IdServicio1, _d.Servicio1), acento: true, ancho: 2)
-                                @F("2° Servicio",    Serv(_d.IdServicio2, _d.Servicio2))
-                                @F("3° Servicio",    Serv(_d.IdServicio3, _d.Servicio3))
-                                @F("Cód. Cabecera",  Str(_d.Cabecera), acento: true)
-                                @F("Kilómetros",     (_d.Km ?? 0).ToString("N0"))
-                            </div>
-                        </div>
-
-                        @* Vehículo + Pax + Vuelo (una sola sección) *@
-                        <div class="zoom-sec">
-                            <span class="zoom-sec__title">Vehículo / Pax / Vuelo</span>
-                            <div class="zoom-row">
-                                @F("Tipo Vehículo", Str(_d.TipoVehiculo))
-                                @F("Capac",  (_d.Capacidad ?? 0).ToString())
-                                @F("Pax",    (_d.Pax ?? 0).ToString())
-                                @F("Aguas",  (_d.Agua ?? 0).ToString())
-                                @F("Horas",  (_d.Horas ?? 0).ToString())
-                                @F("Vuelo",  string.IsNullOrWhiteSpace(_d.Vuelo) ? "SIN VUELO" : _d.Vuelo)
-                                @F("Guía",   Str(_d.Guia), ancho: 2)
-                            </div>
-                        </div>
-
-                        @* Grupo *@
-                        <div class="zoom-sec">
-                            <span class="zoom-sec__title">Grupo</span>
-                            <div class="zoom-row">
-                                @F("Grupo",   _d.TieneGrupo ? "AGREGA" : "SIN GRUPO")
-                                @F("Nombre",  string.IsNullOrWhiteSpace(_d.NombreGrupo) ? _d.Grupo : _d.NombreGrupo, acento: true, ancho: 2)
-                                @F("F. Fin",  Fecha(_d.FGrupoFin))
-                                @F("F. Fact", Fecha(_d.FGrupoFactura))
-                            </div>
-                        </div>
-
-                        @* Ruta / Odómetros *@
-                        <div class="zoom-sec">
-                            <span class="zoom-sec__title">Ruta</span>
-                            <div class="zoom-row">
-                                @F("Salida Ruta",   FechaHora(_d.HsIniRuta))
-                                @F("Llegada Ruta",  FechaHora(_d.HsFinRuta))
-                                @F("Id. Ruta",      (_d.IdRuta ?? 0).ToString())
-                                @F("Odo. Inicio",   (_d.OdometroIni ?? 0).ToString("N0"))
-                                @F("Odo. Fin",      (_d.OdometroFin ?? 0).ToString("N0"))
-                                @F("Km Recorrido",  (_d.KmRecorrido ?? 0).ToString("N0"))
-                            </div>
-                        </div>
-
-                        @* Recorrido *@
-                        <div class="zoom-sec">
-                            <span class="zoom-sec__title">Recorrido</span>
-                            <div class="zoom-row">
-                                @F("Desde",          Str(_d.Desde), ancho: 2)
-                                @F("Hasta",          Str(_d.Hasta), ancho: 2)
-                                @F("Distrito Inicio",Str(_d.Distrito))
-                                @F("Rec. Celular",   Str(_d.RecorridoCelular), ancho: 2)
-                            </div>
-                            <div class="zoom-row">
-                                @F("Comentario", Str(_d.Comentario), ancho: 3)
-                                @F("Documento",  _d.TieneAdjunto ? _d.Adjunto : "Sin Adjunto")
-                            </div>
-                        </div>
-
                     </div>
+
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Cliente</span>
+                        <div class="zoom-row">
+                            @F("Código",   Str(_d.IdCliente))
+                            @F("Nombre",   Str(_d.NombreCliente), ancho: 2)
+                            @F("Operador", string.IsNullOrWhiteSpace(_d.IdOperador) ? "—" : _d.IdOperador)
+                            @F("",         string.IsNullOrWhiteSpace(_d.NombreOperador) ? "—" : _d.NombreOperador)
+                        </div>
+                    </div>
+
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Servicios</span>
+                        <div class="zoom-row">
+                            @F("1° Servicio",   Serv(_d.IdServicio1, _d.Servicio1), ancho: 2)
+                            @F("2° Servicio",   Serv(_d.IdServicio2, _d.Servicio2))
+                            @F("3° Servicio",   Serv(_d.IdServicio3, _d.Servicio3))
+                            @F("Cód. Cabecera", Str(_d.Cabecera))
+                            @F("Kilómetros",    (_d.Km ?? 0).ToString("N0"))
+                        </div>
+                    </div>
+
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Vehículo / Pax / Vuelo</span>
+                        <div class="zoom-row">
+                            @F("Tipo Vehículo", Str(_d.TipoVehiculo))
+                            @F("Capac",  (_d.Capacidad ?? 0).ToString())
+                            @F("Pax",    (_d.Pax ?? 0).ToString())
+                            @F("Aguas",  (_d.Agua ?? 0).ToString())
+                            @F("Horas",  (_d.Horas ?? 0).ToString())
+                            @F("Vuelo",  string.IsNullOrWhiteSpace(_d.Vuelo) ? "SIN VUELO" : _d.Vuelo)
+                            @F("Guía",   Str(_d.Guia), ancho: 2)
+                        </div>
+                    </div>
+
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Grupo</span>
+                        <div class="zoom-row">
+                            @F("Grupo",   _d.TieneGrupo ? "AGREGA" : "SIN GRUPO")
+                            @F("Nombre",  string.IsNullOrWhiteSpace(_d.NombreGrupo) ? _d.Grupo : _d.NombreGrupo, ancho: 2)
+                            @F("F. Fin",  Fecha(_d.FGrupoFin))
+                            @F("F. Fact", Fecha(_d.FGrupoFactura))
+                        </div>
+                    </div>
+
+                    @if (RutaTieneData(_d))
+                    {
+                        <div class="zoom-box zoom-box--sec">
+                            <span class="zoom-box__label">Ruta</span>
+                            <div class="zoom-row">
+                                @F("Salida Ruta",  FechaHora(_d.HsIniRuta))
+                                @F("Llegada Ruta", FechaHora(_d.HsFinRuta))
+                                @F("Id. Ruta",     (_d.IdRuta ?? 0).ToString())
+                                @F("Odo. Inicio",  (_d.OdometroIni ?? 0).ToString("N0"))
+                                @F("Odo. Fin",     (_d.OdometroFin ?? 0).ToString("N0"))
+                                @F("Km Recorrido", (_d.KmRecorrido ?? 0).ToString("N0"))
+                            </div>
+                        </div>
+                    }
+
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Recorrido</span>
+                        <div class="zoom-row">
+                            @F("Desde",          Str(_d.Desde), ancho: 2)
+                            @F("Hasta",          Str(_d.Hasta), ancho: 2)
+                            @F("Distrito Inicio",Str(_d.Distrito))
+                            @F("Rec. Celular",   Str(_d.RecorridoCelular), ancho: 2)
+                        </div>
+                        <div class="zoom-row">
+                            @F("Comentario", Str(_d.Comentario), ancho: 3)
+                            @F("Documento",  _d.TieneAdjunto ? _d.Adjunto : "Sin Adjunto")
+                        </div>
+                    </div>
+
+                    <div class="zoom-box zoom-box--chofer">
+                        <span class="zoom-box__label">Chofer / Unidad</span>
+                        <div class="zoom-row">
+                            @F("Chofer",      Str(_d.NombreChofer), ancho: 2)
+                            @F("Id Chofer",   Str(_d.IdChofer))
+                            @F("Tipo Chofer", Str(_d.TipoChofer))
+                            @F("Vehículo",    Str(_d.Vehiculo))
+                            @F("Fletero",     Str(_d.Fletero), ancho: 2)
+                        </div>
+                    </div>
+
                 </div>
 
-                @* ══════ Columna derecha: Adicionales ══════ *@
+                @* ══════ Columna derecha: Adicionales + Valores del Servicio ══════ *@
                 <div class="zoom-col zoom-col--right">
+
                     <div class="zoom-box--adic">
-                        <div class="zoom-box__label" style="padding:5px 10px 4px; background:#EEF3FB; border-bottom:1px solid var(--z-border); display:block; font-size:0.60rem; font-weight:700; text-transform:uppercase; letter-spacing:0.8px; color:var(--z-acento);">Adicionales</div>
+                        <div class="zoom-box__label" style="padding:5px 10px 4px;">Adicionales</div>
                         @if (_adicionales.Count == 0)
                         {
                             <span class="zoom-adic__empty">Sin adicionales</span>
@@ -174,43 +186,27 @@
                             </table>
                         }
                     </div>
+
+                    <div class="zoom-box--valores">
+                        <div class="zoom-valores__header">Valores del Servicio</div>
+                        <div class="zoom-valores__body">
+                            @Fv("Moneda Liq.",      Str(_d.MonedaLiquidar))
+                            @Fv("Importe a Liq.",   _d.ImporteLiquidar.ToString("N2"))
+                            @Fv("% Descuento",      _d.PorcDescuento.ToString("N2") + " %")
+                            @Fv("Bonif. Cliente",   _d.BonificadoCliente ? "Sí" : "No")
+                            <div class="zoom-valores__sep"></div>
+                            @Fv("Moneda Pago",      Str(_d.MonedaPago))
+                            @Fv("Importe a Pagar",  _d.ImportePago.ToString("N2"))
+                            @Fv("Bonif. Empresa",   _d.BonificadoEmpresa ? "Sí" : "No")
+                        </div>
+                    </div>
+
                 </div>
 
-            </div>
-
-            @* ══════ Chofer / Unidad — ancho completo ══════ *@
-            <div class="zoom-box zoom-box--chofer">
-                <span class="zoom-box__label">Chofer / Unidad</span>
-                <div class="zoom-row">
-                    @F("Chofer",      Str(_d.NombreChofer), ancho: 2)
-                    @F("Id Chofer",   Str(_d.IdChofer))
-                    @F("Tipo Chofer", Str(_d.TipoChofer))
-                    @F("Vehículo",    Str(_d.Vehiculo))
-                    @F("Fletero",     Str(_d.Fletero), ancho: 2)
-                </div>
-            </div>
-
-            @* ══════ Financiero — ancho completo ══════ *@
-            <div class="zoom-box zoom-box--fin">
-                <span class="zoom-box__label">Valores del Servicio</span>
-                <div class="zoom-row">
-                    @F("Moneda Liquidar",       Str(_d.MonedaLiquidar))
-                    @F("Importe a Liquidar",    _d.ImporteLiquidar.ToString("N2"))
-                    @F("Porc. Descuento",       _d.PorcDescuento.ToString("N2") + " %")
-                    @F("Bonif. Cliente",        _d.BonificadoCliente ? "Sí" : "No")
-                    @F("Moneda Pago",           Str(_d.MonedaPago))
-                    @F("Importe a Pagar",       _d.ImportePago.ToString("N2"))
-                    @F("Bonif. Empresa",        _d.BonificadoEmpresa ? "Sí" : "No")
-                </div>
             </div>
         }
     </DialogContent>
 
-    <DialogActions>
-        <MudButton OnClick="Cerrar" Variant="Variant.Filled"
-                   Style="background:#F99410;color:#fff;font-weight:700;"
-                   StartIcon="@Icons.Material.Filled.Close">Cerrar</MudButton>
-    </DialogActions>
 </MudDialog>
 
 @code {
@@ -258,6 +254,25 @@
         }
         b.OpenElement(5, "div");
         b.AddAttribute(6, "class", acento ? "zoom-field__value zoom-field__value--acento" : "zoom-field__value");
+        b.AddContent(7, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+
+    // Ruta: ocultar bloque si todos los valores son cero/nulo
+    private bool RutaTieneData(DetalleViajeDto d) =>
+        d.HsIniRuta is not null || d.HsFinRuta is not null ||
+        (d.IdRuta ?? 0) != 0 || (d.OdometroIni ?? 0) != 0 ||
+        (d.OdometroFin ?? 0) != 0 || (d.KmRecorrido ?? 0) != 0;
+
+    // Campo vertical para el panel de Valores del Servicio (columna derecha)
+    private RenderFragment Fv(string label, string valor) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", "zoom-valores__field");
+        b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-valores__label");
+        b.AddContent(4, label); b.CloseElement();
+        b.OpenElement(5, "div"); b.AddAttribute(6, "class", "zoom-valores__value");
         b.AddContent(7, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
         b.CloseElement();
         b.CloseElement();
