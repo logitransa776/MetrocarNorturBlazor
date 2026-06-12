@@ -9,6 +9,6 @@ public class AuthService
         _reports = reports;
     }
 
-    public Task<bool> ValidarCredencialesAsync(string usuario, string password)
-        => _reports.ValidarCredencialesAsync(usuario, password);
+    public Task<LoginResultDto> LoginAsync(string usuario, string password)
+        => _reports.LoginAsync(usuario, password);
 }

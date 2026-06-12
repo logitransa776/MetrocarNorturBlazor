@@ -1,5 +1,6 @@
 @inherits LayoutComponentBase
 @inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 
@@ -31,6 +32,11 @@
 
             <nav class="nav-drawer__nav">
 
+                @* Visibilidad por módulo del usuario (letra en usuario.acceso) —
+                   mismo comportamiento que el SKIP FOR del menú FoxPro. *@
+
+                @if (Permisos.Tiene('R'))
+                {
                 @* ── RESERVAS ── *@
                 <div class="nav-section">
                     <button class="nav-section__title @(_reservasExpanded ? "nav-section__title--open" : "")"
@@ -127,6 +133,10 @@
 
                 <div class="nav-divider"></div>
 
+                }
+
+                @if (Permisos.Tiene('T'))
+                {
                 @* ── TRÁFICO ── *@
                 <div class="nav-section">
                     <button class="nav-section__title @(_traficoExpanded ? "nav-section__title--open" : "")"
@@ -292,6 +302,10 @@
 
                 <div class="nav-divider"></div>
 
+                }
+
+                @if (Permisos.Tiene('V'))
+                {
                 @* ── VEHÍCULOS Y CHOFERES ── *@
                 <div class="nav-section">
                     <button class="nav-section__title @(_vehiculosExpanded ? "nav-section__title--open" : "")"
@@ -380,6 +394,10 @@
 
                 <div class="nav-divider"></div>
 
+                }
+
+                @if (Permisos.Tiene('F'))
+                {
                 @* ── FACTURACIÓN ── *@
                 <div class="nav-section">
                     <button class="nav-section__title @(_facturacionExpanded ? "nav-section__title--open" : "")"
@@ -571,6 +589,10 @@
 
                 <div class="nav-divider"></div>
 
+                }
+
+                @if (Permisos.Tiene('L'))
+                {
                 @* ── TALLER ── *@
                 <div class="nav-section">
                     <button class="nav-section__title @(_tallerExpanded ? "nav-section__title--open" : "")"
@@ -692,6 +714,11 @@
 
                 <div class="nav-divider"></div>
 
+                }
+
+                @* Combustible es la letra M (C son los avisos de chequeo) *@
+                @if (Permisos.Tiene('M'))
+                {
                 @* ── COMBUSTIBLE ── *@
                 <div class="nav-section">
                     <button class="nav-section__title @(_combustibleExpanded ? "nav-section__title--open" : "")"
@@ -755,6 +782,10 @@
 
                 <div class="nav-divider"></div>
 
+                }
+
+                @if (Permisos.Tiene('A'))
+                {
                 @* ── ABM DEL SISTEMA ── *@
                 <div class="nav-section">
                     <button class="nav-section__title @(_abmExpanded ? "nav-section__title--open" : "")"
@@ -895,6 +926,10 @@
 
                 <div class="nav-divider"></div>
 
+                }
+
+                @if (Permisos.Tiene('U'))
+                {
                 @* ── UTILITARIOS ── *@
                 <div class="nav-section">
                     <button class="nav-section__title @(_utilitariosExpanded ? "nav-section__title--open" : "")"
@@ -1031,6 +1066,7 @@
                         </div>
                     }
                 </div>
+                }
 
             </nav>
         </div>
@@ -1071,7 +1107,11 @@
             </MudAppBar>
 
             <MudMainContent>
-                <TableroAlertas />
+                @* Vencimientos solo con módulo Vehículos — como el chequeo post-login del FoxPro *@
+                @if (Permisos.Tiene('V'))
+                {
+                    <TableroAlertas />
+                }
                 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="mt-4 mb-8">
                     @Body
                 </MudContainer>

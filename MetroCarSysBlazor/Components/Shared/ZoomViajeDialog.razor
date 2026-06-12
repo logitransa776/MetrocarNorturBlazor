@@ -222,6 +222,9 @@
 
     protected override async Task OnInitializedAsync()
     {
+        // Siempre datos frescos: la grilla puede haberse actualizado en el último minuto
+        // mientras el detalle seguía en caché con TTL de 5 min.
+        Reports.InvalidarCacheDetalle(IdViaje);
         _d = await Reports.GetDetalleViajeAsync(IdViaje);
         if (_d is not null)
             _adicionales = await Reports.GetAdicionalesViajeAsync(IdViaje);

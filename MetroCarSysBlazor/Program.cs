@@ -31,10 +31,11 @@ builder.Services.AddScoped<ReportService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<ExcelExportService>();
 
-// Autenticación (estado en el circuito)
+// Autenticación (estado en el circuito) + permisos por módulo (letras de usuario.acceso)
 builder.Services.AddScoped<NorturAuthStateProvider>();
 builder.Services.AddScoped<AuthenticationStateProvider>(sp =>
     sp.GetRequiredService<NorturAuthStateProvider>());
+builder.Services.AddScoped<IPermissionService, PermissionService>();
 builder.Services.AddAuthorizationCore();
 builder.Services.AddCascadingAuthenticationState();
 

@@ -2,6 +2,7 @@
 @inject ReportService Reports
 @inject ExcelExportService Excel
 @inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject IDialogService DialogService
@@ -500,6 +501,11 @@ else
         if (AuthState.UsuarioActual is null)
         {
             Nav.NavigateTo("/login", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('T'))   // módulo Tráfico
+        {
+            Nav.NavigateTo("/", forceLoad: false);
             return;
         }
         // Combos de unidades (réplica del Init de trafico2: cursorCronogramaTrafico/Diagrama)

@@ -2,6 +2,7 @@
 @layout EmptyLayout
 @inject AuthService Auth
 @inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
 @inject NavigationManager Nav
 @rendermode InteractiveServer
 
@@ -63,9 +64,9 @@
 
     protected override void OnInitialized()
     {
-        // Si ya hay sesión, ir directo al reporte.
+        // Si ya hay sesión, ir directo al primer reporte que pueda ver.
         if (AuthState.UsuarioActual is not null)
-            Nav.NavigateTo("/planilla-trafico", forceLoad: false);
+            Nav.NavigateTo(Permisos.DestinoInicial() ?? "/", forceLoad: false);
     }
 
     private async Task OnKey(KeyboardEventArgs e)
@@ -84,17 +85,18 @@
         }
 
         _cargando = true;
-        var ok = await Auth.ValidarCredencialesAsync(_usuario, _password);
+        var res = await Auth.LoginAsync(_usuario, _password);
         _cargando = false;
 
-        if (ok)
+        if (res.Exito)
         {
-            AuthState.IniciarSesion(_usuario);
-            Nav.NavigateTo("/planilla-trafico", forceLoad: false);
+            // Carga claims con acceso/nivel/operador — espejo del login.scx del FoxPro.
+            AuthState.IniciarSesion(res.Usuario, res.Acceso, res.Nivel, res.Operador);
+            Nav.NavigateTo(Permisos.DestinoInicial() ?? "/", forceLoad: false);
         }
         else
         {
-            _error = "Usuario o contraseña incorrecto";
+            _error = res.Error;
         }
     }
 }

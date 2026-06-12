@@ -1,12 +1,35 @@
 @page "/"
 @inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
 @inject NavigationManager Nav
 
+@if (_sinModulos)
+{
+    <MudContainer MaxWidth="MaxWidth.Small" Class="mt-12">
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">
+            Tu usuario no tiene habilitado ningún módulo con reportes disponibles.
+            Pedile al supervisor que te asigne permisos desde Sistema → Accesos del Metrocar.
+        </MudAlert>
+    </MudContainer>
+}
+
 @code {
+    private bool _sinModulos;
+
     protected override void OnInitialized()
     {
-        // Redirige al reporte si hay sesión; al login si no.
-        var destino = AuthState.UsuarioActual is not null ? "/planilla-trafico" : "/login";
-        Nav.NavigateTo(destino, forceLoad: false);
+        if (AuthState.UsuarioActual is null)
+        {
+            Nav.NavigateTo("/login", forceLoad: false);
+            return;
+        }
+
+        // Primer reporte que el usuario puede ver según su acceso; si no tiene
+        // ninguno (ej. usuario de servicio BACKUP), se queda acá con el aviso.
+        var destino = Permisos.DestinoInicial();
+        if (destino is not null)
+            Nav.NavigateTo(destino, forceLoad: false);
+        else
+            _sinModulos = true;
     }
 }

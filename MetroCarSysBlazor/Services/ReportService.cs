@@ -271,6 +271,9 @@ public class ReportService
         _cache.Remove($"trafico-buses|{DateOnly.FromDateTime(DateTime.Today):yyyyMMdd}");
     }
 
+    public void InvalidarCacheDetalle(int idViaje) =>
+        _cache.Remove($"detalle-viaje|{idViaje}");
+
     /// <summary>
     /// Listas de unidades para los combos de la pantalla de Tráfico (réplica del Init de trafico2.scx):
     ///   - Asignadas (cursorCronogramaTrafico): todos los internos activos,
@@ -902,21 +905,50 @@ public class ReportService
         }) ?? new();
     }
 
-    public async Task<bool> ValidarCredencialesAsync(string usuario, string password)
+    /// <summary>
+    /// Login con el flujo del FoxPro (login.scx): existencia → baja lógica
+    /// (f_delete) → contraseña, cada caso con su mensaje propio. Devuelve
+    /// acceso/nivel/operador para cargar los claims de la sesión.
+    /// </summary>
+    public async Task<LoginResultDto> LoginAsync(string usuario, string password)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
         await using var conn = db.Database.GetDbConnection();
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
-            SELECT COUNT(*) FROM usuario
+            SELECT TOP 1
+                   RTRIM(usuario),
+                   RTRIM(ISNULL(password, '')),
+                   RTRIM(ISNULL(acceso,   '')),
+                   RTRIM(ISNULL(nivel,    '')),
+                   ISNULL(operador, 0),
+                   CASE WHEN f_delete IS NULL OR f_delete < '1900-01-01' THEN 0 ELSE 1 END
+            FROM usuario
             WHERE usuario = '{usuario.Replace("'", "''")}'
-              AND password = '{password.Replace("'", "''")}'
               AND _deleted = 0
             """;
-        var count = (int)(await cmd.ExecuteScalarAsync() ?? 0);
-        return count > 0;
+        await using var rd = await cmd.ExecuteReaderAsync();
+
+        if (!await rd.ReadAsync())
+            return LoginResultDto.Fallo("Usuario inexistente");
+        if (rd.GetInt32(5) == 1)
+            return LoginResultDto.Fallo("Usuario inhabilitado");
+        if (!string.Equals(rd.GetString(1), password.Trim(), StringComparison.OrdinalIgnoreCase))
+            return LoginResultDto.Fallo("Contraseña incorrecta");
+
+        return new LoginResultDto(true, null,
+            rd.GetString(0), rd.GetString(2), rd.GetString(3), rd.GetBoolean(4));
     }
+}
+
+/// <summary>Resultado del login — espeja las variables públicas del FoxPro
+/// (cUsuario, cAcceso, cNivel, lOperadorMesaDeTrafico).</summary>
+public record LoginResultDto(
+    bool Exito, string? Error,
+    string Usuario, string Acceso, string Nivel, bool Operador)
+{
+    public static LoginResultDto Fallo(string error) => new(false, error, "", "", "", false);
 }
 
 public class TableroDto

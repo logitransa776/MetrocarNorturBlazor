@@ -5,6 +5,7 @@
 @inject ReportService Reports
 @inject ExcelExportService Excel
 @inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @rendermode InteractiveServer
@@ -238,6 +239,11 @@
         if (AuthState.UsuarioActual is null)
         {
             Nav.NavigateTo("/login", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('R'))   // módulo Reservas
+        {
+            Nav.NavigateTo("/", forceLoad: false);
             return;
         }
         _servicios = await Reports.GetServiciosAsync();
