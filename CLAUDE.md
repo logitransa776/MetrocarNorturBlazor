@@ -313,6 +313,14 @@ docs/
 | --- | --- | --- |
 | `docs/logica-foxpro/TRAFICO_ZOOM.md` | `trafico_zoom.scx` | Zoom del Viaje: máquina de estados, validaciones, tablas tocadas, reglas no obvias |
 | `docs/logica-foxpro/TRAFICO2_FILTROS.md` | `trafico2.scx` | Toolbar de Tráfico: combos de unidades (U/Pr `cronogram2`, U/Cb `cronograma`), botón S/C, botón Cxl (cancelados con motivo), mapeo de columnas en la réplica |
+| `docs/logica-foxpro/RESERVA_TRANSPORTACION.md` | `reserva_transportacion_con_adicional.scx` + 4 subdialogs | Alta manual de reservas: validaciones, multiplicación días×servicios, modo ruta, grupos, valor especial (permiso "F"), adicionales, INSERT completo |
+| `docs/logica-foxpro/RESERVA_PLANTILLAS.md` | `reserva_plantilla_crear/_mantenimiento/_mantenimiento_abm/_nombre/_armar.scx` | Ciclo completo de plantillas: crear, mantener, armar (generación masiva por días+feriados), cabecera 16 posiciones, lotes |
+| `docs/logica-foxpro/CLIENTE_ABM.md` | `cliente.scx` + `cliente_abm.scx` | Catálogo cliente: CUIT, esquema de precios, flags operativos, rubros excluidos, baja lógica con fecha |
+| `docs/logica-foxpro/CLIENTE_GRUPO_ABM.md` | `cliente_grupo.scx` + `cliente_grupo_abm.scx` | Grupos: candado `f_grupo_fc`, baja = cancelación masiva de viajes con motivo, renombre con arrastre |
+| `docs/logica-foxpro/CLIENTE_OPERADOR_ABM.md` | `cliente_operador*.scx` | Operadores por cliente (id global, baja física) |
+| `docs/logica-foxpro/DESTINO_ABM.md` | `destino*.scx` | Destinos: autocomplete de Desde/Hasta, `mas100km`, distrito |
+| `docs/logica-foxpro/IMPORTA_EXCEL_VIAJE.md` | `importa_excel_viaje.scx` | Importación masiva: 28 columnas, 3 etapas de validación, transaccional, adicionales inline |
+| `docs/logica-foxpro/RESERVAS_INFORME_BANDA_HORARIA.md` | `trafico_resumen_horario*.scx` | Informe 2: conteo fecha×banda×vehículo, SQL listo para Blazor |
 
 ---
 
@@ -359,10 +367,12 @@ de Anthropic: cada corrección aprendida se guarda en la skill correspondiente, 
 | `blazor-nortur` | horizontal | cómo construir UI/reportes en este stack |
 | `foxpro-extract` | horizontal | cómo leer la lógica del FoxPro viejo (script incluido) |
 | `abm-metrocar` | horizontal | cómo migrar escritura (ABMs) — **leer antes de cualquier INSERT/UPDATE** |
+| `seguridad-nortur` | horizontal | permisos: `acceso` (letras), `nivel` (dígitos ABM), claims en Blazor |
 | `modulo-trafico` | vertical | conocimiento del módulo Tráfico |
+| `modulo-reservas` | vertical | conocimiento del módulo Reservas (12/06/2026) — alta manual, plantillas, grupos, catálogos, importa Excel; base para los ABMs futuros |
 
 **Skills de módulo futuras** (crear recién al arrancar cada módulo, no antes):
-`modulo-reservas`, `modulo-facturacion-ctacte`, `modulo-liquidacion`, `modulo-combustible`
+`modulo-facturacion-ctacte`, `modulo-liquidacion`, `modulo-combustible`
 (en ese orden de prioridad — taller queda afuera por ahora).
 
 ### Decisión de escritura para ABMs (10/06/2026)

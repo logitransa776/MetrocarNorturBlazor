@@ -9,6 +9,8 @@
     ".claude/skills/blazor-nortur",
     ".claude/skills/foxpro-extract",
     ".claude/skills/abm-metrocar",
-    ".claude/skills/modulo-trafico"
+    ".claude/skills/modulo-trafico",
+    ".claude/skills/modulo-reservas",
+    ".claude/skills/seguridad-nortur"
   ]
 }
