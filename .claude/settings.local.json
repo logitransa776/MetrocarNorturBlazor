@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Read(//c/Users/HP/Desktop/nortur/**)"
+      "Read(//c/Users/HP/Desktop/nortur/**)",
+      "Read(//tmp/**)",
+      "Bash(awk '/PROCEDURE Init/,/ENDPROC/' ctacte_comprobante.txt)",
+      "Bash(awk '/PROCEDURE Init/,/ENDPROC/' liquidacion_chofer_por_hora.txt)",
+      "Bash(awk '/REC 12 .*resumen/,/REC 14/' liquidacion_chofer_por_hora.txt)"
     ]
   }
 }

@@ -11,6 +11,8 @@
     ".claude/skills/abm-metrocar",
     ".claude/skills/modulo-trafico",
     ".claude/skills/modulo-reservas",
-    ".claude/skills/seguridad-nortur"
+    ".claude/skills/seguridad-nortur",
+    ".claude/skills/modulo-facturacion-liquidacion",
+    ".claude/skills/modulo-combustible"
   ]
 }

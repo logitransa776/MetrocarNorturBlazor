@@ -321,6 +321,8 @@ docs/
 | `docs/logica-foxpro/DESTINO_ABM.md` | `destino*.scx` | Destinos: autocomplete de Desde/Hasta, `mas100km`, distrito |
 | `docs/logica-foxpro/IMPORTA_EXCEL_VIAJE.md` | `importa_excel_viaje.scx` | Importación masiva: 28 columnas, 3 etapas de validación, transaccional, adicionales inline |
 | `docs/logica-foxpro/RESERVAS_INFORME_BANDA_HORARIA.md` | `trafico_resumen_horario*.scx` | Informe 2: conteo fecha×banda×vehículo, SQL listo para Blazor |
+| `docs/logica-foxpro/FACTURACION_LIQUIDACION.md` | `facturacion_cliente_nueva.scx`, `liquidacion_fletero_nueva.scx`, `liquidacion_cliente.scx`, `liquidacion_chofer_por_hora.scx`, `ctacte_*.scx`, `lista_precio_*.scx` | Módulo completo Facturación/Liquidación: valorización, cascadas de precios, grabado, revertir, tarifarios, cta. cte. (sin uso), tablas SQL reales |
+| `docs/logica-foxpro/COMBUSTIBLE.md` | `vehiculo_combustible_mant_sobre_lote.scx`, `vehiculo_combustible_carga_sobre(_trafico).scx`, `vehiculo_combustible_consumo.scx`, `trafico_vehiculo_combustible.scx`, `vehiculo_estacion_saldo*.scx`, `estacion*.scx` | Módulo completo Combustible: las 2 eras (tabla viva `vehiculo_sobre` NO replicada), conciliación por sobre/lote, promedio de consumos, saldos/depósitos, catálogo de proveedores, trampas y candidatos Blazor |
 
 ---
 
@@ -370,17 +372,19 @@ de Anthropic: cada corrección aprendida se guarda en la skill correspondiente, 
 | `seguridad-nortur` | horizontal | permisos: `acceso` (letras), `nivel` (dígitos ABM), claims en Blazor |
 | `modulo-trafico` | vertical | conocimiento del módulo Tráfico |
 | `modulo-reservas` | vertical | conocimiento del módulo Reservas (12/06/2026) — alta manual, plantillas, grupos, catálogos, importa Excel; base para los ABMs futuros |
+| `modulo-facturacion-liquidacion` | vertical | conocimiento del módulo Facturación/Liquidación (12/06/2026) — liquidación a clientes/fleteros/choferes, tarifarios, ctacte (sin uso). Doc detallado: `docs/logica-foxpro/FACTURACION_LIQUIDACION.md` |
+| `modulo-combustible` | vertical | conocimiento del módulo Combustible (12/06/2026) — cargas de la flota (tabla viva `vehiculo_sobre`, **NO replicada a SQL**), conciliación por lote, consumos l/100km, saldos de estaciones (sin uso desde 2017). Doc detallado: `docs/logica-foxpro/COMBUSTIBLE.md` |
 
 **Skills de módulo futuras** (crear recién al arrancar cada módulo, no antes):
-`modulo-facturacion-ctacte`, `modulo-liquidacion`, `modulo-combustible`
-(en ese orden de prioridad — taller queda afuera por ahora).
+`modulo-taller` (taller/service). La cuenta corriente quedó cubierta dentro de
+`modulo-facturacion-liquidacion` (módulo programado pero sin uso en producción).
 
 ### Decisión de escritura para ABMs (10/06/2026)
 
 **SQL dueño, tabla por tabla (strangler):** Blazor solo escribe en tablas cuyo dueño ya es
-SQL. Una tabla migra cuando su ABM Blazor está listo + se bloquea el ABM en FoxPro + existe
-puente inverso SQL→DBF para que FoxPro la siga leyendo. Mientras tanto, las tablas de FoxPro
-son **solo lectura** desde Blazor (la réplica DBF→SQL pisaría cualquier escritura).
+SQL. Una tabla migra cuando su ABM Blazor está listo + se bloquea el ABM en FoxPro + se apaga
+la sync DBF→SQL de esa tabla. Los datos escritos en SQL **se quedan en SQL** — no hay puente
+inverso. Mientras tanto, las tablas de FoxPro son **solo lectura** desde Blazor.
 Detalle completo y checklist: skill `abm-metrocar`.
 
 ---

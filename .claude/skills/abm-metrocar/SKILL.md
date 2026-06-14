@@ -14,14 +14,12 @@ La réplica actual es **unidireccional**: FoxPro escribe DBF → un proceso sinc
 (`replicaVPF`). Por eso:
 
 1. **Blazor NO escribe en tablas cuyo dueño sigue siendo FoxPro.** La sync DBF→SQL pisaría
-   los cambios, y FoxPro nunca los vería (datos huérfanos: una zona creada en Blazor no
-   existiría para el despachante).
+   los cambios (datos huérfanos: una zona creada en Blazor sería pisada por la próxima sync).
 2. **Una tabla migra de dueño cuando su ABM Blazor está listo**: desde ese momento se edita
    SOLO en Blazor. En FoxPro se bloquea el ABM correspondiente (sacar permisos 2/3/4 del
    `cNivel` de los usuarios para ese form, o quitar la barra del menú).
-3. **FoxPro sigue leyendo la tabla desde DBF** → hace falta un **puente inverso SQL→DBF**
-   para esa tabla (coordinar con quien opera la réplica). **Hasta que el puente inverso
-   exista y esté probado, el ABM no se habilita en producción.**
+3. **Los datos escritos en SQL se quedan en SQL.** No hay puente inverso SQL→DBF. FoxPro
+   deja de ser la fuente de verdad para la tabla migrada — los operadores usan Blazor.
 4. La sync DBF→SQL se **apaga para la tabla migrada** (si no, pisaría lo escrito en SQL).
 5. Empezar por **tablas catálogo chicas y de baja fricción** (zona, nacionalidad, profesion,
    feriado, motivos de cancelación/cambio/tarde) antes de tocar maestros grandes
@@ -71,12 +69,11 @@ Detalles que no son negociables (los datos históricos y FoxPro dependen de esto
 ## Checklist por cada ABM nuevo (en orden)
 
 1. Extraer la lógica FoxPro (`foxpro-extract`) → `docs/logica-foxpro/<FORM>_ABM.md`.
-2. Confirmar **puente inverso SQL→DBF** para la tabla (sin esto, no hay paso 7).
-3. Métodos en `AbmService` (alta con chequeo duplicado / modifica / baja lógica).
-4. Página lista + MudDialog de edición.
-5. Permisos por usuario (niveles 2/3/4).
-6. Bloquear el ABM en FoxPro (permisos o menú) y apagar la sync DBF→SQL de esa tabla.
-7. Prueba de ida y vuelta: alta en Blazor → el registro aparece en FoxPro vía puente.
+2. Métodos en `AbmService` (alta con chequeo duplicado / modifica / baja lógica).
+3. Página lista + MudDialog de edición.
+4. Permisos por usuario (niveles 2/3/4).
+5. Bloquear el ABM en FoxPro (permisos o menú) y apagar la sync DBF→SQL de esa tabla.
+6. Prueba end-to-end en Blazor: alta → aparece en lista → modifica → baja lógica visible.
 
 ## Estado
 
