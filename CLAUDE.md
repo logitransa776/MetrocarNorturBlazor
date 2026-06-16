@@ -61,6 +61,14 @@ TrustServerCertificate = True
 - Centralizada en `appsettings.json` (clave `ConnectionStrings:DefaultConnection`).
 - **108 tablas** en total. Es una réplica de la base productiva de FoxPro.
 
+> ⚠️ **Connection string: SIEMPRE `Pooling=True` (regla de performance, 16/06/2026).**
+> Tener `Pooling=False` hacía que cada query pagara handshake TLS + login + resolución de
+> instancia `\SQLEXPRESS` desde cero (eran segundos de lag por conexión). El string correcto
+> incluye `Pooling=True;Min Pool Size=2;Max Pool Size=50`. `Encrypt=True` se mantiene (con
+> pool, el TLS se amortiza). Al arrancar, `DbWarmupService` precalienta el pool (verás
+> "Pool de conexiones SQL calentado: N conexiones en NNN ms" en el log). Detalle completo:
+> `docs/PERFORMANCE_GRILLAS_Y_CONEXION.md`.
+
 ---
 
 ## Estructura del proyecto
@@ -90,6 +98,7 @@ MetroCarSysBlazor/
     AuthService.cs                    → Autenticación
     NorturAuthStateProvider.cs        → Estado de sesión (Blazor AuthenticationStateProvider)
     ExcelExportService.cs             → Generación de .xlsx con ClosedXML
+    DbWarmupService.cs                → IHostedService: precalienta el pool de conexiones SQL al arrancar (performance)
   Theme/
     NorturTheme.cs                    → Paleta MudBlazor corporativa NORTUR
   wwwroot/                            → Assets estáticos (CSS, JS, Bootstrap)
@@ -97,6 +106,7 @@ MetroCarSysBlazor/
 docs/
   INFORME_TECNICO.md                  → Documentación técnica completa
   INFORME_TECNICO_NORTUR.pdf          → PDF del informe técnico
+  PERFORMANCE_GRILLAS_Y_CONEXION.md   → Por qué/cómo se resolvió el lag de grillas grandes (pooling + Virtualize)
 .claude/
   settings.json                       → Registra las skills locales del proyecto
   skills/
@@ -260,6 +270,12 @@ Las 6 bandas: `00:00-00:01`, `00:02-06:29`, `06:30-08:29`, `08:30-14:00`, `14:01
 3. Datos usables de `f_reserva`: **2021–2026** (años con volumen real).
 4. **`total`/`importe` con muchos NULL** → métricas confiables hoy: **cantidad de reservas** y **pax**.
 5. **No usar parametrización de EF para WHERE dinámico**: construir el SQL como string (ver `ReportService`), pero siempre escapar con `.Replace("'", "''")`.
+6. **Performance de grillas grandes (regla, 16/06/2026):** una grilla que puede superar
+   ~100-150 filas DEBE usar `<Virtualize>` (el servidor genera solo las filas visibles, no
+   todas) + memoizar el filtrado en un campo (no recalcular en cada render). El connection
+   string SIEMPRE con `Pooling=True`. El síntoma "lento solo con muchos registros" es render
+   de Blazor, no SQL. Patrón completo y trampas: `docs/PERFORMANCE_GRILLAS_Y_CONEXION.md`.
+   Referencia viva ya optimizada: `PlanillaTrafico.razor`.
 
 ---
 
@@ -289,6 +305,41 @@ Componente `Components/Pages/ReservasFechaServicio.razor`.
 - **Tabla pivote** fecha × servicio con totales.
 - **Botón Descargar Excel** (ClosedXML).
 
+### ✅ Vistas de solo lectura migradas (lista + ficha) — HECHO
+
+Réplicas fieles de pantallas FoxPro en **solo lectura** (lista + ficha modal, botonera de
+ABM deshabilitada — la escritura sigue en FoxPro; estrategia strangler de `abm-metrocar`).
+Mismo patrón y estilos CSS (`cli-*`, `zoom-*`) — calcar uno para hacer el siguiente.
+
+| Entidad | Lista (página) | Ficha (dialog) | Doc FoxPro | Permiso | Menú |
+| --- | --- | --- | --- | --- | --- |
+| **Clientes** | `ClientesAbm.razor` (`/clientes-abm`) | `ClienteDetalleDialog.razor` | `CLIENTE_ABM.md` | `'F'` | Facturación → Clientes → ABM - Clientes |
+| **Choferes** | `Choferes.razor` (`/choferes`) | `ChoferDetalleDialog.razor` (5 tabs) | `CHOFER_ABM.md` | `'V'` | Vehículos y Choferes → Choferes |
+| **Vehículos** | `Vehiculos.razor` (`/vehiculos`) | `VehiculoDetalleDialog.razor` (6 tabs) | `skills/.../references/VEHICULOS.md` | `'V'` | Vehículos y Choferes → Vehículos - Flota |
+
+- **Choferes** (15/06/2026): grilla con filtro Fletero + búsqueda Nombre + Ver Egresados,
+  columnas iguales al FoxPro, egresados en amarillo. Ficha con las 5 pestañas del FoxPro
+  (Datos Personales, Domicilios, Teléfonos, Condiciones Laborales, Vehículos). Vencimientos
+  de Registro/CNRT/AEP resaltados (rojo vencido / ámbar por vencer 30 días — valor agregado).
+  Métodos `GetChoferesAsync` / `GetChoferDetalleAsync` en `ReportService`. Trampas resueltas:
+  columnas truncadas a 10 chars (`registro_v/2/3/4`, `id_lista_p`, `real_domi*`, `entre_call`),
+  `chofer_log` NO replicada, `vehiculo.id_vehicul`/`dominio` (no `id_vehiculo`/`patente`).
+- **Vehículos - Flota** (15/06/2026): grilla con 15 columnas iguales al FoxPro + filtros
+  Fletero / Ver Activos (arranca tildado) / Ver Flota Propia (`uso='PROPIO'`) + búsqueda por
+  Dominio/Interno; egresados en amarillo (egresado = `!activo OR f_delete`). Ficha con las 6
+  pestañas del FoxPro: Datos Vehículo, Permisos (`vehiculo_permiso`+`permiso`), Dueños
+  (`vehiculo_dueno`+`dueno`, suma 100%), Cubiertas (columnas `r1..r7`, **no es tabla**),
+  Tarjetas (YPF/ESSO en la propia `vehiculo`), Repuestos (`vehiculo_repuesto`, vacía).
+  Vtos de Póliza/VTV/Matafuegos/Habilitación resaltados (rojo/ámbar). Métodos
+  `GetVehiculosAsync` / `GetVehiculoDetalleAsync`. Trampas: orden visual de tabs ≠ nº de page,
+  `tacografo_`=marca / `tacografo2`=nro, `gps_activo` nvarchar(1).
+
+### Drawer: arranca todo colapsado (15/06/2026)
+
+Todas las secciones del menú lateral inician **colapsadas** para cualquier usuario
+(flags `_*Expanded = false` en `MainLayout.razor`). Hay un aviso "Tocá una sección para
+abrirla" (`.nav-hint`) al inicio del `<nav>`. El usuario abre la sección que necesite.
+
 ### Pendiente / próximos
 
 - **Informe 2:** Reservas por fecha y banda horaria (lógica de `trafico_resumen_horario.scx`) — usar ApexCharts.
@@ -316,6 +367,7 @@ docs/
 | `docs/logica-foxpro/RESERVA_TRANSPORTACION.md` | `reserva_transportacion_con_adicional.scx` + 4 subdialogs | Alta manual de reservas: validaciones, multiplicación días×servicios, modo ruta, grupos, valor especial (permiso "F"), adicionales, INSERT completo |
 | `docs/logica-foxpro/RESERVA_PLANTILLAS.md` | `reserva_plantilla_crear/_mantenimiento/_mantenimiento_abm/_nombre/_armar.scx` | Ciclo completo de plantillas: crear, mantener, armar (generación masiva por días+feriados), cabecera 16 posiciones, lotes |
 | `docs/logica-foxpro/CLIENTE_ABM.md` | `cliente.scx` + `cliente_abm.scx` | Catálogo cliente: CUIT, esquema de precios, flags operativos, rubros excluidos, baja lógica con fecha |
+| `docs/logica-foxpro/CHOFER_ABM.md` | `chofer.scx` + `chofer_abm.scx` | ABM de Conductores: grilla (filtro Fletero/Nombre/Egresados), ficha de 5 pestañas, mapa de columnas truncadas, vehiculo_chofer, `chofer_log` no replicada |
 | `docs/logica-foxpro/CLIENTE_GRUPO_ABM.md` | `cliente_grupo.scx` + `cliente_grupo_abm.scx` | Grupos: candado `f_grupo_fc`, baja = cancelación masiva de viajes con motivo, renombre con arrastre |
 | `docs/logica-foxpro/CLIENTE_OPERADOR_ABM.md` | `cliente_operador*.scx` | Operadores por cliente (id global, baja física) |
 | `docs/logica-foxpro/DESTINO_ABM.md` | `destino*.scx` | Destinos: autocomplete de Desde/Hasta, `mas100km`, distrito |
@@ -374,6 +426,7 @@ de Anthropic: cada corrección aprendida se guarda en la skill correspondiente, 
 | `modulo-reservas` | vertical | conocimiento del módulo Reservas (12/06/2026) — alta manual, plantillas, grupos, catálogos, importa Excel; base para los ABMs futuros |
 | `modulo-facturacion-liquidacion` | vertical | conocimiento del módulo Facturación/Liquidación (12/06/2026) — liquidación a clientes/fleteros/choferes, tarifarios, ctacte (sin uso). Doc detallado: `docs/logica-foxpro/FACTURACION_LIQUIDACION.md` |
 | `modulo-combustible` | vertical | conocimiento del módulo Combustible (12/06/2026) — cargas de la flota (tabla viva `vehiculo_sobre`, **NO replicada a SQL**), conciliación por lote, consumos l/100km, saldos de estaciones (sin uso desde 2017). Doc detallado: `docs/logica-foxpro/COMBUSTIBLE.md` |
+| `modulo-vehiculos-choferes` | vertical | conocimiento del módulo Vehículos y Choferes (15/06/2026) — flota (`vehiculo`) y personal de conducción (`chofer`, `fletero`), tipos de vehículo, odómetros, siniestros, apercibimientos, capacitaciones, agenda de vencimientos. Una referencia por pantalla en `references/`. Trampas: `vehiculo_chofer` vacía, `chofer_log` no replicada, columnas truncadas. Choferes y Vehículos-Flota ya migrados (solo lectura) |
 
 **Skills de módulo futuras** (crear recién al arrancar cada módulo, no antes):
 `modulo-taller` (taller/service). La cuenta corriente quedó cubierta dentro de

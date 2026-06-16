@@ -77,7 +77,29 @@ Detalles que no son negociables (los datos históricos y FoxPro dependen de esto
 
 ## Estado
 
-- **Ningún ABM implementado todavía.** Al construir el primero (sugerido: `zona`, el más
-  simple), guardar la página y el dialog resultantes como plantillas en `assets/` de esta
-  skill y anotar acá las lecciones — esta skill mejora con cada ABM (principio: cada
-  corrección se guarda en la skill, no se repite en el chat).
+- **Ningún ABM de escritura implementado todavía.** Al construir el primero (sugerido:
+  `zona`, el más simple), guardar la página y el dialog resultantes como plantillas en
+  `assets/` de esta skill y anotar acá las lecciones — esta skill mejora con cada ABM
+  (principio: cada corrección se guarda en la skill, no se repite en el chat).
+
+### Vistas de solo lectura ya migradas (plantilla para los ABMs futuros)
+
+Patrón de **solo lectura** (lista + ficha, botonera deshabilitada, escritura sigue en FoxPro):
+
+| Entidad | Lista | Ficha (dialog) | Doc FoxPro | Permiso módulo |
+|---|---|---|---|---|
+| Clientes | `ClientesAbm.razor` (`/clientes-abm`) | `ClienteDetalleDialog.razor` | `CLIENTE_ABM.md` | `'F'` |
+| Choferes | `Choferes.razor` (`/choferes`) | `ChoferDetalleDialog.razor` (5 tabs) | `CHOFER_ABM.md` | `'V'` |
+
+Lecciones de Choferes (15/06/2026):
+- Reusar los estilos **`cli-*`** (grilla, toolbar, footer, tabs, flags) y **`zoom-*`**
+  (campos `F()`, boxes) — NO crear CSS nuevo salvo lo específico (ej: `chof-vto--vencido/proximo`).
+- La grilla FoxPro filtra por `empty(f_delete)` por defecto (check "Ver Egresados" lo invierte);
+  egresados en amarillo (`cli-grid__row--egresado`). Misma lógica que Clientes.
+- **Nombres truncados a 10 chars en la réplica**: SIEMPRE verificar con `INFORMATION_SCHEMA.COLUMNS`
+  antes de escribir SQL. En `chofer`: `registro_v/2/3/4`, `nextel_cel`, `id_lista_p`,
+  `real_domi*`, `entre_call/cal2`. Cruzar el form FoxPro (nombres largos) con la tabla real.
+- **Tablas de auditoría viva NO replicadas** (`chofer_log`, como `vehiculo_sobre` en Combustible):
+  no usarlas en solo lectura. Verificar existencia/datos antes de hacer JOIN.
+- `vehiculo.id_vehiculo` no existe en SQL → es `id_vehicul`; patente = `dominio`. Verificar.
+- Para vencimientos críticos se agregó valor sobre el FoxPro: rojo vencido / ámbar 30 días.

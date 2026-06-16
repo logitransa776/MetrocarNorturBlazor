@@ -1,3 +1,13 @@
+// Copia texto al portapapeles — retorna true si tuvo éxito.
+window.copiarAlPortapapeles = async (texto) => {
+    try {
+        await navigator.clipboard.writeText(texto);
+        return true;
+    } catch {
+        return false;
+    }
+};
+
 // Descarga un archivo desde un stream .NET (usado para el export a Excel).
 window.descargarArchivo = async (nombreArchivo, streamRef) => {
     const arrayBuffer = await streamRef.arrayBuffer();

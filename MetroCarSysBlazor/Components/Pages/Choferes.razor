@@ -1,0 +1,198 @@
+@page "/choferes"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@rendermode InteractiveServer
+
+<PageTitle>Choferes — NORTUR</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+        Choferes
+    </MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Vehículos y Choferes · ABM de Conductores — vista de solo lectura desde replicaVPF
+    </MudText>
+</div>
+
+@* ── Filtros (réplica de la toolbar FoxPro) ── *@
+<MudPaper Class="pa-3 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:16px;">
+        <MudSelect T="string" @bind-Value="_fletero" Label="Fletero" Clearable="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:180px;">
+            <MudSelectItem T="string" Value="@("")">(Todos)</MudSelectItem>
+            @foreach (var f in _fleteros)
+            {
+                <MudSelectItem T="string" Value="@f">@f</MudSelectItem>
+            }
+        </MudSelect>
+        <MudTextField @bind-Value="_busqueda" Label="Nombre"
+                      Immediate="true" DebounceInterval="200"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Style="min-width:320px; flex:1;" />
+        <MudCheckBox T="bool" @bind-Value="_verEgresados" Label="Ver Egresados" Color="Color.Primary" Size="Size.Small" />
+        <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">
+            Total de conductores: @Filtrados.Count()
+        </MudChip>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="Filtrados" Dense="true" Hover="true" Striped="true"
+                  FixedHeader="true" Height="calc(100vh - 290px)"
+                  Bordered="false" Class="cli-grid"
+                  RowClass="cli-grid__row" RowClassFunc="@RowClass"
+                  OnRowClick="@OnRowClick" T="ChoferListaRow">
+            <HeaderContent>
+                <MudTh><MudTableSortLabel SortBy="new Func<ChoferListaRow, object>(x => x.Codigo)">Código</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<ChoferListaRow, object>(x => x.Fletero)">Fletero</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel InitialDirection="SortDirection.Ascending" SortBy="new Func<ChoferListaRow, object>(x => x.Nombre)">Nombre</MudTableSortLabel></MudTh>
+                <MudTh>Domicilio</MudTh>
+                <MudTh>Nro</MudTh>
+                <MudTh>Piso</MudTh>
+                <MudTh>Depto</MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<ChoferListaRow, object>(x => x.Localidad)">Localidad</MudTableSortLabel></MudTh>
+                <MudTh>Teléfono</MudTh>
+                <MudTh>Celular</MudTh>
+                <MudTh>T. Doc</MudTh>
+                <MudTh>Nº Doc</MudTh>
+                <MudTh>Vto Registro</MudTh>
+                <MudTh>Reg. CNRT</MudTh>
+                <MudTh>Reg. AEP</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Código" Style="font-weight:700; color:#003AA0;">@context.Codigo</MudTd>
+                <MudTd DataLabel="Fletero">@context.Fletero</MudTd>
+                <MudTd DataLabel="Nombre">@context.Nombre</MudTd>
+                <MudTd DataLabel="Domicilio">@context.Domicilio</MudTd>
+                <MudTd DataLabel="Nro">@context.Nro</MudTd>
+                <MudTd DataLabel="Piso">@context.Piso</MudTd>
+                <MudTd DataLabel="Depto">@context.Depto</MudTd>
+                <MudTd DataLabel="Localidad">@context.Localidad</MudTd>
+                <MudTd DataLabel="Teléfono">@context.Telefono</MudTd>
+                <MudTd DataLabel="Celular">@context.Celular</MudTd>
+                <MudTd DataLabel="T. Doc">@context.Tdoc</MudTd>
+                <MudTd DataLabel="Nº Doc">@context.Ndoc</MudTd>
+                <MudTd DataLabel="Vto Registro">@Vto(context.VtoRegistro)</MudTd>
+                <MudTd DataLabel="Reg. CNRT">@Vto(context.VtoCnrt)</MudTd>
+                <MudTd DataLabel="Reg. AEP">@Vto(context.VtoAep)</MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">No hay choferes para el filtro aplicado.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        @* ── Botonera réplica FoxPro (solo lectura) ── *@
+        <div class="cli-toolbar">
+            <MudButton Disabled="true" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Add" Size="Size.Small">Agregar</MudButton>
+            <MudButton Disabled="true" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Delete" Size="Size.Small">Eliminar</MudButton>
+            <MudButton Disabled="true" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Edit" Size="Size.Small">Modificar</MudButton>
+            <MudButton Variant="Variant.Text" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Visibility"
+                       Size="Size.Small" OnClick="AbrirSeleccionado" Disabled="_sel is null">Ver ficha</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" /> Solo lectura · doble clic para ver la ficha
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private List<ChoferListaRow> _choferes = new();
+    private List<string> _fleteros = new();
+    private bool _cargando = true;
+    private string? _busqueda;
+    private string _fletero = "";
+    private bool _verEgresados;
+    private ChoferListaRow? _sel;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private IEnumerable<ChoferListaRow> Filtrados =>
+        _choferes.Where(c =>
+            (string.IsNullOrWhiteSpace(_fletero)
+                || string.Equals(c.Fletero, _fletero, StringComparison.OrdinalIgnoreCase))
+            && (string.IsNullOrWhiteSpace(_busqueda)
+                || c.Nombre.Contains(_busqueda, StringComparison.OrdinalIgnoreCase)
+                || c.Codigo.Contains(_busqueda, StringComparison.OrdinalIgnoreCase))
+            && (_verEgresados || c.FInhabilitacion is null));
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState.UsuarioActual is null)
+        {
+            Nav.NavigateTo("/login", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('V'))   // módulo Vehículos y Choferes
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        _choferes = await Reports.GetChoferesAsync();
+        _fleteros = _choferes
+            .Select(c => c.Fletero)
+            .Where(f => !string.IsNullOrWhiteSpace(f))
+            .Distinct()
+            .OrderBy(f => f)
+            .ToList();
+        _cargando = false;
+    }
+
+    private string RowClass(ChoferListaRow c, int _) =>
+        c.FInhabilitacion is not null ? "cli-grid__row--egresado" : "";
+
+    @* Vto con color: rojo vencido, ámbar por vencer (30 días) *@
+    private RenderFragment Vto(DateOnly? f) => b =>
+    {
+        if (f is null) { b.AddContent(0, ""); return; }
+        var hoy = DateOnly.FromDateTime(DateTime.Today);
+        var clase = f < hoy ? "chof-vto--vencido"
+                  : f <= hoy.AddDays(30) ? "chof-vto--proximo" : "";
+        b.OpenElement(0, "span");
+        if (!string.IsNullOrEmpty(clase)) b.AddAttribute(1, "class", clase);
+        b.AddContent(2, f.Value.ToString("dd/MM/yy", _ar));
+        b.CloseElement();
+    };
+
+    private void OnRowClick(TableRowClickEventArgs<ChoferListaRow> args)
+    {
+        _sel = args.Item;
+        // doble clic abre la ficha (como FoxPro)
+        if (args.MouseEventArgs.Detail >= 2 && _sel is not null)
+            _ = AbrirFicha(_sel.Codigo);
+    }
+
+    private async Task AbrirSeleccionado()
+    {
+        if (_sel is not null) await AbrirFicha(_sel.Codigo);
+    }
+
+    private async Task AbrirFicha(string codigo)
+    {
+        var parametros = new DialogParameters<ChoferDetalleDialog>
+        {
+            { x => x.IdChofer, codigo }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<ChoferDetalleDialog>("ABM de Conductores", parametros, opciones);
+    }
+}

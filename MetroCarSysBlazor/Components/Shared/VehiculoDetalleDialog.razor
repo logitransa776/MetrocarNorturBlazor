@@ -1,0 +1,369 @@
+@inject ReportService Reports
+
+<MudDialog Class="zoom-viaje-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">ABM de Vehículos</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">Solo lectura</span>
+            @if (_d is not null)
+            {
+                <span class="zoom-title-bar__nro">@_d.Codigo</span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:220px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_d is null)
+        {
+            <MudAlert Severity="Severity.Warning">No se encontró el vehículo.</MudAlert>
+        }
+        else
+        {
+            @* ── Encabezado: Código + Dominio + Interno + Fletero ── *@
+            <div class="cli-head">
+                <div class="zoom-field zoom-field--1">
+                    <div class="zoom-field__label">Código</div>
+                    <div class="zoom-field__value zoom-field__value--acento">@_d.Codigo</div>
+                </div>
+                <div class="zoom-field zoom-field--1">
+                    <div class="zoom-field__label">Dominio</div>
+                    <div class="zoom-field__value zoom-field__value--acento">@Str(_d.Dominio)</div>
+                </div>
+                <div class="zoom-field zoom-field--1">
+                    <div class="zoom-field__label">Interno</div>
+                    <div class="zoom-field__value">@(_d.Interno > 0 ? _d.Interno.ToString() : "—")</div>
+                </div>
+                <div class="zoom-field zoom-field--2">
+                    <div class="zoom-field__label">Marca y modelo</div>
+                    <div class="zoom-field__value">@Str(_d.Marca)</div>
+                </div>
+                <div class="zoom-field zoom-field--1">
+                    <div class="zoom-field__label">Prestador / Fletero</div>
+                    <div class="zoom-field__value">@Str(_d.Fletero)</div>
+                </div>
+                @if (_d.EsEgresado)
+                {
+                    <span class="cli-egresado">INACTIVO@(_d.FBaja is not null ? " · " + Fecha(_d.FBaja) : "")</span>
+                }
+            </div>
+
+            <MudTabs Elevation="0" Rounded="true" Class="cli-tabs">
+
+                @* ══════════ Datos Vehículo ══════════ *@
+                <MudTabPanel Text="Datos Vehículo">
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Campos obligatorios</span>
+                        <div class="zoom-row">
+                            @F("Código", Str(_d.Codigo))
+                            @F("Marca", Str(_d.Marca))
+                            @F("Prestador", Str(_d.Fletero))
+                            @F("Dueño", _d.Uso == "PROPIO" ? "PROPIO" : "CONTRATADO")
+                            @F("Interno", _d.Interno > 0 ? _d.Interno.ToString() : "—")
+                            @F("Dominio", Str(_d.Dominio))
+                            @F("Modelo (año)", _d.Modelo > 0 ? _d.Modelo.ToString() : "—")
+                            @F("Tipo", Str(_d.IdTipo))
+                            @F("Pasajeros", _d.Pax > 0 ? _d.Pax.ToString() : "—")
+                            @F("Cronograma", Str(_d.Cronograma))
+                            @F("Estado del GPS", _d.GpsActivoBool ? "Activo" : "Desactivado")
+                            @F("Vto Póliza", FechaC(_d.PolizaVto), VtoClass(_d.PolizaVto))
+                            @F("Vto Técnica (VTV)", FechaC(_d.VerificacionVto), VtoClass(_d.VerificacionVto))
+                            @F("Conductor logoneado", Str(_d.ConductorLogoneado), ancho: 2)
+                            @F("Estado operativo", Str(_d.Estado))
+                        </div>
+                    </div>
+
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Seguro y CNRT</span>
+                        <div class="zoom-row">
+                            @F("Compañía", Str(_d.PolizaNombre), ancho: 2)
+                            @F("Nro. Póliza", Str(_d.PolizaNro))
+                            @F("Radicación", Str(_d.Radicacion))
+                            @F("Estado CNRT", Str(_d.EstadoCnrt))
+                            @F("Habilitación Nº", Str(_d.HabilitacionNro))
+                            @F("Vto Habilitación", FechaC(_d.HabilitacionVto), VtoClass(_d.HabilitacionVto))
+                            @F("Vto Puerto/Aeo", FechaC(_d.PuertoAeoVto), VtoClass(_d.PuertoAeoVto))
+                            @F("Vto Verificación", FechaC(_d.VerificacionVto), VtoClass(_d.VerificacionVto))
+                            @F("Verificación Nº", Str(_d.VerificacionNro))
+                            @F("Vto Matafuego", FechaC(_d.VencimientoMat), VtoClass(_d.VencimientoMat))
+                        </div>
+                    </div>
+
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Tacógrafo y mecánica</span>
+                        <div class="zoom-row">
+                            @F("Marca Tacógrafo", Str(_d.TacografoMarca))
+                            @F("Nro. Tacógrafo", Str(_d.TacografoNro))
+                            @F("F. Compra", Fecha(_d.FCompra))
+                            @F("F. Venta", Fecha(_d.FVenta))
+                            @F("Nº Chasis", Str(_d.Chasis))
+                            @F("Nº Motor", Str(_d.Motor))
+                            @F("Marca Chasis", Str(_d.MarcaChasis))
+                            @F("Marca Carrocería", Str(_d.MarcaCarroceria))
+                            @F("Modelo Chasis", Str(_d.ModeloChasis))
+                            @F("Nextel", Str(_d.Nextel))
+                        </div>
+                    </div>
+
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Combustible y comodidades</span>
+                        <div class="zoom-row">
+                            @F("Litros tanque", _d.LitroTanque > 0 ? _d.LitroTanque.ToString() : "—")
+                            @F("Autonomía", _d.Autonomia > 0 ? _d.Autonomia.ToString() : "—")
+                            @F("Prom. Consumo (desde / hasta)", $"{_d.ConsumoDesde} / {_d.ConsumoHasta}", ancho: 2)
+                        </div>
+                        <div class="cli-flags">
+                            @Flag("Baño", _d.Bano)
+                            @Flag("Bar", _d.Bar)
+                            @Flag("Video", _d.Video)
+                            @Flag("Wi-Fi", _d.Wifi)
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(_d.Comentario))
+                    {
+                        <div class="zoom-box zoom-box--sec">
+                            <span class="zoom-box__label">Comentario</span>
+                            <div class="zoom-row">@F("", _d.Comentario, ancho: 4)</div>
+                        </div>
+                    }
+                </MudTabPanel>
+
+                @* ══════════ Permisos ══════════ *@
+                <MudTabPanel Text="@($"Permisos ({_d.Permisos.Count})")">
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Permisos / habilitaciones para operar</span>
+                        @if (_d.Permisos.Count == 0)
+                        {
+                            <span class="cli-empty">Sin permisos cargados.</span>
+                        }
+                        else
+                        {
+                            <MudSimpleTable Dense="true" Hover="true" Striped="true" Class="cli-mails">
+                                <thead>
+                                    <tr>
+                                        <th style="width:60px;">Código</th>
+                                        <th>Nombre</th>
+                                        <th>Nº Permiso</th>
+                                        <th>F. Venc</th>
+                                        <th>F. Baja</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var p in _d.Permisos)
+                                    {
+                                        <tr>
+                                            <td>@p.IdPermiso</td>
+                                            <td>@Str(p.Nombre)</td>
+                                            <td>@Str(p.NroPermiso)</td>
+                                            <td><span class="@(VtoClass(p.FVenc) ?? "")">@Fecha(p.FVenc)</span></td>
+                                            <td>@Fecha(p.FBaja)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        }
+                    </div>
+                </MudTabPanel>
+
+                @* ══════════ Dueños ══════════ *@
+                <MudTabPanel Text="@($"Dueños ({_d.Duenos.Count})")">
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Dueños del vehículo (la suma debe dar 100%)</span>
+                        @if (_d.Duenos.Count == 0)
+                        {
+                            <span class="cli-empty">Sin dueños cargados.</span>
+                        }
+                        else
+                        {
+                            <MudSimpleTable Dense="true" Hover="true" Striped="true" Class="cli-mails">
+                                <thead>
+                                    <tr>
+                                        <th>Código</th>
+                                        <th>Nombre</th>
+                                        <th style="width:120px; text-align:right;">Porcentaje</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var d in _d.Duenos)
+                                    {
+                                        <tr>
+                                            <td>@Str(d.IdDueno)</td>
+                                            <td>@Str(d.Nombre)</td>
+                                            <td style="text-align:right;">@d.Porcentaje.ToString("0.##", _ar)%</td>
+                                        </tr>
+                                    }
+                                    <tr style="font-weight:700;">
+                                        <td colspan="2" style="text-align:right;">Total</td>
+                                        <td style="text-align:right;">@_d.Duenos.Sum(x => x.Porcentaje).ToString("0.##", _ar)%</td>
+                                    </tr>
+                                </tbody>
+                            </MudSimpleTable>
+                        }
+                    </div>
+                </MudTabPanel>
+
+                @* ══════════ Cubiertas ══════════ *@
+                <MudTabPanel Text="Cubiertas">
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Números de serie de cubiertas (por posición)</span>
+                        @if (_d.Cubiertas.All(c => c.NroSerie == 0))
+                        {
+                            <span class="cli-empty">Sin números de serie cargados.</span>
+                        }
+                        else
+                        {
+                            <div class="zoom-row">
+                                @foreach (var c in _d.Cubiertas)
+                                {
+                                    @F($"Posición {c.Posicion}", c.NroSerie > 0 ? c.NroSerie.ToString() : "—")
+                                }
+                            </div>
+                        }
+                    </div>
+                </MudTabPanel>
+
+                @* ══════════ Tarjetas ══════════ *@
+                <MudTabPanel Text="Tarjetas">
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">YPF en Ruta</span>
+                        <div class="zoom-row">
+                            @F("Nº de tarjeta", Str(_d.YpfTarjeta))
+                            @F("Fecha de Vencimiento", Fecha(_d.YpfVenc))
+                            @F("Nº de PIN", Str(_d.YpfPin))
+                        </div>
+                    </div>
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">ESSO - CARD</span>
+                        <div class="zoom-row">
+                            @F("Nº de tarjeta", Str(_d.EssoTarjeta))
+                            @F("Fecha de Vencimiento", Fecha(_d.EssoVenc))
+                            @F("Nº de PIN", Str(_d.EssoPin))
+                        </div>
+                    </div>
+                </MudTabPanel>
+
+                @* ══════════ Repuestos ══════════ *@
+                <MudTabPanel Text="@($"Repuestos ({_d.Repuestos.Count})")">
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Repuestos asignados al vehículo</span>
+                        @if (_d.Repuestos.Count == 0)
+                        {
+                            <span class="cli-empty">Sin repuestos cargados.</span>
+                        }
+                        else
+                        {
+                            <MudSimpleTable Dense="true" Hover="true" Striped="true" Class="cli-mails">
+                                <thead>
+                                    <tr>
+                                        <th>Código Repuesto</th>
+                                        <th style="width:120px; text-align:right;">Cantidad</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var r in _d.Repuestos)
+                                    {
+                                        <tr>
+                                            <td>@Str(r.IdRepuesto)</td>
+                                            <td style="text-align:right;">@r.Cantidad.ToString("0.##", _ar)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        }
+                    </div>
+                </MudTabPanel>
+
+            </MudTabs>
+
+            @* ── Botonera réplica FoxPro (deshabilitada — solo lectura) ── *@
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                    Vista de solo lectura — la edición se hace en Metrocar (FoxPro).
+                </div>
+                <div class="cli-footer__btns">
+                    <MudButton Disabled="true" Variant="Variant.Outlined" Size="Size.Small">Agregar</MudButton>
+                    <MudButton Disabled="true" Variant="Variant.Outlined" Size="Size.Small">Modificar</MudButton>
+                    <MudButton Disabled="true" Variant="Variant.Outlined" Size="Size.Small">Eliminar</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               OnClick="Cerrar">Cerrar</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string IdVehiculo { get; set; } = "";
+
+    private VehiculoDetalleDto? _d;
+    private bool _cargando = true;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override async Task OnInitializedAsync()
+    {
+        _d = await Reports.GetVehiculoDetalleAsync(IdVehiculo);
+        _cargando = false;
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private string Fecha(DateOnly? f) => f is null ? "—" : f.Value.ToString("dd/MM/yyyy", _ar);
+    private string FechaC(DateOnly? f) => f is null ? "—" : f.Value.ToString("dd/MM/yyyy", _ar);
+    private string Str(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+
+    private RenderFragment F(string label, string valor, string? cssValor = null, bool acento = false, int ancho = 1) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", $"zoom-field zoom-field--{ancho}");
+        if (!string.IsNullOrEmpty(label))
+        {
+            b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label");
+            b.AddContent(4, label); b.CloseElement();
+        }
+        var cls = acento ? "zoom-field__value zoom-field__value--acento" : "zoom-field__value";
+        if (!string.IsNullOrEmpty(cssValor)) cls += " " + cssValor;
+        b.OpenElement(5, "div");
+        b.AddAttribute(6, "class", cls);
+        b.AddContent(7, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+
+    private string? VtoClass(DateOnly? f)
+    {
+        if (f is null) return null;
+        var hoy = DateOnly.FromDateTime(DateTime.Today);
+        if (f < hoy) return "chof-vto--vencido";
+        if (f <= hoy.AddDays(30)) return "chof-vto--proximo";
+        return null;
+    }
+
+    private RenderFragment Flag(string label, bool on) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", on ? "cli-flag cli-flag--on" : "cli-flag");
+        b.OpenComponent<MudIcon>(2);
+        b.AddComponentParameter(3, "Icon", on ? Icons.Material.Filled.CheckBox : Icons.Material.Filled.CheckBoxOutlineBlank);
+        b.AddComponentParameter(4, "Size", Size.Small);
+        b.CloseComponent();
+        b.OpenElement(5, "span"); b.AddContent(6, label); b.CloseElement();
+        b.CloseElement();
+    };
+}

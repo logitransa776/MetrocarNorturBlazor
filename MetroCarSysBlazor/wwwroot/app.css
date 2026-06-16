@@ -239,6 +239,23 @@ html, body {
     padding: 8px 0;
 }
 
+/* Aviso "tocá una sección para abrirla" (todo arranca colapsado) */
+.nav-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 2px 10px 8px;
+    padding: 6px 10px;
+    font-size: 0.72rem;
+    color: #7A90AD;
+    background: #F1F5FB;
+    border: 1px dashed #C2CFE0;
+    border-radius: 8px;
+}
+.nav-hint__icon {
+    color: #003AA0;
+}
+
 /* Sección (grupo colapsable) */
 .nav-section {
     margin: 2px 0;
@@ -538,6 +555,25 @@ body.theme-gris .mud-appbar {
 .trafico-grid tbody td.c { text-align: center; }
 .trafico-grid tbody td.r { text-align: right; font-variant-numeric: tabular-nums; }
 .trafico-grid tbody td.nowrap { white-space: nowrap; }
+
+/* PERFORMANCE — render virtual (dos capas, complementarias).
+
+   1) Lado SERVIDOR: la grilla principal usa <Virtualize> (Blazor). El servidor genera
+      solo las filas visibles (~25) en vez de las ~300 del día, así solo esas se
+      diffean y viajan por SignalR en cada re-render (al abrir el Zoom, al filtrar).
+
+   2) Lado NAVEGADOR: 'content-visibility: auto' hace que el browser pinte solo las
+      filas dentro del viewport del scroll. Esto fue lo que bajó el Zoom de 6-7s
+      (el navegador re-pintaba toda la tabla detrás del overlay del modal).
+
+   No se aplica 'content-visibility' a la grilla principal: choca con los spacers de
+   altura que inserta <Virtualize> (doble cálculo de alto → scroll inestable). La
+   grilla principal lleva la clase .trafico-grid--virtual y queda excluida; el resto
+   de las tablas (cancelados, panel Buses) conservan la virtualización por CSS. */
+.trafico-grid:not(.trafico-grid--virtual) tbody tr {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 22px;
+}
 
 /* Hover sutil sin tapar el color de estado */
 .trafico-grid tbody tr:hover td {
@@ -1182,4 +1218,199 @@ h1:focus {
     font-style: italic;
     padding: 10px 10px;
     display: block;
+}
+
+/* ── Campo Documento con botón copiar ── */
+.zoom-doc {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.zoom-doc__valor {
+    font-size: 0.96rem;
+    color: var(--z-value);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.zoom-doc__btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: 1px solid #B0C8E8;
+    border-radius: 5px;
+    background: #F4F8FF;
+    color: #003AA0;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    padding: 0;
+    line-height: 1;
+}
+.zoom-doc__btn:hover {
+    background: #003AA0;
+    border-color: #003AA0;
+    color: #fff;
+}
+.zoom-doc__btn--ok {
+    background: #16A34A;
+    border-color: #16A34A;
+    color: #fff;
+}
+
+/* ════════════════════════════════════════════════════════════
+   ABM de Clientes (solo lectura) — lista + ficha modal
+   ════════════════════════════════════════════════════════════ */
+
+/* Chip "Solo lectura" en la barra de título del dialog */
+.zoom-title-bar__chip {
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.18);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 999px;
+    padding: 1px 9px;
+}
+
+/* ── Grilla de la lista ── */
+.cli-grid__row {
+    cursor: pointer;
+}
+.cli-grid__row--egresado {
+    background: #FEF9C3 !important;   /* amarillo: réplica del dynamicbackcolor FoxPro */
+}
+.cli-grid__row--egresado:hover {
+    background: #FDE68A !important;
+}
+
+.cli-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    border-top: 1px solid #E8EFF9;
+    background: #F8FAFD;
+}
+.cli-toolbar__hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.72rem;
+    color: #7A90AD;
+}
+
+/* ── Ficha modal ── */
+.cli-head {
+    display: flex;
+    align-items: flex-end;
+    gap: 18px;
+    flex-wrap: wrap;
+    padding: 4px 2px 0;
+}
+.cli-egresado {
+    margin-left: auto;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #92400E;
+    background: #FEF9C3;
+    border: 1px solid #FDE68A;
+    border-radius: 6px;
+    padding: 3px 10px;
+}
+
+.cli-tabs {
+    margin-top: 8px;
+}
+
+/* Flags operativos (checkboxes de lectura) */
+.cli-flags {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 6px 18px;
+}
+.cli-flag {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    color: #7A90AD;
+}
+.cli-flag--on {
+    color: #112F5B;
+    font-weight: 600;
+}
+.cli-flag .mud-icon-root {
+    color: #C2CFE0;
+}
+.cli-flag--on .mud-icon-root {
+    color: #003AA0;
+}
+
+/* Rubros excluidos como chips */
+.cli-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.cli-chip {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #003AA0;
+    background: #E8EFF9;
+    border-radius: 6px;
+    padding: 3px 10px;
+}
+.cli-empty {
+    font-size: 0.82rem;
+    color: #7A90AD;
+    font-style: italic;
+}
+.cli-mails {
+    margin-top: 4px;
+}
+
+.cli-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #E8EFF9;
+}
+.cli-footer__hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.74rem;
+    color: #7A90AD;
+}
+.cli-footer__btns {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+}
+
+/* ── Vencimientos de registros del chofer ── */
+.chof-vto--vencido {
+    color: #B91C1C;            /* rojo: ya vencido */
+    font-weight: 700;
+    background: #FEE2E2;
+    border-radius: 4px;
+    padding: 1px 6px;
+}
+.chof-vto--proximo {
+    color: #92400E;            /* ámbar: por vencer (30 días) */
+    font-weight: 700;
+    background: #FEF3C7;
+    border-radius: 4px;
+    padding: 1px 6px;
 }

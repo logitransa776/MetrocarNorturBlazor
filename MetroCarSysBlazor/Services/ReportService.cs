@@ -529,7 +529,7 @@ public class ReportService
     ///   - id_grupo       → cliente_grupo.nombre / f_grupo_fi / f_grupo_fc (si grupo &lt;&gt; 'SIN GRUPO')
     /// Nombres de columna ya mapeados FoxPro→SQL (truncados a 10 chars en la réplica).
     /// </summary>
-    public async Task<DetalleViajeDto?> GetDetalleViajeAsync(int idViaje)
+    public async Task<DetalleViajeDto?> GetDetalleViajeAsync(int idViaje, DateOnly? fReserva = null)
     {
         var key = $"detalle-viaje|{idViaje}";
         return await _cache.GetOrCreateAsync(key, async entry =>
@@ -542,6 +542,16 @@ public class ReportService
             // LEFT JOIN a los catálogos para resolver nombres en una sola pasada.
             // ser1/ser2/ser3 = nombre del 1°/2°/3° servicio. op = razón social del operador.
             // vt = tipo de vehículo (+ capacidad). cg = grupo del cliente.
+            //
+            // PERFORMANCE: si recibimos la fecha de reserva (la fila de la planilla SIEMPRE
+            // la conoce), filtramos también por f_reserva. Así la query hace un SEEK por el
+            // índice existente ix_viaje_f_reserva (~1.000 lecturas, 0 ms CPU) en lugar de un
+            // SCAN paralelo completo de viaje (521K filas → ~84.000 lecturas + 125 ms CPU que
+            // saturaban el SQL Server 2012 en cada apertura del Zoom). id_viaje es único, así
+            // que sumar f_reserva no cambia el resultado: solo evita el scan.
+            var fResFiltro = fReserva is null
+                ? ""
+                : $"AND v.f_reserva = '{fReserva.Value:yyyy-MM-dd}'";
             var sql = $"""
                 SELECT
                     v.id_viaje                                  AS IdViaje,
@@ -611,6 +621,7 @@ public class ReportService
                     LEFT JOIN vehiculo_tipo  vt   ON vt.id_vehicul   = v.id_vehicu2 AND vt._deleted = 0
                     LEFT JOIN cliente_grupo  cg   ON cg.id           = v.id_grupo   AND cg._deleted = 0
                 WHERE v._deleted = 0
+                  {fResFiltro}
                   AND v.id_viaje = {idViaje}
                 """;
 
@@ -905,6 +916,361 @@ public class ReportService
         }) ?? new();
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    //  CLIENTES — ABM (solo lectura). Réplica de cliente.scx + cliente_abm.scx.
+    //  Tabla `cliente` con dueño FoxPro: SOLO LECTURA desde Blazor (strangler).
+    // ════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Lista de clientes (réplica de la grilla de cliente.scx). "Egresado" =
+    /// f_delete con valor. Sin paginar (la grilla FoxPro muestra todo con scroll).
+    /// </summary>
+    public async Task<List<ClienteListaRow>> GetClientesAsync()
+    {
+        return await _cache.GetOrCreateAsync("clientes-lista", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    RTRIM(ISNULL(id_cliente, '')) AS Codigo,
+                    RTRIM(ISNULL(razon_soci, '')) AS RazonSocial,
+                    RTRIM(ISNULL(telefono,   '')) AS Telefono,
+                    RTRIM(ISNULL(celular,    '')) AS Celular,
+                    RTRIM(ISNULL(domicilio,  '')) AS Domicilio,
+                    RTRIM(ISNULL(domicilio_, '')) AS Nro,
+                    RTRIM(ISNULL(domicilio2, '')) AS Piso,
+                    RTRIM(ISNULL(domicilio3, '')) AS Depto,
+                    RTRIM(ISNULL(localidad,  '')) AS Localidad,
+                    ISNULL(descuento, 0)          AS Descuento,
+                    RTRIM(ISNULL(contacto1,  '')) AS Contacto1,
+                    RTRIM(ISNULL(contacto2,  '')) AS Contacto2,
+                    f_delete                       AS FInhabilitacion
+                FROM cliente
+                WHERE _deleted = 0
+                ORDER BY razon_soci
+                """;
+            var result = new List<ClienteListaRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                result.Add(new ClienteListaRow(
+                    rd.GetString(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+                    rd.GetString(4), rd.GetString(5), rd.GetString(6), rd.GetString(7),
+                    rd.GetString(8), rd.GetDecimal(9), rd.GetString(10), rd.GetString(11),
+                    rd.IsDBNull(12) ? null : DateOnly.FromDateTime(rd.GetDateTime(12))));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Ficha completa de un cliente (réplica del form cliente_abm.scx
+    /// en modo consulta), incluida la sección de correos y los rubros excluidos.</summary>
+    public async Task<ClienteDetalleDto?> GetClienteDetalleAsync(string idCliente)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        var id = idCliente.Replace("'", "''");
+
+        var det = new ClienteDetalleDto();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = $"""
+                SELECT TOP 1
+                    RTRIM(ISNULL(id_cliente,'')), RTRIM(ISNULL(razon_soci,'')),
+                    RTRIM(ISNULL(domicilio,'')),  RTRIM(ISNULL(domicilio_,'')),
+                    RTRIM(ISNULL(domicilio2,'')), RTRIM(ISNULL(domicilio3,'')),
+                    RTRIM(ISNULL(cpostal,'')),    RTRIM(ISNULL(localidad,'')),
+                    RTRIM(ISNULL(provincia,'')),  RTRIM(ISNULL(telefono,'')),
+                    RTRIM(ISNULL(celular,'')),    RTRIM(ISNULL(tipo_resp,'')),
+                    RTRIM(ISNULL(ncuit,'')),      RTRIM(ISNULL(email,'')),
+                    RTRIM(ISNULL(comentario,'')), f_delete,
+                    ISNULL(descuento,0),          ISNULL(incremento,0),
+                    RTRIM(ISNULL(empresa_fc,'')), RTRIM(ISNULL(ob_precio,'')),
+                    RTRIM(ISNULL(id_lista_p,'')), RTRIM(ISNULL(cairo,'')),
+                    RTRIM(ISNULL(fc_prefere,'')),
+                    ISNULL(bus24,0),  ISNULL(pide_pax,0), ISNULL(voucher,0),
+                    ISNULL(arsa,0),   ISNULL(plantilla_,0), ISNULL(envia_gps,0),
+                    RTRIM(ISNULL(envia_gps_,'')), RTRIM(ISNULL(envia_gps2,'')),
+                    f_create, f_modify
+                FROM cliente
+                WHERE id_cliente = '{id}' AND _deleted = 0
+                """;
+            await using var rd = await cmd.ExecuteReaderAsync();
+            if (!await rd.ReadAsync()) return null;
+            det.Codigo = rd.GetString(0);   det.RazonSocial = rd.GetString(1);
+            det.Domicilio = rd.GetString(2); det.Nro = rd.GetString(3);
+            det.Piso = rd.GetString(4);     det.Depto = rd.GetString(5);
+            det.CPostal = rd.GetString(6);  det.Localidad = rd.GetString(7);
+            det.Provincia = rd.GetString(8); det.Telefono = rd.GetString(9);
+            det.Celular = rd.GetString(10); det.TipoResp = rd.GetString(11);
+            det.Ncuit = rd.GetString(12);   det.Email = rd.GetString(13);
+            det.Comentario = rd.GetString(14);
+            det.FInhabilitacion = rd.IsDBNull(15) ? null : DateOnly.FromDateTime(rd.GetDateTime(15));
+            det.Descuento = rd.GetDecimal(16); det.Incremento = rd.GetDecimal(17);
+            det.EmpresaFc = rd.GetString(18); det.ObPrecio = rd.GetString(19);
+            det.ListaPrecio = rd.GetString(20); det.Cairo = rd.GetString(21);
+            det.FcPrefere = rd.GetString(22);
+            det.Bus24 = rd.GetBoolean(23); det.PidePax = rd.GetBoolean(24);
+            det.Voucher = rd.GetBoolean(25); det.Arsa = rd.GetBoolean(26);
+            det.PlantillaDestinoEmpresa = rd.GetBoolean(27); det.EnviaGps = rd.GetBoolean(28);
+            det.GpsTipo = rd.GetString(29); det.GpsHora = rd.GetString(30);
+            det.FCreate = rd.IsDBNull(31) ? null : DateOnly.FromDateTime(rd.GetDateTime(31));
+            det.FModify = rd.IsDBNull(32) ? null : DateOnly.FromDateTime(rd.GetDateTime(32));
+        }
+
+        // Resolver descripción de la empresa de facturación y del tipo de responsable
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = $"""
+                SELECT TOP 1 RTRIM(ISNULL(nombre, id_respons))
+                FROM responsable_tipo
+                WHERE id_respons = '{det.TipoResp.Replace("'", "''")}' AND _deleted = 0
+                """;
+            var o = await cmd.ExecuteScalarAsync();
+            det.TipoRespDesc = o as string ?? det.TipoResp;
+        }
+
+        // Rubros de adicionales excluidos
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = $"""
+                SELECT RTRIM(ISNULL(rubro,''))
+                FROM cliente_adicional_excluido
+                WHERE id_cliente = '{id}' AND _deleted = 0
+                ORDER BY rubro
+                """;
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                if (!rd.IsDBNull(0)) det.RubrosExcluidos.Add(rd.GetString(0));
+        }
+
+        // Correos y contactos (email1..10 / contacto1..10 / cargo1..2)
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = $"""
+                SELECT
+                    RTRIM(ISNULL(email1,'')),  RTRIM(ISNULL(email2,'')),  RTRIM(ISNULL(email3,'')),
+                    RTRIM(ISNULL(email4,'')),  RTRIM(ISNULL(email5,'')),  RTRIM(ISNULL(email6,'')),
+                    RTRIM(ISNULL(email7,'')),  RTRIM(ISNULL(email8,'')),  RTRIM(ISNULL(email9,'')),
+                    RTRIM(ISNULL(email10,'')),
+                    RTRIM(ISNULL(contacto1,'')),  RTRIM(ISNULL(contacto2,'')),  RTRIM(ISNULL(contacto3,'')),
+                    RTRIM(ISNULL(contacto4,'')),  RTRIM(ISNULL(contacto5,'')),  RTRIM(ISNULL(contacto6,'')),
+                    RTRIM(ISNULL(contacto7,'')),  RTRIM(ISNULL(contacto8,'')),  RTRIM(ISNULL(contacto9,'')),
+                    RTRIM(ISNULL(contacto10,'')),
+                    RTRIM(ISNULL(cargo1,'')),  RTRIM(ISNULL(cargo2,''))
+                FROM cliente WHERE id_cliente = '{id}' AND _deleted = 0
+                """;
+            await using var rd = await cmd.ExecuteReaderAsync();
+            if (await rd.ReadAsync())
+            {
+                for (int i = 0; i < 10; i++)
+                {
+                    var email = rd.GetString(i);
+                    var contacto = rd.GetString(10 + i);
+                    var cargo = i == 0 ? rd.GetString(20) : i == 1 ? rd.GetString(21) : "";
+                    if (!string.IsNullOrWhiteSpace(email) ||
+                        !string.IsNullOrWhiteSpace(contacto) ||
+                        !string.IsNullOrWhiteSpace(cargo))
+                        det.Correos.Add(new ClienteCorreoRow(i + 1, contacto, cargo, email));
+                }
+            }
+        }
+
+        return det;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  CHOFERES — ABM (solo lectura). Réplica de chofer.scx + chofer_abm.scx.
+    //  Tabla `chofer` con dueño FoxPro: SOLO LECTURA desde Blazor (strangler).
+    //  Mapa de columnas truncadas → docs/logica-foxpro/CHOFER_ABM.md
+    // ════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Lista de choferes (réplica de la grilla de chofer.scx). "Egresado" =
+    /// f_delete con valor. Sin paginar (la grilla FoxPro muestra todo con scroll).
+    /// </summary>
+    public async Task<List<ChoferListaRow>> GetChoferesAsync()
+    {
+        return await _cache.GetOrCreateAsync("choferes-lista", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    RTRIM(ISNULL(id_chofer,  '')) AS Codigo,
+                    RTRIM(ISNULL(fletero,    '')) AS Fletero,
+                    RTRIM(ISNULL(nombre,     '')) AS Nombre,
+                    RTRIM(ISNULL(domicilio,  '')) AS Domicilio,
+                    RTRIM(ISNULL(domicilio_, '')) AS Nro,
+                    RTRIM(ISNULL(domicilio2, '')) AS Piso,
+                    RTRIM(ISNULL(domicilio3, '')) AS Depto,
+                    RTRIM(ISNULL(localidad,  '')) AS Localidad,
+                    RTRIM(ISNULL(telefono,   '')) AS Telefono,
+                    RTRIM(ISNULL(celular,    '')) AS Celular,
+                    RTRIM(ISNULL(tdoc,       '')) AS Tdoc,
+                    RTRIM(ISNULL(ndoc,       '')) AS Ndoc,
+                    registro_v                     AS VtoRegistro,
+                    registro_3                     AS VtoCnrt,
+                    registro_4                     AS VtoAep,
+                    f_delete                       AS FInhabilitacion
+                FROM chofer
+                WHERE _deleted = 0
+                ORDER BY nombre
+                """;
+            var result = new List<ChoferListaRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                result.Add(new ChoferListaRow(
+                    rd.GetString(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+                    rd.GetString(4), rd.GetString(5), rd.GetString(6), rd.GetString(7),
+                    rd.GetString(8), rd.GetString(9), rd.GetString(10), rd.GetString(11),
+                    Fecha(rd, 12), Fecha(rd, 13), Fecha(rd, 14), Fecha(rd, 15)));
+            }
+            return result;
+        }) ?? new();
+
+        static DateOnly? Fecha(System.Data.Common.DbDataReader rd, int i) =>
+            rd.IsDBNull(i) ? null : DateOnly.FromDateTime(rd.GetDateTime(i));
+    }
+
+    /// <summary>Ficha completa de un chofer (réplica del form chofer_abm.scx en
+    /// modo consulta), con las 5 pestañas: Datos Personales, Condiciones Laborales,
+    /// Vehículos, Domicilios y Teléfonos.</summary>
+    public async Task<ChoferDetalleDto?> GetChoferDetalleAsync(string idChofer)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        var id = idChofer.Replace("'", "''");
+
+        var det = new ChoferDetalleDto();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = $"""
+                SELECT TOP 1
+                    RTRIM(ISNULL(id_chofer,'')), RTRIM(ISNULL(fletero,'')),
+                    RTRIM(ISNULL(nombre,'')),    RTRIM(ISNULL(apellido,'')),
+                    RTRIM(ISNULL(nombre1,'')),   RTRIM(ISNULL(nombre2,'')),
+                    RTRIM(ISNULL(padre,'')),     RTRIM(ISNULL(madre,'')),
+                    RTRIM(ISNULL(tdoc,'')),      RTRIM(ISNULL(ndoc,'')),
+                    RTRIM(ISNULL(ncuil,'')),     RTRIM(ISNULL(ncuit,'')),
+                    RTRIM(ISNULL(email,'')),     RTRIM(ISNULL(comentario,'')),
+                    RTRIM(ISNULL(estado_civ,'')),RTRIM(ISNULL(lugar_naci,'')),
+                    RTRIM(ISNULL(grupo_sang,'')),RTRIM(ISNULL(rh_pos_neg,'')),
+                    f_nac, f_delete, f_create, f_modify,
+                    RTRIM(ISNULL(registro_n,'')),registro_v,
+                    RTRIM(ISNULL(registro_2,'')),registro_3, registro_4,
+                    RTRIM(ISNULL(nextel,'')),    RTRIM(ISNULL(nextel_cel,'')),
+                    -- Condiciones laborales
+                    f_ingreso,
+                    ISNULL(lunes,0), ISNULL(martes,0), ISNULL(miercoles,0),
+                    ISNULL(jueves,0), ISNULL(viernes,0), ISNULL(sabado,0), ISNULL(domingo,0),
+                    h_i_jornal, h_f_jornal, ISNULL(jornal,0), ISNULL(jornal_apl,0),
+                    RTRIM(ISNULL(id_lista_p,'')), ISNULL(legajo,0), ISNULL(auditor,0),
+                    RTRIM(ISNULL(ypf_pin,'')),   RTRIM(ISNULL(esso_pin,'')),
+                    -- Domicilio DNI
+                    RTRIM(ISNULL(domicilio,'')), RTRIM(ISNULL(domicilio_,'')),
+                    RTRIM(ISNULL(domicilio2,'')),RTRIM(ISNULL(domicilio3,'')),
+                    RTRIM(ISNULL(entre_call,'')),RTRIM(ISNULL(entre_cal2,'')),
+                    RTRIM(ISNULL(cpostal,'')),   RTRIM(ISNULL(localidad,'')),
+                    RTRIM(ISNULL(partido,'')),   RTRIM(ISNULL(provincia,'')),
+                    -- Domicilio real
+                    RTRIM(ISNULL(real_domic,'')),RTRIM(ISNULL(real_domi2,'')),
+                    RTRIM(ISNULL(real_domi3,'')),RTRIM(ISNULL(real_domi4,'')),
+                    RTRIM(ISNULL(real_domi5,'')),RTRIM(ISNULL(real_domi6,'')),
+                    RTRIM(ISNULL(real_domi7,'')),RTRIM(ISNULL(real_domi8,'')),
+                    RTRIM(ISNULL(real_domi9,'')),RTRIM(ISNULL(real_dom10,'')),
+                    -- Teléfonos
+                    RTRIM(ISNULL(telefono,'')),  RTRIM(ISNULL(celular,'')),
+                    RTRIM(ISNULL(tel_1,'')), RTRIM(ISNULL(linea_1,'')), RTRIM(ISNULL(cel_1,'')),
+                    RTRIM(ISNULL(tel_2,'')), RTRIM(ISNULL(linea_2,'')), RTRIM(ISNULL(cel_2,'')),
+                    RTRIM(ISNULL(tel_3,'')), RTRIM(ISNULL(linea_3,'')), RTRIM(ISNULL(cel_3,'')),
+                    RTRIM(ISNULL(tel_4,'')), RTRIM(ISNULL(linea_4,'')), RTRIM(ISNULL(cel_4,'')),
+                    RTRIM(ISNULL(tel_5,'')), RTRIM(ISNULL(linea_5,'')), RTRIM(ISNULL(cel_5,''))
+                FROM chofer
+                WHERE id_chofer = '{id}' AND _deleted = 0
+                """;
+            await using var rd = await cmd.ExecuteReaderAsync();
+            if (!await rd.ReadAsync()) return null;
+            int i = 0;
+            det.Codigo = rd.GetString(i++); det.Fletero = rd.GetString(i++);
+            det.Nombre = rd.GetString(i++); det.Apellido = rd.GetString(i++);
+            det.Nombre1 = rd.GetString(i++); det.Nombre2 = rd.GetString(i++);
+            det.Padre = rd.GetString(i++); det.Madre = rd.GetString(i++);
+            det.Tdoc = rd.GetString(i++); det.Ndoc = rd.GetString(i++);
+            det.Ncuil = rd.GetString(i++); det.Ncuit = rd.GetString(i++);
+            det.Email = rd.GetString(i++); det.Comentario = rd.GetString(i++);
+            det.EstadoCivil = rd.GetString(i++); det.LugarNacimiento = rd.GetString(i++);
+            det.GrupoSanguineo = rd.GetString(i++); det.RhPosNeg = rd.GetString(i++);
+            det.FNac = D(rd, i++); det.FInhabilitacion = D(rd, i++);
+            det.FCreate = D(rd, i++); det.FModify = D(rd, i++);
+            det.RegistroNro = rd.GetString(i++); det.VtoRegistro = D(rd, i++);
+            det.RegistroNroCnrt = rd.GetString(i++); det.VtoCnrt = D(rd, i++);
+            det.VtoAep = D(rd, i++);
+            det.Nextel = rd.GetString(i++); det.NextelCel = rd.GetString(i++);
+            det.FIngreso = D(rd, i++);
+            det.Lunes = rd.GetBoolean(i++); det.Martes = rd.GetBoolean(i++);
+            det.Miercoles = rd.GetBoolean(i++); det.Jueves = rd.GetBoolean(i++);
+            det.Viernes = rd.GetBoolean(i++); det.Sabado = rd.GetBoolean(i++);
+            det.Domingo = rd.GetBoolean(i++);
+            det.HInicioJornal = DT(rd, i++); det.HFinJornal = DT(rd, i++);
+            det.Jornal = rd.GetInt64(i++); det.JornalAplica = rd.GetBoolean(i++);
+            det.IdListaPrecio = rd.GetString(i++); det.Legajo = rd.GetInt64(i++);
+            det.Auditor = rd.GetBoolean(i++);
+            det.YpfPin = rd.GetString(i++); det.EssoPin = rd.GetString(i++);
+            det.Domicilio = rd.GetString(i++); det.Nro = rd.GetString(i++);
+            det.Piso = rd.GetString(i++); det.Depto = rd.GetString(i++);
+            det.Entre1 = rd.GetString(i++); det.Entre2 = rd.GetString(i++);
+            det.CPostal = rd.GetString(i++); det.Localidad = rd.GetString(i++);
+            det.Partido = rd.GetString(i++); det.Provincia = rd.GetString(i++);
+            det.RealDomicilio = rd.GetString(i++); det.RealNro = rd.GetString(i++);
+            det.RealPiso = rd.GetString(i++); det.RealDepto = rd.GetString(i++);
+            det.RealCPostal = rd.GetString(i++); det.RealLocalidad = rd.GetString(i++);
+            det.RealPartido = rd.GetString(i++); det.RealProvincia = rd.GetString(i++);
+            det.RealEntre1 = rd.GetString(i++); det.RealEntre2 = rd.GetString(i++);
+            det.Telefono = rd.GetString(i++); det.Celular = rd.GetString(i++);
+            for (int t = 0; t < 5; t++)
+                det.Telefonos.Add(new ChoferTelefonoRow(
+                    t + 1, rd.GetString(i++), rd.GetString(i++), rd.GetString(i++)));
+        }
+
+        // Vehículos asignados (tabla vehiculo_chofer + datos del vehículo)
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = $"""
+                SELECT
+                    RTRIM(ISNULL(vc.id_vehicul,'')) AS IdVehiculo,
+                    ISNULL(vc.interno, 0)           AS Interno,
+                    RTRIM(ISNULL(v.dominio,''))     AS Patente,
+                    RTRIM(ISNULL(v.modelo,''))      AS Modelo
+                FROM vehiculo_chofer vc
+                LEFT JOIN vehiculo v ON v.id_vehicul = vc.id_vehicul AND v._deleted = 0
+                WHERE vc.id_chofer = '{id}' AND vc._deleted = 0
+                ORDER BY vc.interno
+                """;
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                det.Vehiculos.Add(new ChoferVehiculoRow(
+                    rd.GetString(0), rd.GetInt32(1), rd.GetString(2), rd.GetString(3)));
+        }
+
+        return det;
+
+        static DateOnly? D(System.Data.Common.DbDataReader rd, int i) =>
+            rd.IsDBNull(i) ? null : DateOnly.FromDateTime(rd.GetDateTime(i));
+        static DateTime? DT(System.Data.Common.DbDataReader rd, int i) =>
+            rd.IsDBNull(i) ? null : rd.GetDateTime(i);
+    }
+
     /// <summary>
     /// Login con el flujo del FoxPro (login.scx): existencia → baja lógica
     /// (f_delete) → contraseña, cada caso con su mensaje propio. Devuelve
@@ -940,6 +1306,216 @@ public class ReportService
         return new LoginResultDto(true, null,
             rd.GetString(0), rd.GetString(2), rd.GetString(3), rd.GetBoolean(4));
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Vehículos - Flota  (réplica de vehiculo.scx + vehiculo_abm.scx, solo lectura)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// <summary>Lista de la flota (grilla de vehiculo.scx). Mismas 15 columnas que el
+    /// FoxPro. Egresado = f_delete cargada O !activo (doble condición, distinto de chofer).</summary>
+    public async Task<List<VehiculoListaRow>> GetVehiculosAsync()
+    {
+        return await _cache.GetOrCreateAsync("vehiculos-lista", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    RTRIM(ISNULL(id_vehicul, '')) AS IdVehiculo,
+                    RTRIM(ISNULL(cronograma, '')) AS Cronograma,
+                    RTRIM(ISNULL(fletero,    '')) AS Fletero,
+                    RTRIM(ISNULL(marca_y_mo, '')) AS Marca,
+                    RTRIM(ISNULL(color,      '')) AS Color,
+                    RTRIM(ISNULL(dominio,    '')) AS Dominio,
+                    RTRIM(ISNULL(poliza_nom, '')) AS PolizaNombre,
+                    RTRIM(ISNULL(poliza_nro, '')) AS PolizaNro,
+                    poliza_vto                     AS PolizaVto,
+                    RTRIM(ISNULL(estado_cnr, '')) AS EstadoCnrt,
+                    RTRIM(ISNULL(radicacion, '')) AS Radicacion,
+                    RTRIM(ISNULL(tacografo_,'')) AS TacografoMarca,
+                    RTRIM(ISNULL(tacografo2,'')) AS TacografoNro,
+                    RTRIM(ISNULL(habilitaci, '')) AS HabilitacionNro,
+                    habilitac2                     AS HabilitacionVto,
+                    ISNULL(interno, 0)             AS Interno,
+                    RTRIM(ISNULL(uso,        '')) AS Uso,
+                    ISNULL(activo, 0)              AS Activo,
+                    f_delete                       AS FBaja
+                FROM vehiculo
+                WHERE _deleted = 0
+                ORDER BY interno, dominio
+                """;
+            var result = new List<VehiculoListaRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                result.Add(new VehiculoListaRow(
+                    rd.GetString(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+                    rd.GetString(4), rd.GetString(5), rd.GetString(6), rd.GetString(7),
+                    Fecha(rd, 8), rd.GetString(9), rd.GetString(10), rd.GetString(11),
+                    rd.GetString(12), rd.GetString(13), Fecha(rd, 14),
+                    (int)rd.GetInt64(15), rd.GetString(16), rd.GetBoolean(17), Fecha(rd, 18)));
+            }
+            return result;
+        }) ?? new();
+
+        static DateOnly? Fecha(System.Data.Common.DbDataReader rd, int i) =>
+            rd.IsDBNull(i) ? null : DateOnly.FromDateTime(rd.GetDateTime(i));
+    }
+
+    /// <summary>Ficha completa de un vehículo (réplica del form vehiculo_abm.scx en modo
+    /// consulta), con las 6 pestañas: Datos Vehículo, Permisos, Dueños, Cubiertas, Tarjetas,
+    /// Repuestos.</summary>
+    public async Task<VehiculoDetalleDto?> GetVehiculoDetalleAsync(string idVehiculo)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        var id = idVehiculo.Replace("'", "''");
+
+        var det = new VehiculoDetalleDto();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = $"""
+                SELECT TOP 1
+                    RTRIM(ISNULL(id_vehicul,'')), RTRIM(ISNULL(dominio,'')),
+                    RTRIM(ISNULL(marca_y_mo,'')), ISNULL(modelo,0),
+                    ISNULL(interno,0),            RTRIM(ISNULL(cronograma,'')),
+                    RTRIM(ISNULL(fletero,'')),    RTRIM(ISNULL(id_vehicu2,'')),
+                    RTRIM(ISNULL(color,'')),      ISNULL(pax,0),
+                    RTRIM(ISNULL(uso,'')),        ISNULL(activo,0),
+                    RTRIM(ISNULL(chasis,'')),     RTRIM(ISNULL(motor,'')),
+                    RTRIM(ISNULL(m_chasis,'')),   RTRIM(ISNULL(m_carrocer,'')),
+                    RTRIM(ISNULL(mod_chasis,'')),
+                    -- Seguros / CNRT / habilitaciones / vtos
+                    RTRIM(ISNULL(poliza_nom,'')), RTRIM(ISNULL(poliza_nro,'')), poliza_vto,
+                    RTRIM(ISNULL(estado_cnr,'')), RTRIM(ISNULL(radicacion,'')),
+                    RTRIM(ISNULL(habilitaci,'')), habilitac2,
+                    RTRIM(ISNULL(verificaci,'')), verificac2,
+                    vencimient, puerto_aeo,
+                    RTRIM(ISNULL(tacografo_,'')), RTRIM(ISNULL(tacografo2,'')),
+                    RTRIM(ISNULL(nextel,'')),     RTRIM(ISNULL(tac_au_oes,'')),
+                    RTRIM(ISNULL(tac_au_sol,'')), RTRIM(ISNULL(comentario,'')),
+                    f_compra, f_venta, f_delete, f_create, f_modify,
+                    -- GPS / comodidades / combustible
+                    RTRIM(ISNULL(gps_activo,'')),
+                    ISNULL(bano,0), ISNULL(bar,0), ISNULL(video,0), ISNULL(wifi,0),
+                    ISNULL(litro_tanq,0), ISNULL(autonomia,0),
+                    ISNULL(d_cons_pro,0), ISNULL(h_cons_pro,0), ISNULL(hasta100km,0),
+                    -- Estado operativo (lo pisa Tráfico)
+                    RTRIM(ISNULL(estado,'')),     RTRIM(ISNULL(nombre_cho,'')),
+                    -- Cubiertas (r1..r7) — nros de serie por posición
+                    ISNULL(r1,0), ISNULL(r2,0), ISNULL(r3,0), ISNULL(r4,0),
+                    ISNULL(r5,0), ISNULL(r6,0), ISNULL(r7,0),
+                    -- Tarjetas combustible
+                    RTRIM(ISNULL(ypf_tar,'')), ypf_venc, RTRIM(ISNULL(ypf_pin,'')),
+                    RTRIM(ISNULL(esso_tar,'')), esso_venc, RTRIM(ISNULL(esso_pin,''))
+                FROM vehiculo
+                WHERE id_vehicul = '{id}' AND _deleted = 0
+                """;
+            await using var rd = await cmd.ExecuteReaderAsync();
+            if (!await rd.ReadAsync()) return null;
+            int i = 0;
+            det.Codigo = rd.GetString(i++); det.Dominio = rd.GetString(i++);
+            det.Marca = rd.GetString(i++); det.Modelo = rd.GetInt32(i++);
+            det.Interno = rd.GetInt64(i++); det.Cronograma = rd.GetString(i++);
+            det.Fletero = rd.GetString(i++); det.IdTipo = rd.GetString(i++);
+            det.Color = rd.GetString(i++); det.Pax = rd.GetInt64(i++);
+            det.Uso = rd.GetString(i++); det.Activo = rd.GetBoolean(i++);
+            det.Chasis = rd.GetString(i++); det.Motor = rd.GetString(i++);
+            det.MarcaChasis = rd.GetString(i++); det.MarcaCarroceria = rd.GetString(i++);
+            det.ModeloChasis = rd.GetString(i++);
+            det.PolizaNombre = rd.GetString(i++); det.PolizaNro = rd.GetString(i++);
+            det.PolizaVto = D(rd, i++);
+            det.EstadoCnrt = rd.GetString(i++); det.Radicacion = rd.GetString(i++);
+            det.HabilitacionNro = rd.GetString(i++); det.HabilitacionVto = D(rd, i++);
+            det.VerificacionNro = rd.GetString(i++); det.VerificacionVto = D(rd, i++);
+            det.VencimientoMat = D(rd, i++); det.PuertoAeoVto = D(rd, i++);
+            det.TacografoMarca = rd.GetString(i++); det.TacografoNro = rd.GetString(i++);
+            det.Nextel = rd.GetString(i++); det.TacAuOeste = rd.GetString(i++);
+            det.TacAuSol = rd.GetString(i++); det.Comentario = rd.GetString(i++);
+            det.FCompra = D(rd, i++); det.FVenta = D(rd, i++);
+            det.FBaja = D(rd, i++); det.FCreate = D(rd, i++); det.FModify = D(rd, i++);
+            det.GpsActivo = rd.GetString(i++);
+            det.Bano = rd.GetBoolean(i++); det.Bar = rd.GetBoolean(i++);
+            det.Video = rd.GetBoolean(i++); det.Wifi = rd.GetBoolean(i++);
+            det.LitroTanque = rd.GetInt64(i++); det.Autonomia = rd.GetInt64(i++);
+            det.ConsumoDesde = rd.GetInt64(i++); det.ConsumoHasta = rd.GetInt64(i++);
+            det.Hasta100Km = rd.GetBoolean(i++);
+            det.Estado = rd.GetString(i++); det.ConductorLogoneado = rd.GetString(i++);
+            for (int c = 0; c < 7; c++)
+            {
+                var serie = rd.GetInt64(i++);
+                det.Cubiertas.Add(new VehiculoCubiertaRow(c + 1, serie));
+            }
+            det.YpfTarjeta = rd.GetString(i++); det.YpfVenc = D(rd, i++); det.YpfPin = rd.GetString(i++);
+            det.EssoTarjeta = rd.GetString(i++); det.EssoVenc = D(rd, i++); det.EssoPin = rd.GetString(i++);
+        }
+
+        // Pestaña Dueños (vehiculo_dueno + nombre desde dueno)
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = $"""
+                SELECT
+                    RTRIM(ISNULL(vd.id_dueno,'')) AS IdDueno,
+                    RTRIM(ISNULL(d.nombre,''))     AS Nombre,
+                    ISNULL(vd.porcentaje, 0)       AS Porcentaje
+                FROM vehiculo_dueno vd
+                LEFT JOIN dueno d ON d.id_dueno = vd.id_dueno AND d._deleted = 0
+                WHERE vd.id_vehicul = '{id}' AND vd._deleted = 0
+                ORDER BY vd.porcentaje DESC
+                """;
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                det.Duenos.Add(new VehiculoDuenoRow(
+                    rd.GetString(0), rd.GetString(1), rd.GetDecimal(2)));
+        }
+
+        // Pestaña Permisos (vehiculo_permiso + nombre desde permiso)
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = $"""
+                SELECT
+                    ISNULL(vp.id_permiso, 0)       AS IdPermiso,
+                    RTRIM(ISNULL(p.nombre,''))     AS Nombre,
+                    RTRIM(ISNULL(vp.nro_permis,'')) AS NroPermiso,
+                    vp.f_venc                       AS FVenc,
+                    vp.f_baja                       AS FBaja
+                FROM vehiculo_permiso vp
+                LEFT JOIN permiso p ON p.id_permiso = vp.id_permiso AND p._deleted = 0
+                WHERE vp.id_vehicul = '{id}' AND vp._deleted = 0
+                ORDER BY vp.id_permiso
+                """;
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                det.Permisos.Add(new VehiculoPermisoRow(
+                    (int)rd.GetInt64(0), rd.GetString(1), rd.GetString(2),
+                    D(rd, 3), D(rd, 4)));
+        }
+
+        // Pestaña Repuestos (vehiculo_repuesto — vacía en la réplica hoy)
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = $"""
+                SELECT
+                    RTRIM(ISNULL(id_repuest,'')) AS IdRepuesto,
+                    ISNULL(cantidad, 0)           AS Cantidad
+                FROM vehiculo_repuesto
+                WHERE id_vehicul = '{id}' AND _deleted = 0
+                ORDER BY id_repuest
+                """;
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                det.Repuestos.Add(new VehiculoRepuestoRow(rd.GetString(0), rd.GetDecimal(1)));
+        }
+
+        return det;
+
+        static DateOnly? D(System.Data.Common.DbDataReader rd, int i) =>
+            rd.IsDBNull(i) ? null : DateOnly.FromDateTime(rd.GetDateTime(i));
+    }
 }
 
 /// <summary>Resultado del login — espeja las variables públicas del FoxPro
@@ -969,6 +1545,145 @@ public class TableroDto
 
 public record ServicioDto(string IdServici, string Nombre);
 public record VehiculoTipoDto(string Id, string Nombre);
+
+// ── Clientes (ABM solo lectura) ──
+public record ClienteListaRow(
+    string Codigo, string RazonSocial, string Telefono, string Celular,
+    string Domicilio, string Nro, string Piso, string Depto, string Localidad,
+    decimal Descuento, string Contacto1, string Contacto2, DateOnly? FInhabilitacion);
+
+public record ClienteCorreoRow(int Orden, string Contacto, string Cargo, string Email);
+
+public class ClienteDetalleDto
+{
+    public string Codigo = "", RazonSocial = "";
+    public string Domicilio = "", Nro = "", Piso = "", Depto = "";
+    public string CPostal = "", Localidad = "", Provincia = "";
+    public string Telefono = "", Celular = "";
+    public string TipoResp = "", TipoRespDesc = "", Ncuit = "", Email = "", Comentario = "";
+    public DateOnly? FInhabilitacion, FCreate, FModify;
+    public decimal Descuento, Incremento;
+    public string EmpresaFc = "", ObPrecio = "", ListaPrecio = "", Cairo = "", FcPrefere = "";
+    public bool Bus24, PidePax, Voucher, Arsa, PlantillaDestinoEmpresa, EnviaGps;
+    public string GpsTipo = "", GpsHora = "";
+    public List<string> RubrosExcluidos = new();
+    public List<ClienteCorreoRow> Correos = new();
+}
+
+// ── Choferes (ABM solo lectura) ──
+public record ChoferListaRow(
+    string Codigo, string Fletero, string Nombre, string Domicilio,
+    string Nro, string Piso, string Depto, string Localidad,
+    string Telefono, string Celular, string Tdoc, string Ndoc,
+    DateOnly? VtoRegistro, DateOnly? VtoCnrt, DateOnly? VtoAep, DateOnly? FInhabilitacion);
+
+public record ChoferVehiculoRow(string IdVehiculo, int Interno, string Patente, string Modelo);
+public record ChoferTelefonoRow(int Orden, string Telefono, string Linea, string Celular);
+
+// ── Vehículos - Flota ──────────────────────────────────────────────────────
+
+/// <summary>Una fila de la grilla de Vehículos (vehiculo.scx). Las 15 columnas del FoxPro,
+/// más Interno/Uso/Activo/FBaja para filtros (Ver Activos / Flota Propia) y el pintado de
+/// egresados (egresado = !Activo OR FBaja).</summary>
+public record VehiculoListaRow(
+    string IdVehiculo, string Cronograma, string Fletero, string Marca,
+    string Color, string Dominio, string PolizaNombre, string PolizaNro,
+    DateOnly? PolizaVto, string EstadoCnrt, string Radicacion, string TacografoMarca,
+    string TacografoNro, string HabilitacionNro, DateOnly? HabilitacionVto,
+    int Interno, string Uso, bool Activo, DateOnly? FBaja)
+{
+    public bool EsEgresado => !Activo || FBaja is not null;
+    public bool EsPropio => string.Equals(Uso, "PROPIO", StringComparison.OrdinalIgnoreCase);
+}
+
+public record VehiculoDuenoRow(string IdDueno, string Nombre, decimal Porcentaje);
+public record VehiculoPermisoRow(int IdPermiso, string Nombre, string NroPermiso, DateOnly? FVenc, DateOnly? FBaja);
+public record VehiculoCubiertaRow(int Posicion, long NroSerie);
+public record VehiculoRepuestoRow(string IdRepuesto, decimal Cantidad);
+
+public class VehiculoDetalleDto
+{
+    // Datos Vehículo
+    public string Codigo = "", Dominio = "", Marca = "", Cronograma = "", Fletero = "", IdTipo = "", Color = "";
+    public int Modelo;
+    public long Interno, Pax;
+    public string Uso = "";
+    public bool Activo;
+    public string Chasis = "", Motor = "", MarcaChasis = "", MarcaCarroceria = "", ModeloChasis = "";
+    // Seguros / CNRT / habilitaciones / vencimientos
+    public string PolizaNombre = "", PolizaNro = "";
+    public DateOnly? PolizaVto;
+    public string EstadoCnrt = "", Radicacion = "", HabilitacionNro = "", VerificacionNro = "";
+    public DateOnly? HabilitacionVto, VerificacionVto, VencimientoMat, PuertoAeoVto;
+    public string TacografoMarca = "", TacografoNro = "", Nextel = "", TacAuOeste = "", TacAuSol = "", Comentario = "";
+    public DateOnly? FCompra, FVenta, FBaja, FCreate, FModify;
+    // GPS / comodidades / combustible
+    public string GpsActivo = "";
+    public bool Bano, Bar, Video, Wifi, Hasta100Km;
+    public long LitroTanque, Autonomia, ConsumoDesde, ConsumoHasta;
+    // Estado operativo (lo pisa Tráfico, no es del ABM)
+    public string Estado = "", ConductorLogoneado = "";
+    // Tarjetas combustible
+    public string YpfTarjeta = "", YpfPin = "", EssoTarjeta = "", EssoPin = "";
+    public DateOnly? YpfVenc, EssoVenc;
+    // Grillas de pestañas
+    public List<VehiculoDuenoRow> Duenos = new();
+    public List<VehiculoPermisoRow> Permisos = new();
+    public List<VehiculoCubiertaRow> Cubiertas = new();
+    public List<VehiculoRepuestoRow> Repuestos = new();
+
+    public bool EsEgresado => !Activo || FBaja is not null;
+    public bool GpsActivoBool => GpsActivo == "1" || string.Equals(GpsActivo, "S", StringComparison.OrdinalIgnoreCase);
+    public string UsoDescripcion => string.IsNullOrWhiteSpace(Uso) ? "—" : Uso;
+}
+
+public class ChoferDetalleDto
+{
+    // Datos personales
+    public string Codigo = "", Fletero = "", Nombre = "", Apellido = "", Nombre1 = "", Nombre2 = "";
+    public string Padre = "", Madre = "";
+    public string Tdoc = "", Ndoc = "", Ncuil = "", Ncuit = "", Email = "", Comentario = "";
+    public string EstadoCivil = "", LugarNacimiento = "", GrupoSanguineo = "", RhPosNeg = "";
+    public DateOnly? FNac, FInhabilitacion, FCreate, FModify;
+    public string RegistroNro = "", RegistroNroCnrt = "";
+    public DateOnly? VtoRegistro, VtoCnrt, VtoAep;
+    public string Nextel = "", NextelCel = "";
+    // Condiciones laborales
+    public DateOnly? FIngreso;
+    public bool Lunes, Martes, Miercoles, Jueves, Viernes, Sabado, Domingo;
+    public DateTime? HInicioJornal, HFinJornal;
+    public long Jornal, Legajo;
+    public bool JornalAplica, Auditor;
+    public string IdListaPrecio = "", YpfPin = "", EssoPin = "";
+    // Domicilio DNI
+    public string Domicilio = "", Nro = "", Piso = "", Depto = "", Entre1 = "", Entre2 = "";
+    public string CPostal = "", Localidad = "", Partido = "", Provincia = "";
+    // Domicilio real (donde vive)
+    public string RealDomicilio = "", RealNro = "", RealPiso = "", RealDepto = "", RealEntre1 = "", RealEntre2 = "";
+    public string RealCPostal = "", RealLocalidad = "", RealPartido = "", RealProvincia = "";
+    // Teléfonos
+    public string Telefono = "", Celular = "";
+    public List<ChoferTelefonoRow> Telefonos = new();
+    // Vehículos asignados
+    public List<ChoferVehiculoRow> Vehiculos = new();
+
+    public string RhDescripcion => RhPosNeg switch
+    {
+        "P" => "Positivo", "N" => "Negativo", _ => "No informó"
+    };
+    public string DiasTrabajo
+    {
+        get
+        {
+            var d = new List<string>();
+            if (Lunes) d.Add("Lun"); if (Martes) d.Add("Mar"); if (Miercoles) d.Add("Mié");
+            if (Jueves) d.Add("Jue"); if (Viernes) d.Add("Vie"); if (Sabado) d.Add("Sáb");
+            if (Domingo) d.Add("Dom");
+            return d.Count == 0 ? "" : string.Join(" · ", d);
+        }
+    }
+}
+
 public record BandaHorariaRow(DateOnly Fecha, string TipoVehiculo, string Banda, int Reservas);
 
 public record ReservaFechaServicioRow(

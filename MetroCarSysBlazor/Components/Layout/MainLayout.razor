@@ -32,6 +32,12 @@
 
             <nav class="nav-drawer__nav">
 
+                @* Aviso: todas las secciones arrancan colapsadas — el usuario abre la que necesite. *@
+                <div class="nav-hint">
+                    <MudIcon Icon="@Icons.Material.Filled.TouchApp" Size="Size.Small" Class="nav-hint__icon" />
+                    <span>Tocá una sección para abrirla</span>
+                </div>
+
                 @* Visibilidad por módulo del usuario (letra en usuario.acceso) —
                    mismo comportamiento que el SKIP FOR del menú FoxPro. *@
 
@@ -318,10 +324,12 @@
                     @if (_vehiculosExpanded)
                     {
                         <div class="nav-section__items">
-                            <span class="nav-item nav-item--disabled">
+                            <a href="/choferes"
+                               class="nav-item @(Nav.Uri.Contains("choferes") ? "nav-item--active" : "")"
+                               @onclick="ToggleDrawer">
                                 <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Choferes</span>
-                            </span>
+                            </a>
                             @* Apercibimientos — submenú nivel 3 *@
                             <button class="nav-section__title nav-section__title--sub @(_apercibimientosExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _apercibimientosExpanded = !_apercibimientosExpanded">
@@ -372,10 +380,12 @@
                                 <MudIcon Icon="@Icons.Material.Filled.CarCrash" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Siniestros</span>
                             </span>
-                            <span class="nav-item nav-item--disabled">
+                            <a href="/vehiculos"
+                               class="nav-item @(Nav.Uri.Contains("/vehiculos") ? "nav-item--active" : "")"
+                               @onclick="ToggleDrawer">
                                 <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Vehículos - Flota</span>
-                            </span>
+                            </a>
                             <span class="nav-item nav-item--disabled">
                                 <MudIcon Icon="@Icons.Material.Filled.CalendarToday" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Agenda de Vencimientos</span>
@@ -421,10 +431,12 @@
                             @if (_factuCliExpanded)
                             {
                                 <div class="nav-section__items nav-section__items--sub">
-                                    <span class="nav-item nav-item--disabled">
+                                    <a href="/clientes-abm"
+                                       class="nav-item @(Nav.Uri.Contains("clientes-abm") ? "nav-item--active" : "")"
+                                       @onclick="ToggleDrawer">
                                         <MudIcon Icon="@Icons.Material.Filled.ManageAccounts" Size="Size.Small" Class="nav-item__icon" />
                                         <span>ABM - Clientes</span>
-                                    </span>
+                                    </a>
                                     <span class="nav-item nav-item--disabled">
                                         <MudIcon Icon="@Icons.Material.Filled.PriceChange" Size="Size.Small" Class="nav-item__icon" />
                                         <span>Clientes Tarifas</span>
@@ -1133,8 +1145,8 @@
 @code {
     private bool _drawerOpen = false;
 
-    // Secciones principales
-    private bool _reservasExpanded = true;
+    // Secciones principales — todas colapsadas al entrar (cualquier usuario)
+    private bool _reservasExpanded = false;
     private bool _traficoExpanded = false;
     private bool _vehiculosExpanded = false;
     private bool _facturacionExpanded = false;
@@ -1145,7 +1157,7 @@
 
     // Submenús nivel 3 — Reservas
     private bool _plantillasExpanded = false;
-    private bool _informesReservasExpanded = true;
+    private bool _informesReservasExpanded = false;
 
     // Submenús nivel 3 — Tráfico
     private bool _francosExpanded = false;

@@ -13,6 +13,7 @@
     ".claude/skills/modulo-reservas",
     ".claude/skills/seguridad-nortur",
     ".claude/skills/modulo-facturacion-liquidacion",
-    ".claude/skills/modulo-combustible"
+    ".claude/skills/modulo-combustible",
+    ".claude/skills/modulo-vehiculos-choferes"
   ]
 }

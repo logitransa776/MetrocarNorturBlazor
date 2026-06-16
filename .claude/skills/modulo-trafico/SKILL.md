@@ -66,6 +66,51 @@ Queries del módulo en `ReportService.cs`: `GetPlanillaTraficoAsync`,
 - Los colores de estado van por clase (`EstadoCss(estado)` → `fila-estado--asignado` etc.),
   ya NO por style inline. La paleta desaturada vive en `app.css`.
 
+### Performance — índices de `viaje` y reglas críticas (jun 2026)
+
+Relevado en el SQL de producción (172.25.69.217, SQL Server 2012, `viaje` = 521K filas):
+
+| Tabla | Clustered PK | Índices custom que existen |
+| --- | --- | --- |
+| `viaje` | `_sync_id` (¡NO `id_viaje`!) | `ix_viaje_f_reserva (f_reserva,_deleted,estado_via)`, `ix_viaje_hs_inicio` |
+| `viaje_adicional` | `id` (sync) | ninguno por `id_viaje` |
+
+- **NO hay índice sobre `viaje.id_viaje`.** Cualquier query `WHERE id_viaje = X` (p. ej. el
+  detalle del Zoom) hace **scan paralelo completo: ~84.000 lecturas lógicas + 125 ms CPU por
+  fila**, satura el SQL 2012 y rota el buffer pool. `id_viaje` es único (521230 distintos).
+- **Regla del Zoom:** `GetDetalleViajeAsync(idViaje, fReserva)` filtra **también por
+  `f_reserva`** (la fila de la planilla siempre la conoce → se pasa por `ZoomViajeDialog.FReserva`).
+  Eso convierte el scan en un SEEK por `ix_viaje_f_reserva`: **84.442 → ~1.050 lecturas, 125 → 0 ms.**
+  Cualquier lookup futuro por viaje DEBE acotar por `f_reserva` (o `_sync_id`) mientras no exista
+  el índice por `id_viaje`. Pendiente recomendado (lo declinó el cliente jun 2026): crear
+  `ix_viaje_id_viaje` y `ix_viaje_adicional_id_viaje` → bajaría a ~6 lecturas (seek directo).
+- **Auto-refresh acotado a la ventana viva:** `PlanillaTrafico.EsFechaViva(dia)` = `dia >=
+  hoy-15d` (incluye futuras). Las fechas más viejas están congeladas (Metrocar ya no las edita)
+  → se cargan una vez y el `PeriodicTimer` NO las pollea (la leyenda muestra "histórico").
+  Tráfico es **solo lectura**: Blazor nunca escribe; las "actualizaciones" son el polling + la
+  réplica DBF→SQL de fondo.
+- **Trampa:** el flag `Adj` de la planilla (basado en `adi_cod_1..5` de `viaje`) está **vacío en
+  los viajes recientes** aunque tengan filas en `viaje_adicional` (540 casos jun 2026). NO sirve
+  para saltear la query de adicionales ni como indicador confiable de adicionales en la grilla.
+
+### Performance — render de la grilla en el navegador (jun 2026)
+
+Síntoma: el Zoom tardaba **6-7s en abrir** sobre fechas con muchos servicios. Medido con
+instrumentación (`Stopwatch` + log) **todo el lado servidor termina en ~55 ms** (datos 28-210 ms,
+`ShowAsync` 7-111 ms) — NO era ni la base ni Blazor-servidor. El tiempo se iba en el **navegador**:
+la planilla es un `<table>` con **las 365 filas siempre en el DOM** (~9.000 celdas) + headers
+`position:sticky` dentro de `.trafico-wrap` (scroll). Al montar el overlay del diálogo encima, el
+navegador re-pintaba toda la tabla detrás → 6-7s en máquinas modestas.
+
+- **Fix (CSS, `app.css`):** `.trafico-grid tbody tr { content-visibility: auto;
+  contain-intrinsic-size: auto 22px; }`. El navegador omite el layout/pintado de las filas fuera
+  del viewport (solo renderiza las ~30 visibles). Cero cambios de C#/markup, reversible.
+- Para diagnosticar "6-7s pero el SQL da 0 ms": el plan cache (`sys.dm_exec_query_stats`) mide
+  *ejecución* de la query, NO la apertura de conexión ni el render. Si query=0 ms y conexión=0-180 ms
+  (pool .NET reusa) pero el usuario espera segundos → es **render del navegador**, no la base.
+- Si en el futuro la grilla crece o `content-visibility` desalinea columnas al scrollear, el paso
+  siguiente es virtualizar (`<Virtualize SpacerElement="tr">`) o `MudTable Virtualize="true"`.
+
 ## Documentación de lógica FoxPro (leer cuando se necesite el detalle)
 
 - `docs/logica-foxpro/TRAFICO2_FILTROS.md` — toolbar completa de `trafico2.scx`: combos,

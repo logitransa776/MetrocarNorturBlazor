@@ -1,0 +1,230 @@
+@inject ReportService Reports
+
+<MudDialog Class="zoom-viaje-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.ManageAccounts" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">ABM de Clientes</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">Solo lectura</span>
+            @if (_d is not null)
+            {
+                <span class="zoom-title-bar__nro">@_d.Codigo</span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:220px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_d is null)
+        {
+            <MudAlert Severity="Severity.Warning">No se encontró el cliente.</MudAlert>
+        }
+        else
+        {
+            @* ── Encabezado: Código + Razón Social ── *@
+            <div class="cli-head">
+                <div class="zoom-field zoom-field--1">
+                    <div class="zoom-field__label">Código</div>
+                    <div class="zoom-field__value zoom-field__value--acento">@_d.Codigo</div>
+                </div>
+                <div class="zoom-field zoom-field--3">
+                    <div class="zoom-field__label">Razón Social</div>
+                    <div class="zoom-field__value">@Str(_d.RazonSocial)</div>
+                </div>
+                @if (_d.FInhabilitacion is not null)
+                {
+                    <span class="cli-egresado">EGRESADO · @Fecha(_d.FInhabilitacion)</span>
+                }
+            </div>
+
+            <MudTabs Elevation="0" Rounded="true" Class="cli-tabs">
+
+                @* ══════════ Datos generales ══════════ *@
+                <MudTabPanel Text="Datos del cliente">
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Domicilio</span>
+                        <div class="zoom-row">
+                            @F("Domicilio", Str(_d.Domicilio), ancho: 2)
+                            @F("Nro", Str(_d.Nro))
+                            @F("Piso", Str(_d.Piso))
+                            @F("Depto", Str(_d.Depto))
+                            @F("C. Postal", Str(_d.CPostal))
+                            @F("Localidad", Str(_d.Localidad), ancho: 2)
+                            @F("Provincia", Str(_d.Provincia))
+                        </div>
+                    </div>
+
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Contacto y datos fiscales</span>
+                        <div class="zoom-row">
+                            @F("Teléfono", Str(_d.Telefono))
+                            @F("Celular", Str(_d.Celular))
+                            @F("T. Resp.", Str(string.IsNullOrWhiteSpace(_d.TipoRespDesc) ? _d.TipoResp : _d.TipoRespDesc))
+                            @F("N° CUIT", Str(_d.Ncuit))
+                            @F("E-Mail", Str(_d.Email), ancho: 2)
+                            @F("Comentario", Str(_d.Comentario), ancho: 4)
+                        </div>
+                    </div>
+                </MudTabPanel>
+
+                @* ══════════ Datos de Facturación ══════════ *@
+                <MudTabPanel Text="Facturación">
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Datos de Facturación</span>
+                        <div class="zoom-row">
+                            @F("Descuento", _d.Descuento.ToString("N2", _ar))
+                            @F("Incremento", _d.Incremento.ToString("N2", _ar))
+                            @F("Emp. de Facturación", Str(_d.EmpresaFc))
+                            @F("Obtención de precios", Str(_d.ObPrecio))
+                            @F("Lista de Precio", Str(_d.ListaPrecio))
+                            @F("Cód. sistema Contable", Str(_d.Cairo))
+                            @F("Preferencia Facturación", _d.FcPrefere == "C" ? "Cabecera" : _d.FcPrefere == "S" ? "Servicio" : "—")
+                            @* El form FoxPro rotula Tipo Mov ← envia_gps2 y Tipo Hora ← envia_gps_ (etiquetas invertidas respecto del nombre de columna) *@
+                            @F("Envía datos GPS", _d.EnviaGps ? $"Sí · Mov {Str(_d.GpsHora)} / Hora {Str(_d.GpsTipo)}" : "No")
+                        </div>
+                    </div>
+
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Opciones operativas</span>
+                        <div class="cli-flags">
+                            @Flag("Bus por 24 pax en transfer", _d.Bus24)
+                            @Flag("Pide cantidad de pasajeros al finalizar", _d.PidePax)
+                            @Flag("Pide N° de Voucher al finalizar", _d.Voucher)
+                            @Flag("Reservas x Plantilla: Destino a empresa", _d.PlantillaDestinoEmpresa)
+                            @Flag("ARSA", _d.Arsa)
+                        </div>
+                    </div>
+
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Rubros de Adicionales Excluidos</span>
+                        @if (_d.RubrosExcluidos.Count == 0)
+                        {
+                            <span class="cli-empty">Sin rubros excluidos.</span>
+                        }
+                        else
+                        {
+                            <div class="cli-chips">
+                                @foreach (var r in _d.RubrosExcluidos)
+                                {
+                                    <span class="cli-chip">@r</span>
+                                }
+                            </div>
+                        }
+                    </div>
+                </MudTabPanel>
+
+                @* ══════════ Correos Electrónicos ══════════ *@
+                <MudTabPanel Text="@($"Correos ({_d.Correos.Count})")">
+                    <div class="zoom-box zoom-box--sec">
+                        <span class="zoom-box__label">Correos y contactos</span>
+                        @if (_d.Correos.Count == 0)
+                        {
+                            <span class="cli-empty">Sin correos ni contactos cargados.</span>
+                        }
+                        else
+                        {
+                            <MudSimpleTable Dense="true" Hover="true" Striped="true" Class="cli-mails">
+                                <thead>
+                                    <tr>
+                                        <th style="width:36px;">#</th>
+                                        <th>Contacto</th>
+                                        <th>Cargo</th>
+                                        <th>E-Mail</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var c in _d.Correos)
+                                    {
+                                        <tr>
+                                            <td>@c.Orden</td>
+                                            <td>@Str(c.Contacto)</td>
+                                            <td>@Str(c.Cargo)</td>
+                                            <td>@Str(c.Email)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        }
+                    </div>
+                </MudTabPanel>
+
+            </MudTabs>
+
+            @* ── Botonera réplica FoxPro (deshabilitada — solo lectura) ── *@
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                    Vista de solo lectura — la edición se hace en Metrocar (FoxPro).
+                </div>
+                <div class="cli-footer__btns">
+                    <MudButton Disabled="true" Variant="Variant.Outlined" Size="Size.Small">Agregar</MudButton>
+                    <MudButton Disabled="true" Variant="Variant.Outlined" Size="Size.Small">Modificar</MudButton>
+                    <MudButton Disabled="true" Variant="Variant.Outlined" Size="Size.Small">Eliminar</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               OnClick="Cerrar">Cerrar</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string IdCliente { get; set; } = "";
+
+    private ClienteDetalleDto? _d;
+    private bool _cargando = true;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override async Task OnInitializedAsync()
+    {
+        _d = await Reports.GetClienteDetalleAsync(IdCliente);
+        _cargando = false;
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private string Fecha(DateOnly? f) => f is null ? "—" : f.Value.ToString("dd/MM/yyyy", _ar);
+    private string Str(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+
+    private RenderFragment F(string label, string valor, bool acento = false, int ancho = 1) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", $"zoom-field zoom-field--{ancho}");
+        if (!string.IsNullOrEmpty(label))
+        {
+            b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label");
+            b.AddContent(4, label); b.CloseElement();
+        }
+        b.OpenElement(5, "div");
+        b.AddAttribute(6, "class", acento ? "zoom-field__value zoom-field__value--acento" : "zoom-field__value");
+        b.AddContent(7, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+
+    private RenderFragment Flag(string label, bool on) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", on ? "cli-flag cli-flag--on" : "cli-flag");
+        b.OpenComponent<MudIcon>(2);
+        b.AddComponentParameter(3, "Icon", on ? Icons.Material.Filled.CheckBox : Icons.Material.Filled.CheckBoxOutlineBlank);
+        b.AddComponentParameter(4, "Size", Size.Small);
+        b.CloseComponent();
+        b.OpenElement(5, "span"); b.AddContent(6, label); b.CloseElement();
+        b.CloseElement();
+    };
+}

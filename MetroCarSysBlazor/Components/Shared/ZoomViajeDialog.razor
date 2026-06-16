@@ -1,4 +1,5 @@
 @inject ReportService Reports
+@inject IJSRuntime JS
 @implements IDisposable
 
 <MudDialog Class="zoom-viaje-dialog">
@@ -141,8 +142,10 @@
                             @F("Rec. Celular",   Str(_d.RecorridoCelular), ancho: 2)
                         </div>
                         <div class="zoom-row">
-                            @F("Comentario", Str(_d.Comentario), ancho: 3)
-                            @F("Documento",  _d.TieneAdjunto ? _d.Adjunto : "Sin Adjunto")
+                            @F("Comentario", Str(_d.Comentario), ancho: 4)
+                        </div>
+                        <div class="zoom-row">
+                            @FDoc("Documento", _d.TieneAdjunto ? _d.Adjunto : "Sin Adjunto", _d.TieneAdjunto)
                         </div>
                     </div>
 
@@ -214,6 +217,10 @@
 
     [Parameter] public int IdViaje { get; set; }
 
+    // Fecha de reserva de la fila que abrió el Zoom. Permite que el detalle haga SEEK
+    // por ix_viaje_f_reserva en vez de scanear toda la tabla viaje (ver GetDetalleViajeAsync).
+    [Parameter] public DateOnly? FReserva { get; set; }
+
     private DetalleViajeDto? _d;
     private List<AdicionalViajeRow> _adicionales = new();
     private bool _cargando = true;
@@ -225,9 +232,17 @@
         // Siempre datos frescos: la grilla puede haberse actualizado en el último minuto
         // mientras el detalle seguía en caché con TTL de 5 min.
         Reports.InvalidarCacheDetalle(IdViaje);
-        _d = await Reports.GetDetalleViajeAsync(IdViaje);
-        if (_d is not null)
-            _adicionales = await Reports.GetAdicionalesViajeAsync(IdViaje);
+
+        // Las dos consultas son independientes (no hay dependencia de datos entre ellas):
+        // se disparan en paralelo para pagar una sola apertura de conexión "en serie" en
+        // vez de la suma de las dos. Costo aceptable: adicionales se pide aunque el viaje
+        // no exista (tabla liviana, sin joins).
+        var detalleTask = Reports.GetDetalleViajeAsync(IdViaje, FReserva);
+        var adicionalesTask = Reports.GetAdicionalesViajeAsync(IdViaje);
+        await Task.WhenAll(detalleTask, adicionalesTask);
+
+        _d = detalleTask.Result;
+        _adicionales = _d is not null ? adicionalesTask.Result : new();
         _cargando = false;
     }
 
@@ -277,6 +292,43 @@
         b.AddContent(4, label); b.CloseElement();
         b.OpenElement(5, "div"); b.AddAttribute(6, "class", "zoom-valores__value");
         b.AddContent(7, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+
+    // Campo Documento con botón copiar al portapapeles
+    private bool _copiado = false;
+    private async Task CopiarDoc(string texto)
+    {
+        await JS.InvokeAsync<bool>("copiarAlPortapapeles", texto);
+        _copiado = true;
+        StateHasChanged();
+        await Task.Delay(1500);
+        _copiado = false;
+        StateHasChanged();
+    }
+
+    private RenderFragment FDoc(string label, string valor, bool tieneAdjunto) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", "zoom-field zoom-field--2");
+        b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label");
+        b.AddContent(4, label); b.CloseElement();
+        b.OpenElement(5, "div");
+        b.AddAttribute(6, "class", "zoom-doc");
+        b.OpenElement(7, "span");
+        b.AddAttribute(8, "class", "zoom-doc__valor");
+        b.AddContent(9, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        b.CloseElement();
+        if (tieneAdjunto && !string.IsNullOrWhiteSpace(valor))
+        {
+            b.OpenElement(10, "button");
+            b.AddAttribute(11, "class", _copiado ? "zoom-doc__btn zoom-doc__btn--ok" : "zoom-doc__btn");
+            b.AddAttribute(12, "title", _copiado ? "¡Copiado!" : "Copiar");
+            b.AddAttribute(13, "onclick", EventCallback.Factory.Create(this, () => CopiarDoc(valor)));
+            b.AddContent(14, _copiado ? "✓" : "⧉");
+            b.CloseElement();
+        }
         b.CloseElement();
         b.CloseElement();
     };
