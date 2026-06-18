@@ -8,6 +8,14 @@ window.copiarAlPortapapeles = async (texto) => {
     }
 };
 
+// Bloquea/libera el scroll de la ventana (clase en <body>). Lo usa la Planilla
+// de Tráfico: con la clase puesta, la página ocupa exactamente el viewport y la
+// ÚNICA región que scrollea es la grilla de viajes (no la ventana). Es idempotente,
+// así que da igual cuántas veces se llame al montar/desmontar la página.
+window.bloquearScrollVentana = (bloquear) => {
+    document.body.classList.toggle('planilla-fixed', !!bloquear);
+};
+
 // Descarga un archivo desde un stream .NET (usado para el export a Excel).
 window.descargarArchivo = async (nombreArchivo, streamRef) => {
     const arrayBuffer = await streamRef.arrayBuffer();

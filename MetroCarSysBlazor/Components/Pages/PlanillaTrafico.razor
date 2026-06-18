@@ -11,8 +11,12 @@
 
 <PageTitle>Planilla de servicios — Tráfico</PageTitle>
 
+@* Columna a pantalla completa: toolbar + KPIs fijos arriba, grilla flexible abajo.
+   La ventana no scrollea (body.planilla-fixed); solo scrollea la grilla. *@
+<div class="planilla-page">
+
 @* ════════════ Barra superior: navegación de día + acciones ════════════ *@
-<MudPaper Class="pa-3 mb-3" Elevation="2" Style="border-radius:12px;">
+<MudPaper Class="pa-3 mb-3 planilla-page__toolbar" Elevation="2" Style="border-radius:12px;">
     <div class="d-flex align-center flex-wrap" style="gap:12px;">
 
         @* Navegación de día (<<  fecha  >>) *@
@@ -174,7 +178,7 @@
 else
 {
     @* ════════════ KPIs del día ════════════ *@
-    <div class="d-flex mb-2" style="gap:10px;">
+    <div class="d-flex mb-2 planilla-page__kpis" style="gap:10px;">
         <div style="flex:1;">
             <KpiCard Label="Servicios" Value="@Fmt(visibles.Count)"
                      Sub="@TituloFecha" Color="@NorturColors.Azul" />
@@ -210,12 +214,36 @@ else if (_verCancelados)
     }
     else
     {
-        <MudPaper Elevation="2" Style="border-radius:8px; overflow:hidden;">
+        <MudPaper Elevation="2" Class="planilla-page__grid" Style="border-radius:8px; overflow:hidden;">
             <div class="trafico-wrap">
                 <table class="trafico-grid">
+                    @* Anchos fijos (igual criterio que la grilla principal). *@
+                    <colgroup>
+                        <col style="width:30px;" />   @* # *@
+                        <col style="width:34px;" />   @* Ob *@
+                        <col style="width:34px;" />   @* Ad *@
+                        <col style="width:78px;" />   @* Reserva *@
+                        <col style="width:48px;" />   @* H.Ini *@
+                        <col style="width:48px;" />   @* H.Fin *@
+                        <col style="width:48px;" />   @* H.Avi *@
+                        <col style="width:48px;" />   @* H.Cie *@
+                        <col style="width:58px;" />   @* U/Pr *@
+                        <col style="width:58px;" />   @* U/Cb *@
+                        <col style="width:58px;" />   @* U/As *@
+                        <col style="width:36px;" />   @* Chq *@
+                        <col style="width:240px;" />  @* Recorrido (largo → tooltip) *@
+                        <col style="width:160px;" />  @* Motivo (largo → tooltip) *@
+                        <col style="width:46px;" />   @* Veh *@
+                        <col style="width:72px;" />   @* Cliente *@
+                        <col style="width:42px;" />   @* Pax *@
+                        <col style="width:160px;" />  @* Comentario (largo → tooltip) *@
+                        <col style="width:96px;" />   @* Grupo *@
+                        <col style="width:84px;" />   @* Vuelo *@
+                        <col style="width:72px;" />   @* Guia *@
+                    </colgroup>
                     <thead>
                         <tr>
-                            <th class="r" style="width:28px;">#</th>
+                            <th class="r">#</th>
                             <th class="c">Ob</th>
                             <th class="c">Ad</th>
                             <th>Reserva</th>
@@ -262,12 +290,12 @@ else if (_verCancelados)
                                 <td>@f.UCb</td>
                                 <td>@f.UAs</td>
                                 <td class="c">@f.Chq</td>
-                                <td class="nowrap">@f.Recorrido</td>
-                                <td class="nowrap" style="color:#DC2626; font-weight:600;">@f.Motivo</td>
+                                <td title="@f.Recorrido">@f.Recorrido</td>
+                                <td style="color:#DC2626; font-weight:600;" title="@f.Motivo">@f.Motivo</td>
                                 <td>@f.Veh</td>
                                 <td>@f.Cliente</td>
                                 <td class="r">@f.Pax</td>
-                                <td class="nowrap">@f.Comentario</td>
+                                <td title="@f.Comentario">@f.Comentario</td>
                                 <td>@(string.IsNullOrWhiteSpace(f.Grupo) ? "SIN GRUPO" : f.Grupo)</td>
                                 <td>@(string.IsNullOrWhiteSpace(f.Vuelo) ? "SIN VUELO" : f.Vuelo)</td>
                                 <td>@(string.IsNullOrWhiteSpace(f.Guia) ? "SIN GUIA" : f.Guia)</td>
@@ -298,12 +326,42 @@ else
     }
     else
     {
-    <MudPaper Elevation="2" Style="border-radius:8px; overflow:hidden;">
+    <MudPaper Elevation="2" Class="trafico-panel" Style="border-radius:8px; overflow:hidden;">
         <div class="trafico-wrap">
             <table class="trafico-grid trafico-grid--virtual">
+                @* Anchos FIJOS por columna (table-layout:fixed en app.css los respeta).
+                   Calibrados al contenido típico: las largas (Recorrido/Chofer/Comentario)
+                   truncan con … y muestran el texto completo en el tooltip (title). *@
+                <colgroup>
+                    <col style="width:30px;" />   @* # *@
+                    <col style="width:92px;" />   @* Estado (chip) *@
+                    <col style="width:78px;" />   @* Reserva dd/MM/yyyy *@
+                    <col style="width:48px;" />   @* H.Pre *@
+                    <col style="width:48px;" />   @* H.Ini *@
+                    <col style="width:48px;" />   @* H.Fin *@
+                    <col style="width:48px;" />   @* H.Avi *@
+                    <col style="width:48px;" />   @* H.Cie *@
+                    <col style="width:58px;" />   @* U/Pr *@
+                    <col style="width:58px;" />   @* U/Cb *@
+                    <col style="width:58px;" />   @* U/As *@
+                    <col style="width:36px;" />   @* Chq *@
+                    <col style="width:32px;" />   @* Ag *@
+                    <col style="width:240px;" />  @* Recorrido (largo → tooltip) *@
+                    <col style="width:82px;" />   @* Fletero *@
+                    <col style="width:170px;" />  @* Chofer (largo → tooltip) *@
+                    <col style="width:46px;" />   @* Veh *@
+                    <col style="width:72px;" />   @* Cliente *@
+                    <col style="width:42px;" />   @* Pax *@
+                    <col style="width:46px;" />   @* Agua *@
+                    <col style="width:40px;" />   @* Adj *@
+                    <col style="width:160px;" />  @* Comentario (largo → tooltip) *@
+                    <col style="width:96px;" />   @* Grupo *@
+                    <col style="width:84px;" />   @* Vuelo *@
+                    <col style="width:72px;" />   @* Guia *@
+                </colgroup>
                 <thead>
                     <tr>
-                        <th class="r" style="width:28px;">#</th>
+                        <th class="r">#</th>
                         <th>Estado</th>
                         <th>Reserva</th>
                         <th>H.Pre</th>
@@ -349,9 +407,9 @@ else
                             <td class="r" style="color:#9AA7BC; font-size:0.72rem;">@_nro</td>
                             <td><span class="estado-chip estado-chip--@f.Estado.ToLowerInvariant().Replace(" ", "-")">@f.Estado</span></td>
                             <td>@f.Fecha.ToString("dd/MM/yyyy")</td>
-                            <td>@f.HPre</td>
-                            <td>@f.HIni</td>
-                            <td>@f.HFin</td>
+                            <td class="td-bold">@f.HPre</td>
+                            <td class="td-bold">@f.HIni</td>
+                            <td class="td-bold">@f.HFin</td>
                             <td>@f.HAvi</td>
                             <td>@f.HCie</td>
                             <td>@f.UPr</td>
@@ -359,15 +417,15 @@ else
                             <td>@f.UAs</td>
                             <td class="c">@f.Chq</td>
                             <td class="c">@f.Ag</td>
-                            <td class="nowrap">@f.Recorrido</td>
+                            <td title="@f.Recorrido">@f.Recorrido</td>
                             <td>@f.Fletero</td>
-                            <td>@f.Chofer</td>
+                            <td title="@f.Chofer">@f.Chofer</td>
                             <td>@f.Veh</td>
-                            <td>@f.Cliente</td>
-                            <td class="r">@f.Pax</td>
-                            <td class="c">@f.Agua</td>
+                            <td class="td-bold">@f.Cliente</td>
+                            <td class="r td-bold">@f.Pax</td>
+                            <td class="c td-bold">@f.Agua</td>
                             <td class="c">@f.Adj</td>
-                            <td class="nowrap">@f.Comentario</td>
+                            <td class="td-bold" title="@f.Comentario">@f.Comentario</td>
                             <td>@(string.IsNullOrWhiteSpace(f.Grupo) ? "SIN GRUPO" : f.Grupo)</td>
                             <td>@(string.IsNullOrWhiteSpace(f.Vuelo) ? "SIN VUELO" : f.Vuelo)</td>
                             <td>@(string.IsNullOrWhiteSpace(f.Guia) ? "SIN GUIA" : f.Guia)</td>
@@ -376,35 +434,37 @@ else
                 </tbody>
             </table>
         </div>
-    </MudPaper>
 
-    @* Referencia de colores (leyenda) + estado del auto-refresh *@
-    <div class="d-flex align-center flex-wrap mt-2" style="gap:14px; font-size:0.78rem; color:#5B6B82;">
-        <span style="font-weight:600;">Estados:</span>
-        <span class="leyenda" style="background:#FFFF80;">ASIGNADO</span>
-        <span class="leyenda" style="background:#FF80FF;">CURSO</span>
-        <span class="leyenda" style="background:#C0C0C0;">FINALIZADO</span>
-        <span class="leyenda" style="background:#98C5BF;">FACTURADO</span>
-        <span class="leyenda" style="background:#52CEFE;">CHEQUEO</span>
-        <span style="margin-left:auto;">
-            @visibles.Count de @_filas.Count servicios
-            @if (_fecha is not null && EsFechaViva(DateOnly.FromDateTime(_fecha.Value)))
-            {
-                @if (_ultimoRefresh is not null)
+        @* Referencia de colores (leyenda) + estado del auto-refresh.
+           Va DENTRO del panel, debajo de .trafico-wrap: la tabla scrollea y esta
+           barra queda fija al pie del panel, siempre visible. *@
+        <div class="trafico-pie d-flex align-center flex-wrap" style="gap:14px; font-size:0.78rem; color:#5B6B82;">
+            <span style="font-weight:600;">Estados:</span>
+            <span class="leyenda" style="background:#FFFF80;">ASIGNADO</span>
+            <span class="leyenda" style="background:#FF80FF;">CURSO</span>
+            <span class="leyenda" style="background:#C0C0C0;">FINALIZADO</span>
+            <span class="leyenda" style="background:#98C5BF;">FACTURADO</span>
+            <span class="leyenda" style="background:#52CEFE;">CHEQUEO</span>
+            <span style="margin-left:auto;">
+                @visibles.Count de @_filas.Count servicios
+                @if (_fecha is not null && EsFechaViva(DateOnly.FromDateTime(_fecha.Value)))
                 {
-                    <span title="La planilla chequea cambios en la base cada 60 segundos y se actualiza sola">
-                        · <span style="color:#16A34A;">●</span> actualizado @_ultimoRefresh.Value.ToString("HH:mm:ss") · auto 60s
+                    @if (_ultimoRefresh is not null)
+                    {
+                        <span title="La planilla chequea cambios en la base cada 60 segundos y se actualiza sola">
+                            · <span style="color:#16A34A;">●</span> actualizado @_ultimoRefresh.Value.ToString("HH:mm:ss") · auto 60s
+                        </span>
+                    }
+                }
+                else
+                {
+                    <span title="Fecha histórica: Metrocar ya no modifica estos datos, así que la planilla no se auto-actualiza (se cargó una sola vez).">
+                        · <span style="color:#9AA7BC;">●</span> histórico · sin auto-actualización
                     </span>
                 }
-            }
-            else
-            {
-                <span title="Fecha histórica: Metrocar ya no modifica estos datos, así que la planilla no se auto-actualiza (se cargó una sola vez).">
-                    · <span style="color:#9AA7BC;">●</span> histórico · sin auto-actualización
-                </span>
-            }
-        </span>
-    </div>
+            </span>
+        </div>
+    </MudPaper>
     }
 
     </div>
@@ -465,6 +525,8 @@ else
 
     </div>
 }
+
+</div>@* /.planilla-page *@
 
 @code {
     private readonly System.Globalization.CultureInfo _ar =
@@ -541,6 +603,15 @@ else
         _combos = await Reports.GetCombosUnidadesTraficoAsync();
         await Cargar();
         _ = AutoRefreshLoop();   // fire-and-forget: vive mientras viva el circuito
+    }
+
+    // Mientras esta página esté montada, la ventana NO scrollea: la planilla ocupa
+    // exactamente el viewport y la única región scrolleable es la grilla de viajes.
+    // La clase la pone/saca JS sobre <body> (ver bloquearScrollVentana en descarga.js).
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await JS.InvokeVoidAsync("bloquearScrollVentana", true);
     }
 
     private async Task Cargar()
@@ -648,7 +719,13 @@ else
         }
     }
 
-    public void Dispose() => _timerRefresh?.Dispose();
+    public void Dispose()
+    {
+        _timerRefresh?.Dispose();
+        // Devolver el scroll normal a la ventana al salir de la planilla. Fire-and-forget:
+        // si el circuito ya se cerró, la interop falla silenciosamente (no pasa nada).
+        try { _ = JS.InvokeVoidAsync("bloquearScrollVentana", false); } catch { }
+    }
 
     private async Task OnFechaChanged(DateTime? nueva)
     {

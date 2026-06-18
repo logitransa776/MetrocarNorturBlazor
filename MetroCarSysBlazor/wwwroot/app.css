@@ -507,19 +507,190 @@ body.theme-gris .mud-appbar {
 }
 
 /* ═══════════════════════════════════════════
+   PLANILLA DE TRÁFICO — pantalla a viewport fijo
+   (toda la altura cabe en la ventana; la ÚNICA región que scrollea es la grilla)
+
+   Cómo funciona: la página agrega body.planilla-fixed al montarse (JS
+   bloquearScrollVentana) y lo saca al salir. Con esa clase armamos una cadena
+   flex desde el layout de MudBlazor hasta la grilla:
+
+     body (sin scroll)
+       └ .mud-layout (100vh, columna)
+           └ .mud-main-content (alto fijo = 100vh − AppBar, columna, sin scroll)
+               ├ .tablero-bar  → fijo arriba  (Vehículos/VTV/Matafuegos siempre visible)
+               └ .mud-container → flex:1, sin scroll
+                   └ .planilla-page (columna)
+                       ├ toolbar  → fijo
+                       ├ KPIs     → fijo
+                       └ grilla   → flex:1 → .trafico-wrap scrollea, .trafico-pie fija
+
+   Sin JS de medición ni timers: es puro layout CSS, no cuesta nada por render.
+   AppBar Dense = 48px (alto fijo del AppBar de MudBlazor).
+   ═══════════════════════════════════════════ */
+
+html:has(body.planilla-fixed),
+body.planilla-fixed {
+    height: 100%;
+    overflow: hidden;          /* mata el scroll de la VENTANA (req. 3) */
+}
+
+/* El layout ocupa exactamente el viewport */
+body.planilla-fixed .mud-layout {
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* Área de contenido = viewport − AppBar; columna que no scrollea.
+   Conservamos el padding-top que MudBlazor usa para despejar el AppBar fijo:
+   con AppBar Dense es el 75% de --mud-appbar-height (64px → 48px). Usamos la
+   misma fórmula de MudBlazor para no romperse si se cambia el alto del AppBar. */
+body.planilla-fixed .mud-main-content {
+    height: 100vh;
+    box-sizing: border-box;
+    padding-top: calc(var(--mud-appbar-height, 64px) - var(--mud-appbar-height, 64px) / 4);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* La franja Vehículos/VTV/Matafuegos queda SIEMPRE visible (req. 2) */
+body.planilla-fixed .tablero-bar {
+    flex: 0 0 auto;
+}
+
+/* El contenedor de MudBlazor toma el alto restante y no scrollea él mismo;
+   anulamos sus márgenes verticales (mt-4 mb-8) para no robar altura. */
+body.planilla-fixed .mud-main-content > .mud-container {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    margin-top: 8px !important;
+    margin-bottom: 0 !important;
+    padding-bottom: 6px;
+}
+
+/* La página: columna a alto completo. Toolbar y KPIs fijos; la grilla se estira. */
+.planilla-page {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+
+.planilla-page__toolbar,
+.planilla-page__kpis {
+    flex: 0 0 auto;
+}
+
+/* El bloque de grilla (normal o cancelados) ocupa el alto restante; dentro de él
+   scrollea solo la grilla (.trafico-wrap). El resto de hijos (alertas de
+   vacío, contador) quedan a su tamaño natural. */
+.planilla-page > .trafico-layout,
+.planilla-page > .planilla-page__grid {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/* El panel de cancelados es columna para que su .trafico-wrap se estire y el
+   contador de abajo quede visible. */
+body.planilla-fixed .planilla-page__grid {
+    display: flex;
+    flex-direction: column;
+}
+body.planilla-fixed .planilla-page__grid .trafico-wrap {
+    max-height: none;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/* En pantallas chicas el lock molesta (poca altura útil): se libera y la
+   ventana vuelve a scrollear normalmente. */
+@media (max-height: 600px) {
+    html:has(body.planilla-fixed),
+    body.planilla-fixed,
+    body.planilla-fixed .mud-layout,
+    body.planilla-fixed .mud-main-content {
+        height: auto;
+        overflow: visible;
+    }
+}
+
+/* ═══════════════════════════════════════════
    GRILLA DE TRÁFICO — planilla de servicios
    Estilo compacto tipo FoxPro, con scroll y header fijo
    ═══════════════════════════════════════════ */
 
+/* Fuera de la planilla-page (no debería pasar) conserva un tope sano.
+   Dentro de la página, el alto lo manda el flex de arriba (regla más abajo). */
 .trafico-wrap {
     max-height: calc(100vh - 230px);
     overflow: auto;
 }
 
+/* ═══════════════════════════════════════════
+   PANEL DE LA GRILLA — pie de leyenda fijo
+   El panel tiene alto acotado a la ventana y es flex-column: la tabla
+   (.trafico-wrap) scrollea en el medio y la leyenda (.trafico-pie) queda
+   SIEMPRE visible al pie, sin scrollear.
+   ═══════════════════════════════════════════ */
+.trafico-panel {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 200px);
+}
+
+/* Dentro del panel, la tabla toma el alto disponible y es la única que scrollea. */
+.trafico-panel .trafico-wrap {
+    max-height: none;   /* el alto lo controla el panel, no el wrap */
+    flex: 1 1 auto;
+    min-height: 0;      /* permite que el área scrolleable se encoja de verdad */
+}
+
+/* En modo viewport-fijo el alto del panel lo da el flex de la cadena, NO el
+   calc(100vh-200px) (que es solo un fallback). Así el panel llega justo hasta
+   el borde inferior de la ventana y la grilla scrollea ahí dentro. */
+body.planilla-fixed .trafico-layout,
+body.planilla-fixed .trafico-layout__main {
+    align-self: stretch;
+    height: 100%;
+    min-height: 0;
+}
+body.planilla-fixed .trafico-layout__main {
+    display: flex;
+    flex-direction: column;
+}
+body.planilla-fixed .trafico-panel {
+    max-height: none;
+    height: 100%;
+    flex: 1 1 auto;
+}
+
+/* Pie fijo: leyenda de estados + contador. No se encoge ni scrollea. */
+.trafico-pie {
+    flex: 0 0 auto;
+    gap: 14px;
+    padding: 6px 10px;
+    border-top: 1px solid var(--nt-grid-row-border, #D5DEEA);
+    background: #F7F9FC;
+}
+
 .trafico-grid {
     border-collapse: collapse;
-    width: 100%;
-    font-size: 0.78rem;
+    /* table-layout:fixed → los anchos los manda el <colgroup>, NO el contenido.
+       Las columnas quedan FIJAS y nunca se mueven al cambiar de día o filtrar. */
+    table-layout: fixed;
+    /* width:auto → con table-layout:fixed la tabla mide la SUMA de los anchos del
+       <colgroup>. Antes usábamos width:max-content, que invita al navegador a
+       recalcular según el contenido renderizado: con <Virtualize> (filas que
+       cambian al scrollear / al cambiar de día) eso hacía fluctuar el ancho de
+       columnas largas como Recorrido. Con width:auto + colgroup el ancho es
+       determinístico y NO depende de qué filas estén pintadas. min-width:100%
+       evita huecos a la derecha si las columnas suman menos que el panel. */
+    width: auto;
+    min-width: 100%;
+    /* fuente 2px más chica que antes (0.78rem ≈ 12.5px → 0.66rem ≈ 10.6px) */
+    font-size: 0.66rem;
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     white-space: nowrap;
 }
@@ -532,29 +703,45 @@ body.theme-gris .mud-appbar {
     color: var(--nt-grid-header-fg);
     font-weight: 700;
     text-align: left;
-    padding: 5px 7px;
+    padding: 5px 4px;   /* padding horizontal reducido: más aire para que el título entre */
     border: 1px solid var(--nt-grid-header-border);
     white-space: nowrap;
-    font-size: 0.82rem;
-    letter-spacing: 0.03em;
+    font-size: 0.70rem;   /* 2px más chico que antes (0.82rem) */
+    letter-spacing: 0.02em;
     color: #FFFFFF;
     outline: 2px solid rgba(255, 255, 255, 0.45);
     outline-offset: -2px;
+    /* Los TÍTULOS se ven SIEMPRE completos: no se truncan. Si un título no entra
+       en el ancho de su columna, se desborda visualmente (overflow:visible) en
+       vez de cortarse con … — es preferible ver el encabezado completo. Las
+       CELDAS de datos sí truncan (regla .trafico-grid tbody td más abajo). */
+    overflow: visible;
+    text-overflow: clip;
 }
 
 .trafico-grid thead th.c { text-align: center; }
 .trafico-grid thead th.r { text-align: right; }
 
 .trafico-grid tbody td {
-    padding: 1px 7px;
+    padding: 1px 6px;
     border: 1px solid var(--nt-grid-row-border);
     color: var(--nt-grid-fg);
-    overflow: visible;
+    /* ancho fijo: lo que no entra se corta con … (table-layout:fixed lo exige).
+       Las columnas largas (Recorrido/Chofer/Comentario) muestran el texto completo
+       en su tooltip nativo (atributo title en el .razor). */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .trafico-grid tbody td.c { text-align: center; }
 .trafico-grid tbody td.r { text-align: right; font-variant-numeric: tabular-nums; }
 .trafico-grid tbody td.nowrap { white-space: nowrap; }
+
+/* Valores destacados en negrita (NO el encabezado) — réplica de los campos que el
+   MetroCar viejo muestra en negrita: H.Pre, H.Ini, H.Fin, Cliente, Pax, Agua,
+   Comentario. Son los datos clave que el despachante lee de un vistazo. */
+.trafico-grid tbody td.td-bold { font-weight: 700; }
 
 /* PERFORMANCE — render virtual (dos capas, complementarias).
 
@@ -665,6 +852,25 @@ body.theme-gris .mud-appbar {
 
 .buses-panel__wrap {
     max-height: calc(100vh - 270px);
+    overflow: auto;
+}
+
+/* En modo viewport-fijo el panel Buses también llega hasta el borde inferior y
+   scrollea su propia tabla (no la ventana). */
+body.planilla-fixed .trafico-layout {
+    height: 100%;
+    min-height: 0;
+}
+body.planilla-fixed .buses-panel {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+body.planilla-fixed .buses-panel__wrap {
+    max-height: none;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 /* En pantallas angostas el panel pasa abajo, a lo ancho */
