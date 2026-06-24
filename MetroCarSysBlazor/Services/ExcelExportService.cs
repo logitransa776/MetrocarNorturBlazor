@@ -313,6 +313,267 @@ public class ExcelExportService
         return ms.ToArray();
     }
 
+    /// <summary>
+    /// Exporta el Resumen de Liquidaciones (botón Excel del form liquidacion_cliente.scx).
+    /// Hoja 1: cabeceras (la grilla superior). Hoja 2: detalle de TODAS las liquidaciones
+    /// filtradas (la grilla inferior, acumulada).
+    /// </summary>
+    public byte[] ResumenLiquidaciones(
+        IReadOnlyList<LiquidacionRow> cabeceras,
+        IReadOnlyDictionary<int, List<LiquidacionDetalleRow>> detallePorLiq)
+    {
+        using var wb = new XLWorkbook();
+
+        // --- Hoja 1: Liquidaciones (cabeceras) -------------------------------
+        var ws = wb.Worksheets.Add("Liquidaciones");
+        string[] h =
+        {
+            "Idliquidacion","Tipo","Fecha","Codigo","Razon_social","Moneda","Subtotal",
+            "Iva","Exento","Totalgral","Fcomp","Factura","F_pago","Forma_pago","Banco",
+            "N_pago","Retencion_iva","Retencion_iibb","Retencion_suss","Pago"
+        };
+        for (var c = 0; c < h.Length; c++) ws.Cell(1, c + 1).Value = h[c];
+
+        var r = 2;
+        foreach (var l in cabeceras)
+        {
+            ws.Cell(r, 1).Value = l.IdLiquidacion;
+            ws.Cell(r, 2).Value = l.Tipo;
+            if (l.Fecha is not null) { ws.Cell(r, 3).Value = l.Fecha.Value.ToDateTime(TimeOnly.MinValue); ws.Cell(r, 3).Style.DateFormat.Format = "dd/mm/yyyy"; }
+            ws.Cell(r, 4).Value = l.Codigo;
+            ws.Cell(r, 5).Value = l.RazonSocial;
+            ws.Cell(r, 6).Value = l.Moneda;
+            ws.Cell(r, 7).Value = l.Subtotal; ws.Cell(r, 7).Style.NumberFormat.Format = "#,##0.00";
+            ws.Cell(r, 8).Value = l.Iva;      ws.Cell(r, 8).Style.NumberFormat.Format = "#,##0.00";
+            ws.Cell(r, 9).Value = l.Exento;   ws.Cell(r, 9).Style.NumberFormat.Format = "#,##0.00";
+            ws.Cell(r, 10).Value = l.TotalGral; ws.Cell(r, 10).Style.NumberFormat.Format = "#,##0.00";
+            if (l.Fcomp is not null) { ws.Cell(r, 11).Value = l.Fcomp.Value.ToDateTime(TimeOnly.MinValue); ws.Cell(r, 11).Style.DateFormat.Format = "dd/mm/yyyy"; }
+            ws.Cell(r, 12).Value = l.Factura;
+            if (l.FPago is not null) { ws.Cell(r, 13).Value = l.FPago.Value.ToDateTime(TimeOnly.MinValue); ws.Cell(r, 13).Style.DateFormat.Format = "dd/mm/yyyy"; }
+            ws.Cell(r, 14).Value = l.FormaPago;
+            ws.Cell(r, 15).Value = l.Banco;
+            ws.Cell(r, 16).Value = l.NPago;
+            ws.Cell(r, 17).Value = l.RetIva;  ws.Cell(r, 17).Style.NumberFormat.Format = "#,##0.00";
+            ws.Cell(r, 18).Value = l.RetIibb; ws.Cell(r, 18).Style.NumberFormat.Format = "#,##0.00";
+            ws.Cell(r, 19).Value = l.RetSuss; ws.Cell(r, 19).Style.NumberFormat.Format = "#,##0.00";
+            ws.Cell(r, 20).Value = l.Pago;    ws.Cell(r, 20).Style.NumberFormat.Format = "#,##0.00";
+            r++;
+        }
+        ws.Row(1).Style.Font.Bold = true;
+        ws.Row(1).Style.Fill.BackgroundColor = XLColor.FromHtml("#112F5B");
+        ws.Row(1).Style.Font.FontColor = XLColor.White;
+        ws.SheetView.FreezeRows(1);
+        ws.Columns().AdjustToContents();
+
+        // --- Hoja 2: Detalle (todas las liquidaciones filtradas) -------------
+        var wsD = wb.Worksheets.Add("Detalle");
+        string[] hd =
+        {
+            "Idliquidacion","Id","Id_viaje","Tipo","Id_adicional","Nombre","Moneda",
+            "Cantidad","Precio","Importe","D_destino_prov","Km_recorrido","Descuento",
+            "Incremento","Id_viaje_int"
+        };
+        for (var c = 0; c < hd.Length; c++) wsD.Cell(1, c + 1).Value = hd[c];
+
+        var rd = 2;
+        foreach (var l in cabeceras)
+        {
+            if (!detallePorLiq.TryGetValue(l.IdLiquidacion, out var dets)) continue;
+            foreach (var d in dets)
+            {
+                wsD.Cell(rd, 1).Value = l.IdLiquidacion;
+                wsD.Cell(rd, 2).Value = d.Id;
+                wsD.Cell(rd, 3).Value = d.IdViaje;
+                wsD.Cell(rd, 4).Value = d.Tipo;
+                wsD.Cell(rd, 5).Value = d.IdAdicional;
+                wsD.Cell(rd, 6).Value = d.Nombre;
+                wsD.Cell(rd, 7).Value = d.Moneda;
+                wsD.Cell(rd, 8).Value = d.Cantidad;
+                wsD.Cell(rd, 9).Value = d.Precio;   wsD.Cell(rd, 9).Style.NumberFormat.Format = "#,##0.00";
+                wsD.Cell(rd, 10).Value = d.Importe; wsD.Cell(rd, 10).Style.NumberFormat.Format = "#,##0.00";
+                wsD.Cell(rd, 11).Value = d.DDestinoProv;
+                wsD.Cell(rd, 12).Value = d.KmRecorrido;
+                wsD.Cell(rd, 13).Value = d.Descuento;
+                wsD.Cell(rd, 14).Value = d.Incremento;
+                wsD.Cell(rd, 15).Value = d.IdViajeInt;
+                rd++;
+            }
+        }
+        wsD.Row(1).Style.Font.Bold = true;
+        wsD.Row(1).Style.Fill.BackgroundColor = XLColor.FromHtml("#112F5B");
+        wsD.Row(1).Style.Font.FontColor = XLColor.White;
+        wsD.SheetView.FreezeRows(1);
+        wsD.Columns().AdjustToContents();
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Exporta la proyección de Facturación estimada.
+    /// Hoja 1: por mes. Hoja 2: por cliente.
+    /// </summary>
+    public byte[] FacturacionEstimada(
+        IReadOnlyList<FacturacionEstimadaMesRow> porMes,
+        IReadOnlyList<FacturacionEstimadaClienteRow> porCliente)
+    {
+        using var wb = new XLWorkbook();
+
+        var wsM = wb.Worksheets.Add("Por mes");
+        wsM.Cell(1, 1).Value = "Mes";
+        wsM.Cell(1, 2).Value = "Liquidaciones";
+        wsM.Cell(1, 3).Value = "Servicios";
+        wsM.Cell(1, 4).Value = "Total estimado";
+        var r = 2;
+        foreach (var m in porMes)
+        {
+            wsM.Cell(r, 1).Value = m.Mes;
+            wsM.Cell(r, 2).Value = m.Liquidaciones;
+            wsM.Cell(r, 3).Value = m.Servicios;
+            wsM.Cell(r, 4).Value = m.TotalEstimado; wsM.Cell(r, 4).Style.NumberFormat.Format = "#,##0.00";
+            r++;
+        }
+        wsM.Row(1).Style.Font.Bold = true;
+        wsM.Columns().AdjustToContents();
+
+        var wsC = wb.Worksheets.Add("Por cliente");
+        wsC.Cell(1, 1).Value = "Código";
+        wsC.Cell(1, 2).Value = "Razón social";
+        wsC.Cell(1, 3).Value = "Liquidaciones";
+        wsC.Cell(1, 4).Value = "Total estimado";
+        var rc = 2;
+        foreach (var c in porCliente)
+        {
+            wsC.Cell(rc, 1).Value = c.Codigo;
+            wsC.Cell(rc, 2).Value = c.RazonSocial;
+            wsC.Cell(rc, 3).Value = c.Liquidaciones;
+            wsC.Cell(rc, 4).Value = c.TotalEstimado; wsC.Cell(rc, 4).Style.NumberFormat.Format = "#,##0.00";
+            rc++;
+        }
+        wsC.Row(1).Style.Font.Bold = true;
+        wsC.Columns().AdjustToContents();
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Exporta el comprobante de liquidación formato RESUMEN (botón "Liq Excel" /
+    /// "Excel" del form FoxPro facturacion_cliente_nueva.scx, que vuelca el cursor
+    /// tmpLiquidacion). Todo calculado en vivo, sin tocar la base.
+    /// Hoja 1: Servicios (detalle por viaje) + cuadro de totales debajo.
+    /// Hoja 2: Adicionales (detalle por viaje).
+    /// </summary>
+    public byte[] LiquidacionResumen(
+        string grupo,
+        string clienteNombre,
+        IReadOnlyList<ViajeValorizadoRow> viajes,
+        IReadOnlyList<ViajeAdicionalRow> adicionales,
+        LiquidacionTotalesRow totales)
+    {
+        const string Money = "#,##0.00";
+        using var wb = new XLWorkbook();
+
+        // ── Hoja 1: Servicios + Totales ──────────────────────────────────────
+        var ws = wb.Worksheets.Add("Servicios");
+
+        ws.Cell(1, 1).Value = "Liquidación — Resumen";
+        ws.Cell(1, 1).Style.Font.Bold = true;
+        ws.Cell(1, 1).Style.Font.FontSize = 14;
+        ws.Cell(2, 1).Value = "Cliente:";   ws.Cell(2, 2).Value = clienteNombre;
+        ws.Cell(3, 1).Value = "Grupo:";     ws.Cell(3, 2).Value = grupo;
+        ws.Cell(4, 1).Value = "Emisión:";   ws.Cell(4, 2).Value = DateTime.Today; ws.Cell(4, 2).Style.DateFormat.Format = "dd/mm/yyyy";
+        ws.Range(2, 1, 4, 1).Style.Font.Bold = true;
+
+        var hr = 6;   // fila del encabezado de la grilla
+        string[] h = { "Id Viaje", "Fecha/Hora", "Servicio/Cabecera", "Recorrido", "Vehículo", "Pax", "Km", "Importe" };
+        for (var c = 0; c < h.Length; c++) ws.Cell(hr, c + 1).Value = h[c];
+        ws.Row(hr).Style.Font.Bold = true;
+        ws.Row(hr).Style.Fill.BackgroundColor = XLColor.FromHtml("#112F5B");
+        ws.Row(hr).Style.Font.FontColor = XLColor.White;
+
+        var r = hr + 1;
+        foreach (var v in viajes)
+        {
+            if (v.IdViaje > 0) ws.Cell(r, 1).Value = v.IdViaje;
+            if (v.HsInicio is not null) { ws.Cell(r, 2).Value = v.HsInicio.Value; ws.Cell(r, 2).Style.DateFormat.Format = "dd/mm/yyyy HH:mm"; }
+            ws.Cell(r, 3).Value = string.IsNullOrWhiteSpace(v.Cabecera) ? v.Servicio : v.Cabecera;
+            ws.Cell(r, 4).Value = v.Destino;
+            ws.Cell(r, 5).Value = v.Vehiculo;
+            if (v.Pax > 0) ws.Cell(r, 6).Value = v.Pax;
+            if (v.Km > 0) ws.Cell(r, 7).Value = v.Km;
+            if (v.SinTarifa) ws.Cell(r, 8).Value = "S/TARIFA";
+            else { ws.Cell(r, 8).Value = v.ImporteNeto; ws.Cell(r, 8).Style.NumberFormat.Format = Money; }
+            r++;
+        }
+
+        // Subtotal servicios
+        ws.Cell(r, 5).Value = "Subtotal servicios";
+        ws.Cell(r, 6).Value = viajes.Sum(v => v.Pax);
+        ws.Cell(r, 7).Value = viajes.Sum(v => v.Km);
+        ws.Cell(r, 8).Value = viajes.Where(v => !v.SinTarifa).Sum(v => v.ImporteNeto);
+        ws.Cell(r, 8).Style.NumberFormat.Format = Money;
+        ws.Range(r, 5, r, 8).Style.Font.Bold = true;
+
+        // Cuadro de totales (réplica de tmpLiquidacionTotal), debajo del detalle.
+        var t = r + 3;
+        ws.Cell(t, 1).Value = "Totales de la liquidación";
+        ws.Cell(t, 1).Style.Font.Bold = true;
+        void Tot(string lbl, decimal val, bool bold = false)
+        {
+            t++;
+            ws.Cell(t, 1).Value = lbl;
+            ws.Cell(t, 2).Value = val; ws.Cell(t, 2).Style.NumberFormat.Format = Money;
+            if (bold) ws.Range(t, 1, t, 2).Style.Font.Bold = true;
+        }
+        Tot($"Servicios {(totales.Moneda.Length > 0 ? totales.Moneda : "PESOS")}", totales.Total);
+        if (totales.Extra != 0) Tot("Extras", totales.Extra);
+        if (totales.Descuento != 0) Tot("Descuento", -totales.Descuento);
+        if (totales.Incremento != 0) Tot("Incremento", totales.Incremento);
+        if (totales.TipoCambio != 1m) Tot($"Total a facturar (× {totales.TipoCambio:#,##0.00})", totales.TotalFinal);
+        if (totales.Iva > 0) { Tot($"IVA {totales.Piva:#,##0.00}%", totales.Iva); Tot("Total más IVA", totales.TotalConIva); }
+        if (totales.Adicionales > 0) Tot("Adicionales exentos", totales.Adicionales);
+        Tot("TOTAL LIQUIDACIÓN", totales.TotalLiquidacion, bold: true);
+
+        ws.Columns().AdjustToContents();
+
+        // ── Hoja 2: Adicionales (detalle por viaje) ──────────────────────────
+        var wsA = wb.Worksheets.Add("Adicionales");
+        string[] ha = { "Id Viaje", "Adicional", "Nombre", "Cantidad", "Precio", "Total", "Estado", "Inicio", "Vehículo", "Servicio/Cabecera", "Destino" };
+        for (var c = 0; c < ha.Length; c++) wsA.Cell(1, c + 1).Value = ha[c];
+        wsA.Row(1).Style.Font.Bold = true;
+        wsA.Row(1).Style.Fill.BackgroundColor = XLColor.FromHtml("#112F5B");
+        wsA.Row(1).Style.Font.FontColor = XLColor.White;
+
+        var ra = 2;
+        foreach (var a in adicionales)
+        {
+            if (a.IdViaje > 0) wsA.Cell(ra, 1).Value = a.IdViaje;
+            wsA.Cell(ra, 2).Value = a.IdAdicional;
+            wsA.Cell(ra, 3).Value = a.Nombre;
+            wsA.Cell(ra, 4).Value = a.Cantidad;
+            if (a.Estado != "EXCLUIDO") { wsA.Cell(ra, 5).Value = a.Precio; wsA.Cell(ra, 5).Style.NumberFormat.Format = Money; }
+            if (a.Estado != "EXCLUIDO") { wsA.Cell(ra, 6).Value = a.Total;  wsA.Cell(ra, 6).Style.NumberFormat.Format = Money; }
+            wsA.Cell(ra, 7).Value = a.SinTarifa ? a.Estado + " · S/TARIFA" : a.Estado;
+            if (a.Inicio is not null) { wsA.Cell(ra, 8).Value = a.Inicio.Value; wsA.Cell(ra, 8).Style.DateFormat.Format = "dd/mm/yyyy HH:mm"; }
+            wsA.Cell(ra, 9).Value = a.Vehiculo;
+            wsA.Cell(ra, 10).Value = string.IsNullOrWhiteSpace(a.Cabecera) ? a.Servicio : a.Cabecera;
+            wsA.Cell(ra, 11).Value = a.Destino;
+            ra++;
+        }
+        wsA.Cell(ra, 5).Value = "Total exento";
+        wsA.Cell(ra, 6).Value = totales.Adicionales; wsA.Cell(ra, 6).Style.NumberFormat.Format = Money;
+        wsA.Range(ra, 5, ra, 6).Style.Font.Bold = true;
+        wsA.SheetView.FreezeRows(1);
+        wsA.Columns().AdjustToContents();
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
+    }
+
     /// <summary>Paleta de colores por estado, idéntica a grid_color_viaje (funcion.prg).</summary>
     private static string? ColorEstado(string estado) => estado switch
     {

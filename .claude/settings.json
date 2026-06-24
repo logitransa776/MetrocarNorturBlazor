@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Read(//c/MetroCarSys/Forms/**)",
-      "Bash(git init *)"
+      "Bash(git init *)",
+      "Bash(ls C:/MetroCarSys/Forms/liquidacion_cliente*.scx)",
+      "Bash(ls C:/MetroCarSys/Menus/MENU_PRINCIPAL*.mpr)"
     ]
   },
   "skills": [

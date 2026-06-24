@@ -29,3 +29,38 @@ window.descargarArchivo = async (nombreArchivo, streamRef) => {
     a.remove();
     URL.revokeObjectURL(url);
 };
+
+// Imprime SOLO el elemento indicado (por id) en una ventana aislada — lo usa el
+// comprobante "Genera Resumen" de Liquidación a Clientes para imprimir/guardar PDF
+// sin arrastrar el resto de la app (drawer, AppBar, etc.). Copia los <link>/<style>
+// del documento para conservar el formato del comprobante.
+window.imprimirElemento = (idElemento, titulo) => {
+    const nodo = document.getElementById(idElemento);
+    if (!nodo) return;
+
+    const estilos = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
+        .map(el => el.outerHTML)
+        .join('\n');
+
+    const win = window.open('', '_blank', 'width=900,height=700');
+    if (!win) return;   // bloqueado por el navegador
+
+    win.document.open();
+    win.document.write(
+        '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">' +
+        '<title>' + (titulo ?? 'Comprobante') + '</title>' +
+        estilos +
+        '<style>@page{size:A4;margin:12mm;} body{background:#fff;margin:0;padding:0;}</style>' +
+        '</head><body class="' + document.body.className + '">' +
+        nodo.outerHTML +
+        '</body></html>'
+    );
+    win.document.close();
+
+    // Esperar a que el navegador aplique los estilos antes de imprimir.
+    win.focus();
+    setTimeout(() => {
+        win.print();
+        win.close();
+    }, 350);
+};

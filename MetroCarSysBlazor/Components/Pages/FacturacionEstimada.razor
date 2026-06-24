@@ -1,0 +1,176 @@
+@page "/facturacion-estimada"
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Liquidaciones estimadas — NORTUR</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-2">
+    <MudText Typo="Typo.h6" Style="font-weight:800; color:#112F5B;">
+        Liquidaciones estimadas
+    </MudText>
+    <MudText Typo="Typo.caption" Style="color:#7A90AD;">
+        Facturación · Proyección de venta por período — vista de solo lectura desde replicaVPF
+    </MudText>
+</div>
+
+@* ── Filtros ── *@
+<MudPaper Class="pa-2 px-3 mb-2" Elevation="1" Style="border-radius:12px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-end" style="gap:12px;">
+        <div class="d-flex align-end" style="gap:10px;">
+            @* Mismo patrón que el datepicker de Planilla Tráfico (que funciona bien). *@
+            <MudDatePicker Date="_desde" Label="Desde" DateFormat="dd/MM/yyyy"
+                           Editable="true" Style="min-width:140px;"
+                           Culture="_ar" PickerVariant="PickerVariant.Dialog"
+                           DateChanged="@(d => _desde = d)" />
+            <MudDatePicker Date="_hasta" Label="Hasta" DateFormat="dd/MM/yyyy"
+                           Editable="true" Style="min-width:140px;"
+                           Culture="_ar" PickerVariant="PickerVariant.Dialog"
+                           DateChanged="@(d => _hasta = d)" />
+        </div>
+        <MudButton Variant="Variant.Filled" Color="MudColor.Primary" StartIcon="@Icons.Material.Filled.Calculate"
+                   OnClick="Valorizar" Disabled="_cargando">Valorizar</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="MudColor.Success" StartIcon="@Icons.Material.Filled.TableView"
+                   OnClick="DescargarExcel" Disabled="_cargando || !_porMes.Any()">Excel</MudButton>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    @* ── KPIs ── *@
+    <div class="d-flex flex-wrap mb-2" style="gap:10px;">
+        <KpiCard Label="Total estimado" Value="@($"$ {Money(_porMes.Sum(m => m.TotalEstimado))}")" Color="@NorturColors.Naranja" />
+        <KpiCard Label="Liquidaciones" Value="@Fmt(_porMes.Sum(m => m.Liquidaciones))" />
+        <KpiCard Label="Servicios" Value="@Fmt(_porMes.Sum(m => m.Servicios))" />
+        <KpiCard Label="Clientes" Value="@Fmt(_porCliente.Count)" />
+    </div>
+
+    @if (!_porMes.Any())
+    {
+        <MudAlert Severity="Severity.Info">No hay liquidaciones de clientes en el período elegido.</MudAlert>
+    }
+    else
+    {
+        @* ── Gráfico mensual ── *@
+        <MudPaper Elevation="1" Class="pa-3 mb-3" Style="border-radius:14px;">
+            <ApexChart TItem="FacturacionEstimadaMesRow" Title="Facturación estimada por mes" Options="_opts">
+                <ApexPointSeries TItem="FacturacionEstimadaMesRow"
+                                 Items="_porMes" Name="Total estimado"
+                                 SeriesType="SeriesType.Bar"
+                                 XValue="@(m => m.Mes)"
+                                 YValue="@(m => m.TotalEstimado)" />
+            </ApexChart>
+        </MudPaper>
+
+        <MudGrid>
+            @* ── Tabla por mes ── *@
+            <MudItem xs="12" md="5">
+                <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+                    <div class="pa-2 px-3" style="background:#F4F7FC; border-bottom:1px solid #E2E9F3; font-weight:700; color:#112F5B; font-size:0.85rem;">
+                        Por mes
+                    </div>
+                    <MudTable Items="_porMes" Dense="true" Hover="true" Striped="true" Bordered="false" Class="cli-grid grid-compacta" T="FacturacionEstimadaMesRow">
+                        <HeaderContent>
+                            <MudTh>Mes</MudTh>
+                            <MudTh Style="text-align:right;">Liquidaciones</MudTh>
+                            <MudTh Style="text-align:right;">Servicios</MudTh>
+                            <MudTh Style="text-align:right;">Total estimado</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd DataLabel="Mes" Style="font-weight:700; color:#003AA0;">@context.Mes</MudTd>
+                            <MudTd DataLabel="Liquidaciones" Style="text-align:right;">@Fmt(context.Liquidaciones)</MudTd>
+                            <MudTd DataLabel="Servicios" Style="text-align:right;">@Fmt(context.Servicios)</MudTd>
+                            <MudTd DataLabel="Total estimado" Style="text-align:right; font-weight:600;">@Money(context.TotalEstimado)</MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                </MudPaper>
+            </MudItem>
+
+            @* ── Tabla por cliente (top) ── *@
+            <MudItem xs="12" md="7">
+                <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+                    <div class="pa-2 px-3" style="background:#F4F7FC; border-bottom:1px solid #E2E9F3; font-weight:700; color:#112F5B; font-size:0.85rem;">
+                        Por cliente
+                    </div>
+                    <MudTable Items="_porCliente" Dense="true" Hover="true" Striped="true" Bordered="false" Class="cli-grid grid-compacta"
+                              FixedHeader="true" Height="420px" T="FacturacionEstimadaClienteRow" Virtualize="true">
+                        <HeaderContent>
+                            <MudTh>Código</MudTh>
+                            <MudTh>Razón social</MudTh>
+                            <MudTh Style="text-align:right;">Liquidaciones</MudTh>
+                            <MudTh Style="text-align:right;">Total estimado</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd DataLabel="Código" Style="font-weight:700; color:#003AA0;">@context.Codigo</MudTd>
+                            <MudTd DataLabel="Razón social">@context.RazonSocial</MudTd>
+                            <MudTd DataLabel="Liquidaciones" Style="text-align:right;">@Fmt(context.Liquidaciones)</MudTd>
+                            <MudTd DataLabel="Total estimado" Style="text-align:right; font-weight:600;">@Money(context.TotalEstimado)</MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    }
+}
+
+@code {
+    private List<FacturacionEstimadaMesRow> _porMes = new();
+    private List<FacturacionEstimadaClienteRow> _porCliente = new();
+    private bool _cargando = true;
+
+    private DateTime? _desde = new DateTime(DateTime.Today.Year, 1, 1);
+    private DateTime? _hasta = DateTime.Today;
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private ApexChartOptions<FacturacionEstimadaMesRow> _opts = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false } },
+        Colors = new List<string> { "#003AA0" },
+        DataLabels = new() { Enabled = false }
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync()) { Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", false); return; }
+        if (!Permisos.Tiene('F')) { Nav.NavigateTo("/", false); return; }   // módulo Facturación
+        await CargarAsync();
+    }
+
+    private async Task Valorizar() => await CargarAsync();
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        var d = DateOnly.FromDateTime(_desde ?? new DateTime(DateTime.Today.Year, 1, 1));
+        var h = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
+        _porMes = await Reports.GetFacturacionEstimadaPorMesAsync(d, h);
+        _porCliente = await Reports.GetFacturacionEstimadaPorClienteAsync(d, h);
+        _cargando = false;
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = Excel.FacturacionEstimada(_porMes, _porCliente);
+        var nombre = $"facturacion_estimada_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    private string Money(decimal v) => v.ToString("N2", _ar);
+    private string Fmt(int n) => n.ToString("#,0", _ar);
+}

@@ -865,29 +865,63 @@ public class ReportService
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
             using var cmd = conn.CreateCommand();
+            // Réplica EXACTA de aviso_agenda.prg del FoxPro (verificado contra el .exe productivo,
+            // 24/06/2026). Reglas no obvias que copiamos mal antes y acá están corregidas:
+            //   1) Las ventanas de aviso salen de `parametro`, NO son 30 días fijos:
+            //      aviso_veh (VTV) ≈ 7, aviso_mat (matafuego) ≈ 10, aviso_cho (chofer) ≈ 30.
+            //   2) Vehículos: solo `f_delete` vacío + uso='PROPIO'. NO se filtra por `activo`.
+            //   3) En FoxPro `Empty(fecha) <= Date()+n` da TRUE, así que un vencimiento SIN FECHA
+            //      cuenta como VENCIDO (ej: 99 vehículos sin matafuego → entran en el total).
+            //   4) El total del FoxPro = vencidos + por-vencer. Acá lo desglosamos en dos columnas
+            //      excluyentes (Vencidos rojo / ProxVencer ámbar) para la UI; su suma = total FoxPro.
+            //   Columnas reales (truncadas a 10 en la réplica): vehiculo.verificac2=VTV,
+            //   vehiculo.vencimient=matafuego; chofer.registro_v=registro, registro_3=CNRT, registro_4=AEP.
             cmd.CommandText = """
-                DECLARE @hoy  DATE = CAST(GETDATE() AS DATE);
-                DECLARE @p30  DATE = DATEADD(day, 30, @hoy);
+                DECLARE @hoy   DATE = CAST(GETDATE() AS DATE);
+
+                DECLARE @avVeh INT = (SELECT TOP 1 aviso_veh FROM parametro);
+                DECLARE @avMat INT = (SELECT TOP 1 aviso_mat FROM parametro);
+                DECLARE @avCho INT = (SELECT TOP 1 aviso_cho FROM parametro);
+                SET @avVeh = ISNULL(@avVeh, 7);
+                SET @avMat = ISNULL(@avMat, 10);
+                SET @avCho = ISNULL(@avCho, 30);
+                DECLARE @vtvLim DATE = DATEADD(day, @avVeh, @hoy);
+                DECLARE @matLim DATE = DATEADD(day, @avMat, @hoy);
+                DECLARE @choLim DATE = DATEADD(day, @avCho, @hoy);
 
                 SELECT
-                    -- Vehículos
-                    SUM(CASE WHEN activo=1 AND uso='PROPIO' AND (_deleted=0 OR _deleted IS NULL) THEN 1 ELSE 0 END)                                                                          AS Vehiculos,
-                    SUM(CASE WHEN activo=1 AND uso='PROPIO' AND (_deleted=0 OR _deleted IS NULL) AND verificac2 IS NOT NULL AND verificac2 <= @p30 THEN 1 ELSE 0 END)                        AS VtvProxVencer,
-                    SUM(CASE WHEN activo=1 AND uso='PROPIO' AND (_deleted=0 OR _deleted IS NULL) AND verificac2 IS NOT NULL AND verificac2 <  @hoy THEN 1 ELSE 0 END)                        AS VtvVencidos,
-                    SUM(CASE WHEN activo=1 AND uso='PROPIO' AND (_deleted=0 OR _deleted IS NULL) AND vencimient  IS NOT NULL AND vencimient  <= @p30 THEN 1 ELSE 0 END)                      AS MatProxVencer,
-                    SUM(CASE WHEN activo=1 AND uso='PROPIO' AND (_deleted=0 OR _deleted IS NULL) AND vencimient  IS NOT NULL AND vencimient  <  @hoy THEN 1 ELSE 0 END)                      AS MatVencidos
-                FROM vehiculo;
+                    @avVeh AS AvisoVeh, @avMat AS AvisoMat, @avCho AS AvisoCho,
+                    -- Vehículos PROPIOS activos (sin f_delete). NO se mira `activo`.
+                    SUM(CASE WHEN base=1 THEN 1 ELSE 0 END)                                                                  AS Vehiculos,
+                    -- VTV (verificac2): vencido = sin fecha o < hoy; por vencer = hoy..hoy+avVeh
+                    SUM(CASE WHEN base=1 AND (verificac2 IS NULL OR verificac2 <  @hoy)                            THEN 1 ELSE 0 END) AS VtvVencidos,
+                    SUM(CASE WHEN base=1 AND  verificac2 IS NOT NULL AND verificac2 >= @hoy AND verificac2 <= @vtvLim THEN 1 ELSE 0 END) AS VtvProxVencer,
+                    -- Matafuego (vencimient)
+                    SUM(CASE WHEN base=1 AND (vencimient IS NULL OR vencimient <  @hoy)                            THEN 1 ELSE 0 END) AS MatVencidos,
+                    SUM(CASE WHEN base=1 AND  vencimient IS NOT NULL AND vencimient >= @hoy AND vencimient <= @matLim THEN 1 ELSE 0 END) AS MatProxVencer
+                FROM (
+                    SELECT verificac2, vencimient,
+                           CASE WHEN f_delete IS NULL AND uso = 'PROPIO' THEN 1 ELSE 0 END AS base
+                    FROM vehiculo
+                ) v;
 
                 SELECT
-                    -- Choferes
-                    SUM(CASE WHEN (f_delete IS NULL OR LEN(LTRIM(RTRIM(CAST(f_delete AS nvarchar))))=0) AND (_deleted=0 OR _deleted IS NULL) THEN 1 ELSE 0 END)                                                                                                                    AS Choferes,
-                    SUM(CASE WHEN (f_delete IS NULL OR LEN(LTRIM(RTRIM(CAST(f_delete AS nvarchar))))=0) AND (_deleted=0 OR _deleted IS NULL) AND registro_v IS NOT NULL AND registro_v <= @p30 THEN 1 ELSE 0 END)                                                                   AS RegProxVencer,
-                    SUM(CASE WHEN (f_delete IS NULL OR LEN(LTRIM(RTRIM(CAST(f_delete AS nvarchar))))=0) AND (_deleted=0 OR _deleted IS NULL) AND registro_v IS NOT NULL AND registro_v <  @hoy THEN 1 ELSE 0 END)                                                                   AS RegVencidos,
-                    SUM(CASE WHEN (f_delete IS NULL OR LEN(LTRIM(RTRIM(CAST(f_delete AS nvarchar))))=0) AND (_deleted=0 OR _deleted IS NULL) AND registro_3 IS NOT NULL AND registro_3 <= @p30  AND registro_3 < '2090-01-01' THEN 1 ELSE 0 END)                                    AS CnrtProxVencer,
-                    SUM(CASE WHEN (f_delete IS NULL OR LEN(LTRIM(RTRIM(CAST(f_delete AS nvarchar))))=0) AND (_deleted=0 OR _deleted IS NULL) AND registro_3 IS NOT NULL AND registro_3 <  @hoy  AND registro_3 < '2090-01-01' THEN 1 ELSE 0 END)                                    AS CnrtVencidos,
-                    SUM(CASE WHEN (f_delete IS NULL OR LEN(LTRIM(RTRIM(CAST(f_delete AS nvarchar))))=0) AND (_deleted=0 OR _deleted IS NULL) AND registro_4 IS NOT NULL AND registro_4 <= @p30  AND registro_4 > '2000-01-01' THEN 1 ELSE 0 END)                                    AS AepProxVencer,
-                    SUM(CASE WHEN (f_delete IS NULL OR LEN(LTRIM(RTRIM(CAST(f_delete AS nvarchar))))=0) AND (_deleted=0 OR _deleted IS NULL) AND registro_4 IS NOT NULL AND registro_4 <  @hoy  AND registro_4 > '2000-01-01' THEN 1 ELSE 0 END)                                    AS AepVencidos
-                FROM chofer;
+                    SUM(CASE WHEN base=1 THEN 1 ELSE 0 END)                                                                  AS Choferes,
+                    -- Registro (registro_v)
+                    SUM(CASE WHEN base=1 AND (registro_v IS NULL OR registro_v <  @hoy)                            THEN 1 ELSE 0 END) AS RegVencidos,
+                    SUM(CASE WHEN base=1 AND  registro_v IS NOT NULL AND registro_v >= @hoy AND registro_v <= @choLim THEN 1 ELSE 0 END) AS RegProxVencer,
+                    -- CNRT (registro_3)
+                    SUM(CASE WHEN base=1 AND (registro_3 IS NULL OR registro_3 <  @hoy)                            THEN 1 ELSE 0 END) AS CnrtVencidos,
+                    SUM(CASE WHEN base=1 AND  registro_3 IS NOT NULL AND registro_3 >= @hoy AND registro_3 <= @choLim THEN 1 ELSE 0 END) AS CnrtProxVencer,
+                    -- AEP (registro_4): el FoxPro NO cuenta los NULL acá (casi todos lo tienen vacío),
+                    -- por eso AEP solo considera fechas cargadas.
+                    SUM(CASE WHEN base=1 AND registro_4 IS NOT NULL AND registro_4 <  @hoy                          THEN 1 ELSE 0 END) AS AepVencidos,
+                    SUM(CASE WHEN base=1 AND registro_4 IS NOT NULL AND registro_4 >= @hoy AND registro_4 <= @choLim THEN 1 ELSE 0 END) AS AepProxVencer
+                FROM (
+                    SELECT registro_v, registro_3, registro_4,
+                           CASE WHEN (f_delete IS NULL OR LEN(LTRIM(RTRIM(CAST(f_delete AS nvarchar)))) = 0) THEN 1 ELSE 0 END AS base
+                    FROM chofer
+                ) c;
                 """;
 
             using var reader = await cmd.ExecuteReaderAsync();
@@ -895,22 +929,25 @@ public class ReportService
             var dto = new TableroDto();
             if (await reader.ReadAsync())
             {
-                dto.Vehiculos      = reader.GetInt32(0);
-                dto.VtvProxVencer  = reader.GetInt32(1);
-                dto.VtvVencidos    = reader.GetInt32(2);
-                dto.MatProxVencer  = reader.GetInt32(3);
-                dto.MatVencidos    = reader.GetInt32(4);
+                dto.AvisoVeh       = reader.GetInt32(0);
+                dto.AvisoMat       = reader.GetInt32(1);
+                dto.AvisoCho       = reader.GetInt32(2);
+                dto.Vehiculos      = reader.GetInt32(3);
+                dto.VtvVencidos    = reader.GetInt32(4);
+                dto.VtvProxVencer  = reader.GetInt32(5);
+                dto.MatVencidos    = reader.GetInt32(6);
+                dto.MatProxVencer  = reader.GetInt32(7);
             }
             await reader.NextResultAsync();
             if (await reader.ReadAsync())
             {
                 dto.Choferes       = reader.GetInt32(0);
-                dto.RegProxVencer  = reader.GetInt32(1);
-                dto.RegVencidos    = reader.GetInt32(2);
-                dto.CnrtProxVencer = reader.GetInt32(3);
-                dto.CnrtVencidos   = reader.GetInt32(4);
-                dto.AepProxVencer  = reader.GetInt32(5);
-                dto.AepVencidos    = reader.GetInt32(6);
+                dto.RegVencidos    = reader.GetInt32(1);
+                dto.RegProxVencer  = reader.GetInt32(2);
+                dto.CnrtVencidos   = reader.GetInt32(3);
+                dto.CnrtProxVencer = reader.GetInt32(4);
+                dto.AepVencidos    = reader.GetInt32(5);
+                dto.AepProxVencer  = reader.GetInt32(6);
             }
             return dto;
         }) ?? new();
@@ -1516,6 +1553,732 @@ public class ReportService
         static DateOnly? D(System.Data.Common.DbDataReader rd, int i) =>
             rd.IsDBNull(i) ? null : DateOnly.FromDateTime(rd.GetDateTime(i));
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  FACTURACIÓN — Resumen de Liquidaciones (liquidacion_cliente.scx)
+    //  Réplica fiel de solo lectura del browser maestro-detalle.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Grilla superior del Resumen de Liquidaciones (cabeceras). Replica el SELECT
+    /// activo de <c>liquidacion_cliente.scx → arma_grid()</c>:
+    /// <code>
+    /// Subtotal  = ROUND((subtotal+extra)*t_cambio, 2)
+    /// Exento    = adicional        (adicionales = exentos, sin IVA)
+    /// TotalGral = ROUND((subtotal+extra)*t_cambio + iva + adicional, 2)
+    /// Factura   = tcp-lcp-SUBSTR(ncp,1,4)-SUBSTR(ncp,5) si hay comprobante
+    /// </code>
+    /// CLIENTE une contra <c>cliente</c> (razon_social); PROVEEDOR contra
+    /// <c>fletero</c> por <c>id_contrat</c>. Filtros: Nº exacto (gana sobre todo)
+    /// o tipo + rango de <c>fecha</c> + cliente opcional.
+    /// </summary>
+    public async Task<List<LiquidacionRow>> GetLiquidacionesAsync(
+        int nroLiquidacion, string tipo, DateOnly desde, DateOnly hasta, string? idCliente)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        // La razón social sale de cliente o fletero según el tipo. Resolvemos con
+        // un LEFT JOIN a cada tabla y elegimos con COALESCE (SQL 2012 friendly).
+        var t = tipo.Replace("'", "''");
+        string where;
+        if (nroLiquidacion > 0)
+        {
+            where = $"l.idliquidac = {nroLiquidacion}";
+        }
+        else
+        {
+            where = $"l.tipo = '{t}' AND l.fecha BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'";
+            if (!string.IsNullOrWhiteSpace(idCliente))
+                where += $" AND l.id_cliente = '{idCliente.Replace("'", "''")}'";
+        }
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT
+                l.idliquidac                                              AS IdLiquidacion,
+                RTRIM(ISNULL(l.tipo, ''))                                 AS Tipo,
+                l.fecha                                                   AS Fecha,
+                RTRIM(ISNULL(l.id_cliente, ''))                           AS Codigo,
+                RTRIM(ISNULL(COALESCE(c.razon_soci, f.razon_soci, f.nombre), '')) AS RazonSocial,
+                RTRIM(ISNULL(l.moneda, ''))                               AS Moneda,
+                ROUND((ISNULL(l.subtotal,0) + ISNULL(l.extra,0)) * ISNULL(l.t_cambio,1), 2)         AS Subtotal,
+                ISNULL(l.iva, 0)                                          AS Iva,
+                ISNULL(l.adicional, 0)                                    AS Exento,
+                ROUND((ISNULL(l.subtotal,0) + ISNULL(l.extra,0)) * ISNULL(l.t_cambio,1)
+                      + ISNULL(l.iva,0) + ISNULL(l.adicional,0), 2)       AS TotalGral,
+                l.fcomp                                                   AS Fcomp,
+                CASE WHEN RTRIM(ISNULL(l.tcp,'')) <> ''
+                     THEN RTRIM(l.tcp) + '-' + RTRIM(ISNULL(l.lcp,'')) + '-'
+                          + SUBSTRING(ISNULL(l.ncp,''),1,4) + '-' + SUBSTRING(ISNULL(l.ncp,''),5,8)
+                     ELSE '' END                                          AS Factura,
+                l.f_pago                                                  AS FPago,
+                RTRIM(ISNULL(l.forma_pago, ''))                           AS FormaPago,
+                RTRIM(ISNULL(l.banco, ''))                                AS Banco,
+                ISNULL(l.n_pago, 0)                                       AS NPago,
+                ISNULL(l.retencion_, 0)                                   AS RetIva,
+                ISNULL(l.retencion2, 0)                                   AS RetIibb,
+                ISNULL(l.retencion3, 0)                                   AS RetSuss,
+                ISNULL(l.pago, 0)                                         AS Pago
+            FROM liquidacion l
+                LEFT JOIN cliente c ON l.id_cliente = c.id_cliente AND c._deleted = 0
+                LEFT JOIN fletero f ON l.id_cliente = f.id_contrat AND f._deleted = 0
+            WHERE l._deleted = 0 AND {where}
+            ORDER BY l.fecha, l.idliquidac
+            """;
+
+        var result = new List<LiquidacionRow>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+        {
+            result.Add(new LiquidacionRow(
+                rd.GetInt32(0), rd.GetString(1), Dt(rd, 2), rd.GetString(3), rd.GetString(4),
+                rd.GetString(5), rd.GetDecimal(6), rd.GetDecimal(7), rd.GetDecimal(8),
+                rd.GetDecimal(9), Dt(rd, 10), rd.GetString(11), Dt(rd, 12), rd.GetString(13),
+                rd.GetString(14), rd.GetInt64(15), rd.GetDecimal(16), rd.GetDecimal(17),
+                rd.GetDecimal(18), rd.GetDecimal(19)));
+        }
+        return result;
+
+        static DateOnly? Dt(System.Data.Common.DbDataReader rd, int i) =>
+            rd.IsDBNull(i) ? null : DateOnly.FromDateTime(rd.GetDateTime(i));
+    }
+
+    /// <summary>Grilla inferior: detalle (<c>liquidacion_detalle</c>) de la liquidación
+    /// seleccionada. Una fila por servicio/adicional. NO incluye el ajuste global de
+    /// cabecera (vive solo en <c>liquidacion</c>).</summary>
+    public async Task<List<LiquidacionDetalleRow>> GetLiquidacionDetalleAsync(int idLiquidacion)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT
+                d.id                              AS Id,
+                ISNULL(d.id_viaje, 0)             AS IdViaje,
+                RTRIM(ISNULL(d.tipo, ''))         AS Tipo,
+                RTRIM(ISNULL(d.id_adicion, ''))   AS IdAdicional,
+                RTRIM(ISNULL(d.nombre, ''))       AS Nombre,
+                RTRIM(ISNULL(d.moneda, ''))       AS Moneda,
+                ISNULL(d.cantidad, 0)             AS Cantidad,
+                ISNULL(d.precio, 0)               AS Precio,
+                ISNULL(d.importe, 0)              AS Importe,
+                RTRIM(ISNULL(d.d_destino_, ''))   AS DDestinoProv,
+                ISNULL(d.km_recorri, 0)           AS KmRecorrido,
+                ISNULL(d.descuento, 0)            AS Descuento,
+                ISNULL(d.incremento, 0)           AS Incremento,
+                ISNULL(d.id_viaje_i, 0)           AS IdViajeInt
+            FROM liquidacion_detalle d
+            WHERE d.idliquidac = {idLiquidacion} AND d._deleted = 0
+            ORDER BY d.id
+            """;
+        var result = new List<LiquidacionDetalleRow>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+        {
+            result.Add(new LiquidacionDetalleRow(
+                rd.GetInt32(0), rd.GetInt64(1), rd.GetString(2), rd.GetString(3),
+                rd.GetString(4), rd.GetString(5), rd.GetInt64(6), rd.GetDecimal(7),
+                rd.GetDecimal(8), rd.GetString(9), rd.GetInt64(10), rd.GetDecimal(11),
+                rd.GetDecimal(12), rd.GetInt64(13)));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Cabecera CRUDA de UNA liquidación, para reconstruir la solapa "Liquidacion" del
+    /// form <c>facturacion_cliente_nueva.scx</c> (visor de solo lectura "Liquidación a
+    /// Clientes"). A diferencia de <see cref="GetLiquidacionesAsync"/> —que colapsa
+    /// <c>(subtotal+extra)*t_cambio</c> en una sola columna— acá traemos los campos sin
+    /// colapsar tal como los grabó <c>bGraba</c>:
+    /// <list type="bullet">
+    ///   <item><c>subtotal</c> = nSubtotal_ajustado = total NETO de servicios → caja "Subtotal".</item>
+    ///   <item><c>extra</c> = nExtra_ajustado = ajuste global manual (normalmente 0) → caja "Extras".</item>
+    /// </list>
+    /// El desglose superior "Totales por servicios" (Subtotal del Servicio / Extras /
+    /// Descuento / Incremento) NO está en la cabecera: se reconstruye en la página desde
+    /// <c>liquidacion_detalle</c> (filas "HORA A DISPOSICION" = extras; resto = subtotal).
+    /// </summary>
+    public async Task<LiquidacionCabeceraDto?> GetLiquidacionCabeceraAsync(int idLiquidacion)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        // CAST a decimal por si alguna columna numérica de FoxPro vino como float en la réplica.
+        cmd.CommandText = $"""
+            SELECT
+                l.idliquidac                                              AS IdLiquidacion,
+                RTRIM(ISNULL(l.tipo, ''))                                 AS Tipo,
+                l.fecha                                                   AS Fecha,
+                RTRIM(ISNULL(l.id_cliente, ''))                           AS Codigo,
+                RTRIM(ISNULL(COALESCE(c.razon_soci, f.razon_soci, f.nombre), '')) AS RazonSocial,
+                RTRIM(ISNULL(l.moneda, ''))                               AS Moneda,
+                CAST(ISNULL(l.subtotal, 0) AS decimal(18,4))              AS Subtotal,
+                CAST(ISNULL(l.extra, 0)    AS decimal(18,4))              AS Extra,
+                CAST(ISNULL(l.t_cambio, 1) AS decimal(18,4))              AS TCambio,
+                CAST(ISNULL(l.adicional, 0) AS decimal(18,4))             AS Adicional,
+                CAST(ISNULL(l.iva, 0)      AS decimal(18,4))              AS Iva,
+                CAST(ISNULL(l.piva, 0)     AS decimal(18,4))              AS Piva,
+                RTRIM(ISNULL(l.motivo, ''))                               AS Motivo,
+                CAST(ISNULL(l.total, 0)    AS decimal(18,4))              AS Total
+            FROM liquidacion l
+                LEFT JOIN cliente c ON l.id_cliente = c.id_cliente AND c._deleted = 0
+                LEFT JOIN fletero f ON l.id_cliente = f.id_contrat AND f._deleted = 0
+            WHERE l._deleted = 0 AND l.idliquidac = {idLiquidacion}
+            """;
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        return new LiquidacionCabeceraDto(
+            rd.GetInt32(0), rd.GetString(1),
+            rd.IsDBNull(2) ? null : DateOnly.FromDateTime(rd.GetDateTime(2)),
+            rd.GetString(3), rd.GetString(4), rd.GetString(5),
+            rd.GetDecimal(6), rd.GetDecimal(7), rd.GetDecimal(8), rd.GetDecimal(9),
+            rd.GetDecimal(10), rd.GetDecimal(11), rd.GetString(12), rd.GetDecimal(13));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  FACTURACIÓN — Liquidación a Clientes, modo "POR ESTADO" (facturacion_cliente_nueva.scx)
+    //  Réplica de la BÚSQUEDA bBusca del form: el árbol NO sale de las liquidaciones
+    //  ya grabadas sino de los VIAJES pendientes de liquidar (cliente → grupo),
+    //  igual que el FoxPro. Es solo lectura: mostramos qué falta liquidar, sin
+    //  valorizar (el motor de tarifas no está migrado — strangler).
+    //
+    //  Universo POR ESTADO (doc FACTURACION_LIQUIDACION.md §3.1):
+    //    estado_via = 'FINALIZADO' AND f_grupo_fi < HOY  (grupo ya vencido)
+    //    excluye el cliente de prueba (parametro.id_cliente, hoy = 'NORTUR').
+    //  Universo POR FECHA: ídem pero f_grupo_fi BETWEEN desde AND hasta.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Viajes pendientes de liquidar agrupados cliente → grupo, tal como los arma
+    /// la búsqueda (<c>bBusca</c>) de <c>facturacion_cliente_nueva.scx</c>. Replica
+    /// el árbol de la pantalla "Liquidación a Clientes" del FoxPro.
+    /// <para>
+    /// <paramref name="porFecha"/> = false → modo POR ESTADO (default del FoxPro,
+    /// el más usado): trae todos los grupos vencidos (<c>f_grupo_fi &lt; HOY</c>),
+    /// ignora el rango de fechas. true → modo POR FECHA: filtra
+    /// <c>f_grupo_fi BETWEEN desde AND hasta</c>.
+    /// </para>
+    /// Excluye el cliente de prueba (<c>parametro.id_cliente</c>). Solo lectura.
+    /// </summary>
+    public async Task<List<ViajePendienteRow>> GetViajesPendientesLiquidarAsync(
+        bool porFecha, DateOnly desde, DateOnly hasta)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        // Candado temporal del grupo. POR ESTADO: vencido (f_grupo_fi < HOY).
+        // POR FECHA: el fin del grupo cae en el rango pedido.
+        var candado = porFecha
+            ? $"v.f_grupo_fi BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'"
+            : "v.f_grupo_fi < CAST(GETDATE() AS date)";
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT
+                CAST(ISNULL(v.id_viaje, 0)   AS bigint)        AS IdViaje,
+                CAST(ISNULL(v.id_viaje_i, 0) AS bigint)        AS IdViajeInt,
+                RTRIM(ISNULL(v.id_cliente, ''))                AS IdCliente,
+                RTRIM(ISNULL(v.nombre_cli, ''))                AS Cliente,
+                RTRIM(ISNULL(NULLIF(RTRIM(v.grupo), ''), 'SIN GRUPO')) AS Grupo,
+                v.f_reserva                                    AS FReserva,
+                v.hs_inicio                                    AS HsInicio,
+                v.hs_fin                                       AS HsFin,
+                RTRIM(ISNULL(v.id_servici, ''))                AS Servicio,
+                RTRIM(ISNULL(v.d_destino, ''))                 AS Destino,
+                RTRIM(ISNULL(v.id_vehicul, ''))                AS Vehiculo,
+                RTRIM(ISNULL(v.nombre_cho, ''))                AS Chofer,
+                CAST(ISNULL(v.pax, 0)        AS int)           AS Pax,
+                RTRIM(ISNULL(v.cabecera, ''))                  AS Cabecera,
+                CAST(ISNULL(v.km_recorri, 0) AS bigint)        AS KmRecorrido,
+                CAST(ISNULL(v.importe_co, 0) AS decimal(18,2)) AS ImporteConvenido,
+                RTRIM(ISNULL(v.moneda_con, ''))                AS MonedaConvenida,
+                v.f_grupo_fi                                   AS FinGrupo
+            FROM viaje v
+            WHERE v._deleted = 0
+              AND RTRIM(v.estado_via) = 'FINALIZADO'
+              AND {candado}
+              AND RTRIM(ISNULL(v.id_cliente, '')) <>
+                  (SELECT TOP 1 RTRIM(ISNULL(id_cliente, '')) FROM parametro)
+            ORDER BY v.nombre_cli, v.grupo, v.hs_inicio
+            """;
+
+        var result = new List<ViajePendienteRow>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+        {
+            result.Add(new ViajePendienteRow(
+                rd.GetInt64(0), rd.GetInt64(1), rd.GetString(2), rd.GetString(3),
+                rd.GetString(4), Dt(rd, 5), Dt(rd, 6), Dt(rd, 7), rd.GetString(8),
+                rd.GetString(9), rd.GetString(10), rd.GetString(11), rd.GetInt32(12),
+                rd.GetString(13), rd.GetInt64(14), rd.GetDecimal(15), rd.GetString(16),
+                Dt(rd, 17)));
+        }
+        return result;
+
+        static DateTime? Dt(System.Data.Common.DbDataReader rd, int i) =>
+            rd.IsDBNull(i) ? null : rd.GetDateTime(i);
+    }
+
+    /// <summary>
+    /// Solapa "Adicionales" de "Liquidación a Clientes": los <c>viaje_adicional</c> de
+    /// los viajes pendientes de un grupo (cliente + grupo), tal como la grilla del
+    /// FoxPro (<c>arma_adicional</c>). Réplica de solo lectura, CON precio valorizado.
+    /// <para>
+    /// <c>viaje_adicional.precio</c> viene en 0 en la réplica: el precio que muestra el
+    /// FoxPro lo VALORIZA en vivo (<c>obtiene_adicional</c>) buscando en
+    /// <c>adicional_lista_precio</c> por <b>adicional × tipo de vehículo × vigencia</b>.
+    /// Acá replicamos esa búsqueda con un <c>OUTER APPLY</c> (verificado contra el grupo
+    /// GATE1/SAM-02: AGUA×30×1200=36000, total 242.400 = idéntico al FoxPro).
+    /// </para>
+    /// El precio se trae SOLO para los adicionales <c>ABONA</c>; los <c>EXCLUIDO</c>
+    /// (rubro en <c>cliente_adicional_excluido</c>) no se cobran → precio/total 0,
+    /// igual que el FoxPro. El <c>Total adicionales</c> de la solapa suma solo ABONA.
+    /// <para>
+    /// ⚠️ Esto es una porción acotada del motor de tarifas (solo adicionales). La
+    /// valorización de SERVICIOS (cascada cabecera/servicio × modo_fac, horas extra) NO
+    /// está migrada — esa sigue en el FoxPro y por eso la solapa Liquidacion no calcula.
+    /// </para>
+    /// </summary>
+    public async Task<List<ViajeAdicionalRow>> GetAdicionalesGrupoAsync(
+        string idCliente, string grupo, bool porFecha, DateOnly desde, DateOnly hasta)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        var candado = porFecha
+            ? $"v.f_grupo_fi BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'"
+            : "v.f_grupo_fi < CAST(GETDATE() AS date)";
+        var cli = idCliente.Replace("'", "''");
+        // El nodo "SIN GRUPO" del árbol = viajes con grupo vacío.
+        var grpFiltro = grupo == "SIN GRUPO"
+            ? "RTRIM(ISNULL(v.grupo, '')) = ''"
+            : $"RTRIM(ISNULL(v.grupo, '')) = '{grupo.Replace("'", "''")}'";
+
+        using var cmd = conn.CreateCommand();
+        // OUTER APPLY al tarifario: precio del adicional para el TIPO de vehículo del
+        // viaje (v.id_vehicul guarda el TIPO: BUS/MINI/…), vigente a la fecha del viaje.
+        // Si hay varias vigencias que cubren la fecha, gana la más reciente (fdesdevg DESC).
+        cmd.CommandText = $"""
+            SELECT
+                CAST(ISNULL(va.id_viaje, 0) AS bigint)         AS IdViaje,
+                RTRIM(ISNULL(va.id_adicion, ''))               AS IdAdicional,
+                RTRIM(ISNULL(va.nombre, ''))                   AS Nombre,
+                CAST(ISNULL(va.cantidad, 0) AS bigint)         AS Cantidad,
+                CASE WHEN cae.id IS NOT NULL THEN 'EXCLUIDO' ELSE 'ABONA' END AS Estado,
+                v.hs_inicio                                    AS Inicio,
+                RTRIM(ISNULL(v.id_vehicul, ''))                AS Vehiculo,
+                RTRIM(ISNULL(v.id_servici, ''))                AS Servicio,
+                RTRIM(ISNULL(v.cabecera, ''))                  AS Cabecera,
+                RTRIM(ISNULL(v.d_destino, ''))                 AS Destino,
+                -- precio/total solo si ABONA (los EXCLUIDO no se cobran)
+                CASE WHEN cae.id IS NOT NULL THEN CAST(0 AS decimal(18,2))
+                     ELSE CAST(ISNULL(pe.precio, 0) AS decimal(18,2)) END AS Precio,
+                CASE WHEN cae.id IS NOT NULL THEN CAST(0 AS decimal(18,2))
+                     ELSE CAST(ISNULL(va.cantidad,0) * ISNULL(pe.precio,0) AS decimal(18,2)) END AS Total,
+                CASE WHEN cae.id IS NULL AND pe.precio IS NULL THEN CAST(1 AS bit)
+                     ELSE CAST(0 AS bit) END AS SinTarifa
+            FROM viaje_adicional va
+                INNER JOIN viaje v ON v.id_viaje = va.id_viaje AND v._deleted = 0
+                LEFT JOIN adicional a ON RTRIM(a.id_adicion) = RTRIM(va.id_adicion) AND a._deleted = 0
+                LEFT JOIN cliente_adicional_excluido cae
+                       ON cae._deleted = 0
+                      AND RTRIM(cae.id_cliente) = '{cli}'
+                      AND RTRIM(cae.rubro) = RTRIM(a.rubro)
+                OUTER APPLY (
+                    SELECT TOP 1 alp.precio
+                    FROM adicional_lista_precio alp
+                    WHERE alp._deleted = 0
+                      AND RTRIM(alp.id_adicion) = RTRIM(va.id_adicion)
+                      AND RTRIM(alp.id_vehicul) = RTRIM(v.id_vehicul)
+                      AND v.hs_inicio >= alp.fdesdevg AND v.hs_inicio <= alp.fhastavg
+                    ORDER BY alp.fdesdevg DESC
+                ) tar
+                -- Precio efectivo (obtiene_adicional): si el adicional trae precio propio
+                -- cargado (> 0) se respeta ESE; si viene en 0 se busca en el tarifario.
+                -- Si no hay ninguno → NULL (sin tarifa). Replica fiel del FoxPro.
+                CROSS APPLY (
+                    SELECT precio = CASE WHEN ISNULL(va.precio, 0) > 0 THEN va.precio
+                                         ELSE tar.precio END
+                ) pe
+            WHERE va._deleted = 0
+              AND RTRIM(v.estado_via) = 'FINALIZADO'
+              AND {candado}
+              AND RTRIM(ISNULL(v.id_cliente, '')) = '{cli}'
+              AND {grpFiltro}
+            ORDER BY va.id_viaje, va.id_adicion
+            """;
+
+        var result = new List<ViajeAdicionalRow>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+        {
+            result.Add(new ViajeAdicionalRow(
+                rd.GetInt64(0), rd.GetString(1), rd.GetString(2), rd.GetInt64(3),
+                rd.GetString(4), rd.IsDBNull(5) ? null : rd.GetDateTime(5),
+                rd.GetString(6), rd.GetString(7), rd.GetString(8), rd.GetString(9),
+                rd.GetDecimal(10), rd.GetDecimal(11), rd.GetBoolean(12)));
+        }
+        return result;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  FACTURACIÓN — Motor de valorización de SERVICIOS (arma_servicio)
+    //  Réplica fiel del motor de tarifas de facturacion_cliente_nueva.scx.
+    //  Calcula en vivo el importe de cada viaje del grupo (solo lectura; NO graba).
+    //
+    //  Validado contra 8.656 viajes históricos de liquidaciones reales: 99,4% al
+    //  peso (el resto = servicios cuya tarifa fue cambiada retroactivamente; para
+    //  viajes PENDIENTES con la tarifa actual ese caso no aplica). Detalle del
+    //  relevamiento en docs/logica-foxpro/FACTURACION_LIQUIDACION.md §3.2.
+    //
+    //  Cascada de precio por viaje (gana el primero) — arma_servicio:
+    //    1. importe_co > 0  → ese importe (× descuento_ % si lo hay)
+    //    2. sin_cargo       → 0
+    //    3. cabecera + cliente.fc_prefere='C' → tarifa de la cabecera ("C")
+    //       si no, el 1er servicio (id_servici) según servicio.modo_fac:
+    //         S → tarifa directa
+    //         K → tarifa × km   (km = km_recorri, o km del servicio si es 0)
+    //         H → tarifa + HORAS EXTRA si la duración real supera la teórica
+    //  Descuento/incremento en cascada: descuento_ % → cliente.descuento %
+    //    → cliente.incremento %  (el nivel "período" cliente_descuento está vacío).
+    //
+    //  ⚠️ Trampas replicadas EXACTO del FoxPro (sin ellas no cuadra):
+    //   · Duración teórica modo H: el FoxPro suma minutos_du como HORAS (×3600 en
+    //     vez de ×60) — es un bug, pero hay que respetarlo. Como casi todos los
+    //     servicios tienen minutos_du=0, en la práctica casi no afecta.
+    //   · Horas extra: solo si dur_real > dur_teórica. Fracción con parametro
+    //     fraccion_h: minutos entre fraccion_h y 30 → +media hora; >30 → +hora.
+    //     Tarifa de la hora extra = servicio parametro.cliente_ad ('HORA ADICIONAL').
+    //   · obtiene_tarifa busca lista_precio por lista del cliente × servicio ×
+    //     TIPO de vehículo (v.id_vehicul) × vigencia (gana la más reciente).
+    //     Sin tarifa → precio -1 (viaje marcado SinTarifa, fila amarilla).
+    //  ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Valoriza en vivo los viajes pendientes de un grupo (cliente + grupo),
+    /// replicando el motor de tarifas <c>arma_servicio</c> de
+    /// <c>facturacion_cliente_nueva.scx</c>. Solo lectura — NO escribe en
+    /// <c>liquidacion</c>/<c>liquidacion_detalle</c> (regla strangler).
+    /// <para>
+    /// Devuelve una fila por viaje con su importe de servicio, horas extra,
+    /// descuento/incremento y la moneda de la lista. Los viajes sin tarifa quedan
+    /// con <see cref="ViajeValorizadoRow.SinTarifa"/> = true (el FoxPro los pinta
+    /// de amarillo y bloquea el grabado).
+    /// </para>
+    /// Solo se valoriza el 1er servicio (<c>id_servici</c>): los servicios 2º/3º
+    /// son rarísimos y se suman aparte si existen (ver <c>imp_serv_2/3</c> del form).
+    /// </summary>
+    public async Task<List<ViajeValorizadoRow>> ValorizarGrupoAsync(
+        string idCliente, string grupo, bool porFecha, DateOnly desde, DateOnly hasta)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        var candado = porFecha
+            ? $"v.f_grupo_fi BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'"
+            : "v.f_grupo_fi < CAST(GETDATE() AS date)";
+        var cli = idCliente.Replace("'", "''");
+        var grpFiltro = grupo == "SIN GRUPO"
+            ? "RTRIM(ISNULL(v.grupo, '')) = ''"
+            : $"RTRIM(ISNULL(v.grupo, '')) = '{grupo.Replace("'", "''")}'";
+
+        using var cmd = conn.CreateCommand();
+        // Parámetros del motor: cliente_ad (servicio hora extra) y fraccion_h.
+        // Se leen de la tabla parametro (1 fila), igual que el Init del form.
+        cmd.CommandText = $"""
+            DECLARE @cliente_ad varchar(30), @fraccion int;
+            SELECT TOP 1 @cliente_ad = RTRIM(ISNULL(cliente_ad,'')),
+                         @fraccion   = ISNULL(fraccion_h, 25)
+            FROM parametro;
+
+            SELECT
+                CAST(ISNULL(v.id_viaje, 0)   AS bigint)        AS IdViaje,
+                CAST(ISNULL(v.id_viaje_i, 0) AS bigint)        AS IdViajeInt,
+                v.hs_inicio                                    AS HsInicio,
+                v.hs_fin                                       AS HsFin,
+                RTRIM(ISNULL(v.id_servici, ''))                AS Servicio,
+                RTRIM(ISNULL(v.cabecera, ''))                  AS Cabecera,
+                RTRIM(ISNULL(v.id_vehicul, ''))                AS Vehiculo,
+                RTRIM(ISNULL(v.d_destino, ''))                 AS Destino,
+                CAST(ISNULL(v.pax, 0)        AS int)           AS Pax,
+                CAST(ISNULL(g.km_efec, 0)    AS bigint)        AS Km,
+                RTRIM(ISNULL(g.moneda, ''))                    AS Moneda,
+                CAST(g.imp_base  AS decimal(18,2))             AS ImpServicio,
+                CAST(g.imp_extra AS decimal(18,2))             AS ImpExtra,
+                CAST(g.imp_desc  AS decimal(18,2))             AS ImpDescuento,
+                CAST(g.imp_incr  AS decimal(18,2))             AS ImpIncremento,
+                CASE WHEN g.imp_base = -1 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS SinTarifa
+            FROM viaje v
+                CROSS APPLY (
+                    SELECT
+                        c.fc_prefere, c.id_lista_p AS cli_lista,
+                        c.descuento  AS cli_desc, c.incremento AS cli_incr
+                    FROM cliente c WHERE c.id_cliente = v.id_cliente AND c._deleted = 0
+                ) c
+                LEFT JOIN servicio s ON RTRIM(s.id_servici) = RTRIM(v.id_servici) AND s._deleted = 0
+                -- km efectivo (modo K): km_recorri, o km del servicio si es 0
+                CROSS APPLY (SELECT km_efec = CASE WHEN ISNULL(v.km_recorri,0)=0
+                                                    THEN ISNULL(s.km,0) ELSE v.km_recorri END) ke
+                -- moneda de la lista del cliente
+                OUTER APPLY (
+                    SELECT TOP 1 RTRIM(lpm.id_moneda_) AS moneda
+                    FROM lista_precio_modelo lpm
+                    WHERE lpm._deleted = 0 AND RTRIM(lpm.id_lista_p) = RTRIM(c.cli_lista)
+                ) mon
+                -- tarifa del 1er servicio: lista × servicio × tipo vehículo × vigencia
+                OUTER APPLY (
+                    SELECT TOP 1 lp.precio FROM lista_precio lp
+                    WHERE lp._deleted = 0 AND RTRIM(lp.id_lista_p) = RTRIM(c.cli_lista)
+                      AND RTRIM(lp.id_servici) = RTRIM(v.id_servici)
+                      AND RTRIM(lp.id_vehicul) = RTRIM(v.id_vehicul)
+                      AND CAST(v.hs_fin AS date) BETWEEN lp.f_vigencia AND lp.f_vigenci2
+                    ORDER BY lp.f_vigencia DESC
+                ) tar
+                -- tarifa de la cabecera (cuando fc_prefere = 'C')
+                OUTER APPLY (
+                    SELECT TOP 1 lp.precio FROM lista_precio lp
+                    WHERE lp._deleted = 0 AND RTRIM(lp.id_lista_p) = RTRIM(c.cli_lista)
+                      AND RTRIM(lp.id_servici) = RTRIM(v.cabecera)
+                      AND RTRIM(lp.id_vehicul) = RTRIM(v.id_vehicul)
+                      AND CAST(v.hs_fin AS date) BETWEEN lp.f_vigencia AND lp.f_vigenci2
+                    ORDER BY lp.f_vigencia DESC
+                ) tarcab
+                -- tarifa de la hora extra (servicio parametro.cliente_ad)
+                OUTER APPLY (
+                    SELECT TOP 1 lp.precio FROM lista_precio lp
+                    WHERE lp._deleted = 0 AND RTRIM(lp.id_lista_p) = RTRIM(c.cli_lista)
+                      AND RTRIM(lp.id_servici) = @cliente_ad
+                      AND RTRIM(lp.id_vehicul) = RTRIM(v.id_vehicul)
+                      AND CAST(v.hs_fin AS date) BETWEEN lp.f_vigencia AND lp.f_vigenci2
+                    ORDER BY lp.f_vigencia DESC
+                ) tarext
+                CROSS APPLY (
+                    SELECT
+                        km_efec = ke.km_efec,
+                        moneda  = CASE WHEN ISNULL(v.importe_co,0) > 0 THEN RTRIM(ISNULL(v.moneda_con,''))
+                                       WHEN v.sin_cargo = 1 THEN 'PESOS'
+                                       ELSE ISNULL(mon.moneda, '') END,
+                        -- exceso de minutos (solo modo H y solo si dur_real > dur_teórica;
+                        -- dur_teórica replica el bug FoxPro: minutos_du cuenta como horas)
+                        exc_min = CASE WHEN s.modo_fac = 'H'
+                                        AND DATEDIFF(minute, v.hs_inicio, v.hs_fin)
+                                            > (ISNULL(s.horas_dura,0)*60 + ISNULL(s.minutos_du,0)*60)
+                                       THEN DATEDIFF(minute, v.hs_inicio, v.hs_fin)
+                                            - (ISNULL(s.horas_dura,0)*60 + ISNULL(s.minutos_du,0)*60)
+                                       ELSE 0 END
+                ) calc
+                CROSS APPLY (
+                    SELECT
+                        -- precio base según la cascada
+                        imp_base = CASE
+                            WHEN ISNULL(v.importe_co,0) > 0 THEN v.importe_co
+                            WHEN v.sin_cargo = 1 THEN 0
+                            WHEN RTRIM(ISNULL(v.cabecera,'')) <> '' AND c.fc_prefere = 'C'
+                                 THEN ISNULL(tarcab.precio, -1)
+                            WHEN s.modo_fac = 'K' THEN ISNULL(tar.precio, -1) * calc.km_efec
+                            ELSE ISNULL(tar.precio, -1) END,
+                        -- horas extra (modo H): horas enteras × tarifa + fracción
+                        imp_extra = CASE
+                            WHEN s.modo_fac = 'H' AND calc.exc_min > 0 AND tarext.precio IS NOT NULL THEN
+                                FLOOR(calc.exc_min / 60.0) * tarext.precio
+                                + CASE WHEN (calc.exc_min % 60) > @fraccion AND (calc.exc_min % 60) <= 30
+                                            THEN tarext.precio / 2.0
+                                       WHEN (calc.exc_min % 60) > 30 THEN tarext.precio
+                                       ELSE 0 END
+                            ELSE 0 END
+                ) b
+                CROSS APPLY (
+                    SELECT
+                        km_efec   = calc.km_efec,
+                        moneda    = calc.moneda,
+                        imp_base  = b.imp_base,
+                        imp_extra = b.imp_extra,
+                        -- descuento/incremento en cascada sobre (base + extra)
+                        imp_desc  = CASE
+                            WHEN b.imp_base = -1 THEN 0
+                            WHEN ISNULL(v.descuento_,0) > 0
+                                 THEN ROUND((b.imp_base + b.imp_extra) * v.descuento_ / 100.0, 2)
+                            WHEN ISNULL(c.cli_desc,0) > 0
+                                 THEN ROUND((b.imp_base + b.imp_extra) * c.cli_desc / 100.0, 2)
+                            ELSE 0 END,
+                        imp_incr  = CASE
+                            WHEN b.imp_base = -1 THEN 0
+                            WHEN ISNULL(v.descuento_,0) > 0 THEN 0
+                            WHEN ISNULL(c.cli_desc,0)   > 0 THEN 0
+                            WHEN ISNULL(c.cli_incr,0)   > 0
+                                 THEN ROUND((b.imp_base + b.imp_extra) * c.cli_incr / 100.0, 2)
+                            ELSE 0 END
+                ) g
+            WHERE v._deleted = 0
+              AND RTRIM(v.estado_via) = 'FINALIZADO'
+              AND {candado}
+              AND RTRIM(ISNULL(v.id_cliente, '')) = '{cli}'
+              AND {grpFiltro}
+            ORDER BY v.hs_inicio, v.id_viaje
+            """;
+
+        var result = new List<ViajeValorizadoRow>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+        {
+            result.Add(new ViajeValorizadoRow(
+                rd.GetInt64(0), rd.GetInt64(1), Dt(rd, 2), Dt(rd, 3),
+                rd.GetString(4), rd.GetString(5), rd.GetString(6), rd.GetString(7),
+                rd.GetInt32(8), rd.GetInt64(9), rd.GetString(10),
+                rd.GetDecimal(11), rd.GetDecimal(12), rd.GetDecimal(13), rd.GetDecimal(14),
+                rd.GetBoolean(15)));
+        }
+        return result;
+
+        static DateTime? Dt(System.Data.Common.DbDataReader rd, int i) =>
+            rd.IsDBNull(i) ? null : rd.GetDateTime(i);
+    }
+
+    /// <summary>
+    /// Arma los totales de la solapa "Liquidación" (réplica de <c>arma_liquidacion</c>)
+    /// combinando los servicios valorizados (<see cref="ValorizarGrupoAsync"/>) con los
+    /// adicionales (<see cref="GetAdicionalesGrupoAsync"/>). Solo lectura.
+    /// <para>
+    /// Como el form arranca sin ajuste manual global (porc/imp descuento/incremento = 0)
+    /// ni IVA (<c>parametro.piva = 0</c>), reproduce la pantalla en su estado inicial:
+    /// <c>Subtotal → ×tipo_cambio → +IVA → +adicionales(exentos)</c>. El tipo de cambio
+    /// es 1 si la moneda es PESOS; para USS/USD/EURO el FoxPro lo pide a mano, acá se
+    /// usa el parámetro <paramref name="tipoCambio"/> (default 1, igual que el form
+    /// antes de que el usuario lo cargue).
+    /// </para>
+    /// </summary>
+    public async Task<LiquidacionTotalesRow> CalcularTotalesLiquidacionAsync(
+        string idCliente, string grupo, bool porFecha, DateOnly desde, DateOnly hasta,
+        decimal tipoCambio = 1m)
+    {
+        var servicios = await ValorizarGrupoAsync(idCliente, grupo, porFecha, desde, hasta);
+        var adicionales = await GetAdicionalesGrupoAsync(idCliente, grupo, porFecha, desde, hasta);
+
+        // arma_liquidacion: subtotal = Σ servicio ; extra = Σ horas extra ;
+        // descuento/incremento = Σ de cada uno ; total = subtotal+extra+incr-desc.
+        var subtotal   = servicios.Where(s => !s.SinTarifa).Sum(s => s.ImpServicio);
+        var extra      = servicios.Where(s => !s.SinTarifa).Sum(s => s.ImpExtra);
+        var descuento  = servicios.Sum(s => s.ImpDescuento);
+        var incremento = servicios.Sum(s => s.ImpIncremento);
+        var total      = subtotal + extra + incremento - descuento;
+
+        // Moneda dominante: la de los servicios con tarifa (si todas iguales).
+        // PESOS → tipo de cambio bloqueado en 1 (como el FoxPro).
+        var moneda = servicios.Where(s => !s.SinTarifa && s.Moneda.Length > 0)
+                              .Select(s => s.Moneda).FirstOrDefault() ?? "PESOS";
+        var tc = moneda == "PESOS" ? 1m : tipoCambio;
+
+        // pesifica → IVA (parametro.piva, hoy 0) → + adicionales exentos (sin IVA)
+        var piva = await GetPivaAsync();
+        var totalFinal   = Math.Round(total * tc, 2);
+        var iva          = Math.Round(totalFinal * piva / 100m, 2);
+        var totalConIva  = totalFinal + iva;
+        var totalAdic    = adicionales.Where(a => a.Estado != "EXCLUIDO").Sum(a => a.Total);
+        var totalLiq     = totalConIva + totalAdic;
+
+        var hayErrores = servicios.Any(s => s.SinTarifa)
+                      || adicionales.Any(a => a.SinTarifa);
+
+        return new LiquidacionTotalesRow(
+            subtotal, extra, descuento, incremento, total, tc, totalFinal,
+            piva, iva, totalConIva, totalAdic, totalLiq, moneda, hayErrores);
+    }
+
+    /// <summary>IVA por defecto del sistema (<c>parametro.piva</c>). En NORTUR hoy es 0.</summary>
+    private async Task<decimal> GetPivaAsync()
+    {
+        return await _cache.GetOrCreateAsync("nortur:piva", async e =>
+        {
+            e.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30);
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT TOP 1 ISNULL(piva, 0) FROM parametro";
+            var v = await cmd.ExecuteScalarAsync();
+            return v is decimal d ? d : Convert.ToDecimal(v ?? 0);
+        });
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  FACTURACIÓN — Liquidaciones estimadas (facturacion_cliente_estimada.scx)
+    //  Proyección de venta agregada por mes/cliente (solo lectura).
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Proyección de venta: viajes <c>origen='T'</c> del rango ya liquidados,
+    /// agregados por mes. A diferencia del FoxPro (que revaloriza viaje por viaje
+    /// contra <c>lista_precio</c> vigente), acá usamos el importe YA liquidado en
+    /// <c>liquidacion_detalle</c> — fuente más confiable para visualización y
+    /// SQL 2012-friendly. Cada fila = un mes con su total estimado en pesos.
+    /// </summary>
+    public async Task<List<FacturacionEstimadaMesRow>> GetFacturacionEstimadaPorMesAsync(
+        DateOnly desde, DateOnly hasta)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        // Mes = primeros 7 chars de la fecha de la liquidación (yyyy-MM). SQL 2012:
+        // CONVERT(char(7), fecha, 120) da 'yyyy-MM'.
+        cmd.CommandText = $"""
+            SELECT
+                CONVERT(char(7), l.fecha, 120)   AS Mes,
+                COUNT(DISTINCT l.idliquidac)     AS Liquidaciones,
+                SUM(CASE WHEN d.tipo = 'SERVICIO' THEN 1 ELSE 0 END) AS Servicios,
+                SUM(ISNULL(d.importe, 0))        AS TotalEstimado
+            FROM liquidacion l
+                INNER JOIN liquidacion_detalle d ON d.idliquidac = l.idliquidac AND d._deleted = 0
+            WHERE l._deleted = 0 AND l.tipo = 'CLIENTE'
+                  AND l.fecha BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'
+            GROUP BY CONVERT(char(7), l.fecha, 120)
+            ORDER BY Mes
+            """;
+        var result = new List<FacturacionEstimadaMesRow>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+            result.Add(new FacturacionEstimadaMesRow(
+                rd.GetString(0), rd.GetInt32(1), rd.GetInt32(2), rd.GetDecimal(3)));
+        return result;
+    }
+
+    /// <summary>Proyección por cliente para el rango (top N por total). Mismo criterio
+    /// que <see cref="GetFacturacionEstimadaPorMesAsync"/> pero agrupado por cliente.</summary>
+    public async Task<List<FacturacionEstimadaClienteRow>> GetFacturacionEstimadaPorClienteAsync(
+        DateOnly desde, DateOnly hasta)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT
+                RTRIM(ISNULL(l.id_cliente, ''))  AS Codigo,
+                RTRIM(ISNULL(MAX(c.razon_soci), l.id_cliente)) AS RazonSocial,
+                COUNT(DISTINCT l.idliquidac)     AS Liquidaciones,
+                SUM(ISNULL(d.importe, 0))        AS TotalEstimado
+            FROM liquidacion l
+                INNER JOIN liquidacion_detalle d ON d.idliquidac = l.idliquidac AND d._deleted = 0
+                LEFT JOIN cliente c ON l.id_cliente = c.id_cliente AND c._deleted = 0
+            WHERE l._deleted = 0 AND l.tipo = 'CLIENTE'
+                  AND l.fecha BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'
+            GROUP BY l.id_cliente
+            ORDER BY TotalEstimado DESC
+            """;
+        var result = new List<FacturacionEstimadaClienteRow>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+            result.Add(new FacturacionEstimadaClienteRow(
+                rd.GetString(0), rd.GetString(1), rd.GetInt32(2), rd.GetDecimal(3)));
+        return result;
+    }
 }
 
 /// <summary>Resultado del login — espeja las variables públicas del FoxPro
@@ -1529,6 +2292,11 @@ public record LoginResultDto(
 
 public class TableroDto
 {
+    // Días de la ventana de aviso (de la tabla `parametro`), para el tooltip de cada chip.
+    public int AvisoVeh       { get; set; } = 7;   // VTV
+    public int AvisoMat       { get; set; } = 10;  // Matafuego
+    public int AvisoCho       { get; set; } = 30;  // Chofer (registro/CNRT/AEP)
+
     public int Vehiculos      { get; set; }
     public int VtvProxVencer  { get; set; }
     public int VtvVencidos    { get; set; }
@@ -1877,3 +2645,85 @@ public class DetalleViajeDto
     public bool TieneAdjunto => !string.IsNullOrWhiteSpace(Adjunto);
     public bool TieneGrupo => !string.IsNullOrWhiteSpace(Grupo) && Grupo != "SIN GRUPO";
 }
+
+// ── Facturación: Resumen de Liquidaciones (liquidacion_cliente.scx) ──
+
+/// <summary>Fila de la grilla de cabeceras (liquidacion ⨝ cliente|fletero).
+/// Subtotal/Exento/TotalGral ya vienen calculados como en el FoxPro.</summary>
+public record LiquidacionRow(
+    int IdLiquidacion, string Tipo, DateOnly? Fecha, string Codigo, string RazonSocial,
+    string Moneda, decimal Subtotal, decimal Iva, decimal Exento, decimal TotalGral,
+    DateOnly? Fcomp, string Factura, DateOnly? FPago, string FormaPago, string Banco,
+    long NPago, decimal RetIva, decimal RetIibb, decimal RetSuss, decimal Pago)
+{
+    public bool TieneFactura => !string.IsNullOrWhiteSpace(Factura);
+}
+
+/// <summary>Fila del detalle (liquidacion_detalle) de una liquidación.</summary>
+public record LiquidacionDetalleRow(
+    int Id, long IdViaje, string Tipo, string IdAdicional, string Nombre, string Moneda,
+    long Cantidad, decimal Precio, decimal Importe, string DDestinoProv, long KmRecorrido,
+    decimal Descuento, decimal Incremento, long IdViajeInt);
+
+/// <summary>Cabecera cruda de una liquidación (campos sin colapsar) para reconstruir la
+/// solapa "Liquidacion" del visor read-only de "Liquidación a Clientes". Ver
+/// <see cref="ReportService.GetLiquidacionCabeceraAsync"/>.</summary>
+public record LiquidacionCabeceraDto(
+    int IdLiquidacion, string Tipo, DateOnly? Fecha, string Codigo, string RazonSocial,
+    string Moneda, decimal Subtotal, decimal Extra, decimal TCambio, decimal Adicional,
+    decimal Iva, decimal Piva, string Motivo, decimal Total);
+
+/// <summary>Viaje pendiente de liquidar (universo POR ESTADO / POR FECHA de la
+/// pantalla "Liquidación a Clientes"). Una fila por viaje FINALIZADO de un grupo
+/// vencido. Solo lectura: refleja qué falta liquidar, sin valorizar.</summary>
+public record ViajePendienteRow(
+    long IdViaje, long IdViajeInt, string IdCliente, string Cliente, string Grupo,
+    DateTime? FReserva, DateTime? HsInicio, DateTime? HsFin, string Servicio,
+    string Destino, string Vehiculo, string Chofer, int Pax, string Cabecera,
+    long KmRecorrido, decimal ImporteConvenido, string MonedaConvenida, DateTime? FinGrupo);
+
+/// <summary>Adicional de un viaje pendiente (solapa "Adicionales" de Liquidación a
+/// Clientes), valorizado contra <c>adicional_lista_precio</c> (adicional × tipo
+/// vehículo × vigencia), igual que el FoxPro. <c>Estado</c>: ABONA o EXCLUIDO según el
+/// rubro esté en <c>cliente_adicional_excluido</c> (EXCLUIDO → precio/total 0).
+/// <c>SinTarifa</c> = ABONA pero sin precio vigente en el tarifario (el FoxPro lo
+/// pintaría como error de tarifa).</summary>
+public record ViajeAdicionalRow(
+    long IdViaje, string IdAdicional, string Nombre, long Cantidad, string Estado,
+    DateTime? Inicio, string Vehiculo, string Servicio, string Cabecera, string Destino,
+    decimal Precio, decimal Total, bool SinTarifa);
+
+/// <summary>Viaje valorizado en vivo por el motor de tarifas (<c>arma_servicio</c>),
+/// solapa "Servicios" de Liquidación a Clientes. <c>ImpServicio</c> = importe base del
+/// servicio (o -1 si no hay tarifa → <c>SinTarifa</c>); <c>ImpExtra</c> = horas extra;
+/// <c>ImpDescuento</c>/<c>ImpIncremento</c> = ajuste en cascada. El importe neto del
+/// viaje es <c>ImpServicio + ImpExtra + ImpIncremento - ImpDescuento</c>.</summary>
+public record ViajeValorizadoRow(
+    long IdViaje, long IdViajeInt, DateTime? HsInicio, DateTime? HsFin,
+    string Servicio, string Cabecera, string Vehiculo, string Destino, int Pax,
+    long Km, string Moneda, decimal ImpServicio, decimal ImpExtra,
+    decimal ImpDescuento, decimal ImpIncremento, bool SinTarifa)
+{
+    /// <summary>Importe neto del viaje (base + extra + incremento − descuento).
+    /// Si no hay tarifa (<see cref="SinTarifa"/>) devuelve 0 para no contaminar el total.</summary>
+    public decimal ImporteNeto => SinTarifa ? 0m
+        : ImpServicio + ImpExtra + ImpIncremento - ImpDescuento;
+}
+
+/// <summary>Totales de la solapa "Liquidación" (réplica de <c>arma_liquidacion</c>):
+/// los mismos campos que muestra el FoxPro. Todo en la moneda de la lista; el pesaje
+/// (× tipo de cambio) y el IVA se aplican sobre el total de servicios. Los adicionales
+/// (exentos) se suman sin IVA al final.</summary>
+public record LiquidacionTotalesRow(
+    decimal Subtotal, decimal Extra, decimal Descuento, decimal Incremento,
+    decimal Total, decimal TipoCambio, decimal TotalFinal, decimal Piva,
+    decimal Iva, decimal TotalConIva, decimal Adicionales, decimal TotalLiquidacion,
+    string Moneda, bool HayErroresTarifa);
+
+// ── Facturación: Liquidaciones estimadas (proyección) ──
+
+public record FacturacionEstimadaMesRow(
+    string Mes, int Liquidaciones, int Servicios, decimal TotalEstimado);
+
+public record FacturacionEstimadaClienteRow(
+    string Codigo, string RazonSocial, int Liquidaciones, decimal TotalEstimado);

@@ -1,10 +1,13 @@
 using MetroCarSysBlazor.Components;
 using MetroCarSysBlazor.Data;
 using MetroCarSysBlazor.Services;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.EntityFrameworkCore;
 using ApexCharts;
 using MudBlazor.Services;
+using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -44,12 +47,30 @@ builder.Services.AddScoped<ReportService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<ExcelExportService>();
 
-// Autenticación (estado en el circuito) + permisos por módulo (letras de usuario.acceso)
+// Autenticación por COOKIE — el navegador la manda en cada petición HTTP (pestaña
+// nueva / F5 incluidas), así el servidor reconoce al usuario antes de renderizar.
+// Expiración DESLIZANTE de 8h (jornada laboral): cada actividad renueva el reloj.
+builder.Services.AddAuthentication(NorturIdentityFactory.AuthScheme)
+    .AddCookie(NorturIdentityFactory.AuthScheme, opt =>
+    {
+        opt.Cookie.Name = "Nortur.Auth";
+        opt.Cookie.HttpOnly = true;
+        opt.Cookie.SameSite = SameSiteMode.Lax;
+        opt.ExpireTimeSpan = TimeSpan.FromHours(8);
+        opt.SlidingExpiration = true;
+        opt.LoginPath = "/login";
+        opt.LogoutPath = "/auth/logout";
+        // Es una SPA Blazor: ante 401/403 no redirigir con HTML, devolver el código.
+        opt.Events.OnRedirectToLogin = ctx => { ctx.Response.Redirect(ctx.RedirectUri); return Task.CompletedTask; };
+    });
+
+// Estado de auth para Blazor: nuestro provider lee el ClaimsPrincipal de la cookie.
 builder.Services.AddScoped<NorturAuthStateProvider>();
 builder.Services.AddScoped<AuthenticationStateProvider>(sp =>
     sp.GetRequiredService<NorturAuthStateProvider>());
 builder.Services.AddScoped<IPermissionService, PermissionService>();
-builder.Services.AddAuthorizationCore();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddAuthorization();
 builder.Services.AddCascadingAuthenticationState();
 
 var app = builder.Build();
@@ -67,7 +88,45 @@ app.UseHttpsRedirection();
 // Necesario para assets agregados después de la build, como videos .mp4.
 app.UseStaticFiles();
 
+app.UseAuthentication();
+app.UseAuthorization();
+
 app.UseAntiforgery();
+
+// ── Endpoints HTTP de auth ────────────────────────────────────────────────
+// SignInAsync/SignOutAsync escriben la cookie y SOLO funcionan en contexto de
+// request HTTP (no en un circuito interactivo). Por eso el login es un POST a
+// este endpoint, no un @onclick de Blazor.
+app.MapPost("/auth/login", async (HttpContext http, AuthService auth) =>
+{
+    var form = await http.Request.ReadFormAsync();
+    var usuario = form["usuario"].ToString();
+    var password = form["password"].ToString();
+    var destino = form["destino"].ToString();
+
+    var res = await auth.LoginAsync(usuario, password);
+    if (!res.Exito)
+        return Results.Redirect($"/login?error={Uri.EscapeDataString(res.Error ?? "Error de acceso")}");
+
+    var principal = NorturIdentityFactory.Crear(res.Usuario, res.Acceso, res.Nivel, res.Operador);
+    await http.SignInAsync(NorturIdentityFactory.AuthScheme, principal,
+        new Microsoft.AspNetCore.Authentication.AuthenticationProperties
+        {
+            IsPersistent = true,
+            ExpiresUtc = DateTimeOffset.UtcNow.AddHours(8)
+        });
+
+    // Validar que el destino sea una ruta local (anti open-redirect).
+    var url = (!string.IsNullOrEmpty(destino) && Uri.IsWellFormedUriString(destino, UriKind.Relative))
+        ? destino : "/";
+    return Results.Redirect(url);
+});
+
+app.MapPost("/auth/logout", async (HttpContext http) =>
+{
+    await http.SignOutAsync(NorturIdentityFactory.AuthScheme);
+    return Results.Redirect("/login");
+});
 
 app.MapStaticAssets();
 app.MapRazorComponents<App>()

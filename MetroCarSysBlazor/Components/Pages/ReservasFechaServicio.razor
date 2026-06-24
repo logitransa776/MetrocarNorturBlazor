@@ -236,9 +236,9 @@
 
     protected override async Task OnInitializedAsync()
     {
-        if (AuthState.UsuarioActual is null)
+        if (!await AuthState.EstaAutenticadoAsync())
         {
-            Nav.NavigateTo("/login", forceLoad: false);
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
             return;
         }
         if (!Permisos.Tiene('R'))   // módulo Reservas

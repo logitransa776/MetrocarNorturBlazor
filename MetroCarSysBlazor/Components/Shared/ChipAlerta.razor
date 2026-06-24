@@ -1,17 +1,24 @@
-@* Chip de alerta: muestra rojo si hay vencidos, amarillo si hay próximos, verde si todo OK *@
+@* Chip de alerta de vencimientos.
+   `Vencidos` y `ProxVencer` son EXCLUYENTES; el chip muestra el TOTAL (suma) — que
+   coincide con el número del FoxPro (aviso_agenda.prg). Color: rojo si hay vencidos,
+   ámbar si solo hay por-vencer, verde si todo en orden. *@
 
 <div class="tablero-group">
     <span class="tablero-group__label">@Label</span>
+    @{
+        var total = Vencidos + ProxVencer;
+        var tip = $"{Vencidos} vencido(s) · {ProxVencer} por vencer en {DiasAviso} días";
+    }
     @if (Vencidos > 0)
     {
-        <span class="tablero-chip tablero-chip--danger" title="@Vencidos vencidos · @(ProxVencer - Vencidos) vencen en 30 días">
-            <span class="tablero-chip__num">@Vencidos</span>
+        <span class="tablero-chip tablero-chip--danger" title="@tip">
+            <span class="tablero-chip__num">@total</span>
         </span>
     }
     else if (ProxVencer > 0)
     {
-        <span class="tablero-chip tablero-chip--warn" title="@ProxVencer vencen en los próximos 30 días">
-            <span class="tablero-chip__num">@ProxVencer</span>
+        <span class="tablero-chip tablero-chip--warn" title="@tip">
+            <span class="tablero-chip__num">@total</span>
         </span>
     }
     else
@@ -24,6 +31,10 @@
 
 @code {
     [Parameter, EditorRequired] public string Label { get; set; } = "";
+    /// <summary>Cantidad por vencer en la ventana de aviso (ámbar). Excluyente con Vencidos.</summary>
     [Parameter, EditorRequired] public int ProxVencer { get; set; }
+    /// <summary>Cantidad ya vencida o sin documento cargado (rojo). Excluyente con ProxVencer.</summary>
     [Parameter, EditorRequired] public int Vencidos { get; set; }
+    /// <summary>Días de la ventana de aviso (solo para el tooltip).</summary>
+    [Parameter] public int DiasAviso { get; set; } = 30;
 }

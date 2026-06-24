@@ -58,7 +58,7 @@ Total: `(subtotal+extra ± ajuste manual con motivo) × t_cambio + IVA + adicion
 
 | Tabla | Filas | Trampas |
 | --- | --- | --- |
-| `liquidacion` | 4.197 | PK **`idliquidac`**; `tipo` CLIENTE/PROVEEDOR; `id_cliente` = cliente o `fletero.id_contrat`; `retencion_`=IVA, `retencion2`=IIBB, `retencion3`=GCIA, `retencion4`=SUSS; `total` NULL en PROVEEDOR; factura manual en `tcp/lcp/ncp/fcomp` |
+| `liquidacion` | 4.197 | PK **`idliquidac`**; `tipo` CLIENTE/PROVEEDOR; `id_cliente` = cliente o `fletero.id_contrat`; **`retencion_`=IVA, `retencion2`=IIBB, `retencion3`=SUSS** (verificado contra el form 18/06/2026; `retencion4` existe pero el comprobante NO la usa); `total` NULL en PROVEEDOR; factura manual en `tcp/lcp/ncp/fcomp` (la columna *Factura* del browser = `tcp-lcp-SUBSTR(ncp,1,4)-SUBSTR(ncp,5)`). El nombre sale de `cliente.razon_soci` o `fletero.razon_soci`/`fletero.nombre` (cliente NO tiene columna `nombre`) |
 | `liquidacion_detalle` | 819K | `idliquidac`, `tipo` SERVICIO/ADICIONAL, **`id_adicion`** = código de servicio O adicional, `id_viaje_i` (ruta), `d_destino_`, `km_recorri`. ⚠️ NO incluye el ajuste global de cabecera |
 | `lista_precio` / `lista_precio_chofer` | 2.5K / 3.7K | `id_lista_p`, `id_servici`, `id_vehicul` (=TIPO), **`f_vigencia`/`f_vigenci2`** (desde/hasta), `tipo` S=servicio C=cabecera |
 | `lista_precio_modelo[_chofer]` | 46 / 25 | la MONEDA vive acá (`id_moneda_`), baja lógica |
@@ -104,11 +104,93 @@ Catálogos con nombre cruzado: form "Bancos" (`ctacte_banco`) escribe **`liquida
 encadenados con FoxyPreviewer), `viaje_personal.frx` (ABIERTO), `viaje_factura_problema.frx`
 (errores de tarifa). En `C:\MetroCarSys\Reports`.
 
-## Informes candidatos para Blazor (orden sugerido)
+## Informes migrados a Blazor (solo lectura)
 
-1. **Resumen de Liquidaciones** (browser + detalle) — réplica directa de
-   `liquidacion_cliente.scx`, solo lectura, alto valor.
-2. **Facturación estimada / proyección** — mejora del `facturacion_cliente_estimada`.
-3. **Control pre-liquidación** — viajes FINALIZADOS con grupo vencido sin liquidar +
-   errores de tarifa (hoy el usuario los descubre recién al valorizar).
-4. **Liquidación a clientes** (escritura) — recién con la regla strangler cumplida.
+| Informe | Página / ruta | Estado |
+| --- | --- | --- |
+| **Resumen de Liquidaciones** | `ResumenLiquidaciones.razor` (`/resumen-liquidaciones`) | ✅ 18/06/2026 — maestro-detalle, filtros (Nº/Tipo/fecha/cliente), comprobante en lectura (`LiquidacionComprobanteDialog`), Excel. Permiso `'F'` |
+| **Liquidaciones estimadas** | `FacturacionEstimada.razor` (`/facturacion-estimada`) | ✅ 18/06/2026 — proyección por mes/cliente sobre `liquidacion_detalle` (no re-valoriza), KPIs + ApexCharts + Excel. Permiso `'F'` |
+| **Liquidación a Clientes** | `LiquidacionClientes.razor` (`/liquidacion-clientes`) | ✅ 18/06/2026, **rehecho 20/06/2026** — réplica read-only de `facturacion_cliente_nueva.scx`: toolbar "Estado de las reservas" + botón `....`, **árbol cliente→grupo** (2 cajas azules), solapas Servicios/Cliente/Liquidacion. **NO valoriza en vivo** (motor de tarifas sin migrar). Click en una fila de servicios → abre el **Zoom del Viaje** (reusa `ZoomViajeDialog`). Permiso `'F'` |
+
+Métodos en `ReportService`: **`GetViajesPendientesLiquidarAsync`** (árbol POR ESTADO/POR
+FECHA, ver abajo) / `GetLiquidacionesAsync` / `GetLiquidacionDetalleAsync` /
+**`GetLiquidacionCabeceraAsync`** (cabecera cruda para la solapa Liquidacion) /
+`GetFacturacionEstimadaPorMesAsync` / `GetFacturacionEstimadaPorClienteAsync`. Export en
+`ExcelExportService`: `ResumenLiquidaciones` / `FacturacionEstimada`.
+
+### "Liquidación a Clientes": el árbol sale de VIAJES, no de liquidaciones (20/06/2026)
+
+⚠️ Corrección de la versión 18/06. El árbol del FoxPro (`bBusca`) NO se arma desde
+`liquidacion` (ya grabadas) sino desde **viajes pendientes de liquidar**, agrupados
+**cliente → grupo** (`GetViajesPendientesLiquidarAsync`):
+
+- **POR ESTADO** (default del combo, el más usado): `estado_via='FINALIZADO' AND
+  f_grupo_fi < HOY` (grupo vencido), **ignora las fechas** → las cajas Desde/Hasta se
+  **deshabilitan** en la UI. Trae las empresas reales con saldo a liquidar (AEROLINEAS,
+  CONUAR, FURLONG, GATE1, INFORMATION BA, MAPFRE, MSD, SANCOR, TSA, YPF…).
+- **POR FECHA**: ídem pero `f_grupo_fi BETWEEN desde AND hasta`.
+- **Excluye el cliente de prueba** `parametro.id_cliente` (hoy = **NORTUR**) — por eso
+  NORTUR no aparece en el árbol aunque tenga cientos de grupos.
+
+La solapa Servicios lista esos viajes (servicio/cabecera, destino, vehículo, chofer, pax,
+km, importe convenido si lo hay) **sin importes calculados** (sin motor de tarifas). La
+solapa Liquidacion remite al Resumen de Liquidaciones para ver totales ya grabados.
+
+**Trampa de tipos SQL (`GetViajesPendientesLiquidarAsync`):** en la réplica `viaje.id_viaje`
+y `viaje.pax` son **`int`**, no `bigint`; `id_viaje_i` y `km_recorri` SÍ son `bigint`. Leer
+un `int` con `SqlDataReader.GetInt64` tira `InvalidCastException` (ADO.NET no convierte
+int→long). Solución usada: **`CAST(... AS bigint)` en el SELECT** para forzar el tipo y
+desacoplar el getter del tipo subyacente.
+
+### Reconstrucción de la solapa "Liquidacion" desde datos grabados (clave)
+
+`bGraba` guarda en `liquidacion`: **`subtotal` = nSubtotal_ajustado (total NETO de
+servicios)**, **`extra` = nExtra_ajustado (ajuste global manual, normalmente 0)**, no el
+desglose por servicio. Por eso el visor reconstruye así (verificado contra liq 4560 y 4553):
+
+- **Bloque superior "Totales por servicios"** se reconstruye de `liquidacion_detalle`
+  (filas SERVICIO): las filas con `id_adicion='HORA DISPO'` (nombre "HORA A DISPOSICION")
+  son los **Extras**; el resto, el **Subtotal del Servicio**; `descuento`/`incremento` por
+  fila. `Subtotal Servicio + Extras == liquidacion.subtotal` (cuadra exacto cuando no hay
+  desc/incr).
+- **Bloque inferior** sale de la cabecera cruda: Subtotal=`subtotal`, Extras=`extra`,
+  `Total a Facturar = ROUND((subtotal+extra)·t_cambio)`, `Total General = +iva`,
+  `Total Liquidación = +adicional (exento)`. Coincide con `liquidacion.total`.
+- **Diálogo cotización** (img 4 «¿la cotizacion es igual a UNO?») → en read-only es un
+  `MudAlert` que aparece cuando `t_cambio=1 AND moneda≠PESOS` (la condición que lo disparaba
+  en `bGenera`).
+
+### Motor de valorización (`arma_servicio` + `arma_liquidacion`) — ✅ MIGRADO en vivo (22/06/2026)
+
+El motor de tarifas YA está migrado como **cálculo en vivo de solo lectura** (NO graba):
+`ReportService.ValorizarGrupoAsync` (precio por viaje, cascada `arma_servicio`) +
+`CalcularTotalesLiquidacionAsync` (totales solapa Liquidación, `arma_liquidacion`). Enchufado
+en `LiquidacionClientes.razor`: solapa **Servicios** muestra columna Importe por viaje (badge
+S/TARIFA si falta precio) y subtotal; solapa **Liquidación** muestra las cajas de totales
+idénticas a la pantalla FoxPro (Subtotal/Extras/Desc/Incr/Total/Cambio/IVA/Exento/Total
+Liquidación). DTOs `ViajeValorizadoRow` / `LiquidacionTotalesRow`.
+
+**Validado al peso** (GATE): 99,4% de 8.656 viajes históricos + el grupo de la captura
+#2890197 (142807.34 / 38057.59 / 180864.93, los tres exactos).
+
+**Trampas resueltas (no tocar sin releer el doc §3.2):**
+- modo H duración teórica: el FoxPro suma `minutos_du` como **horas** (`*3600`, bug a replicar).
+- horas extra: tarifa = `parametro.cliente_ad` (`'HORA ADICIONAL'`), fracción `fraccion_h`=25.
+- `obtiene_tarifa` usa `cliente.id_lista_p`; moneda de `lista_precio_modelo.id_moneda_`.
+- modo K: km = `km_recorri` o `servicio.km` si es 0.
+- **adicionales:** si `viaje_adicional.precio > 0` se usa **ese**, no la tarifa (fix de
+  `GetAdicionalesGrupoAsync` el 22/06; antes daba 31500 vs 38057.59 reales).
+- tarifa retroactiva: liquidaciones viejas pueden no cuadrar (su tarifa fue pisada); para
+  viajes PENDIENTES con la tarifa de hoy es correcto.
+
+**Pendiente del motor:** servicios 2º/3º, rutas (`id_viaje_i`), ajuste global manual (motivo),
+y el **Graba** real (requiere migrar la tabla con puente inverso + apagar el ABM FoxPro).
+
+## Informes candidatos pendientes (orden sugerido)
+
+1. **Control pre-liquidación** — viajes FINALIZADOS con grupo vencido sin liquidar +
+   errores de tarifa (con el motor ya migrado, ahora se pueden listar los S/TARIFA antes
+   de liquidar — la info ya la devuelve `ValorizarGrupoAsync`).
+2. **Liquidación a clientes — modo escritura (Graba)** — la valorización en vivo YA está.
+   Falta solo el Graba: INSERT liquidacion+detalle, UPDATE viaje→FACTURADO, cierra el grupo,
+   en una transacción. Requiere migrar la tabla con puente inverso (regla strangler).

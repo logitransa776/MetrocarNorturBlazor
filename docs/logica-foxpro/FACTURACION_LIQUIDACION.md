@@ -110,7 +110,41 @@ Cliente / Liquidación**. Variables públicas para el reporte. Cursores temporal
 > Regla clave: **solo se facturan viajes FINALIZADOS cuyo grupo ya terminó**. Es el
 > candado temporal que evita facturar un grupo a medio correr.
 
-### 3.2 Valorización (`arma_servicio` — el motor de tarifas)
+### 3.2 Valorización (`arma_servicio` — el motor de tarifas) — ✅ MIGRADO (cálculo en vivo, solo lectura)
+
+> **Migrado a Blazor el 22/06/2026** como `ReportService.ValorizarGrupoAsync` +
+> `CalcularTotalesLiquidacionAsync`. **Solo lectura**: calcula y muestra los totales en
+> vivo (igual que el FoxPro), NO graba (strangler). Enchufado en `LiquidacionClientes.razor`
+> (solapa **Servicios** = columna Importe por viaje; solapa **Liquidación** = cajas de
+> totales idénticas a la pantalla del FoxPro). **Validado al peso**: 99,4% de 8.656 viajes
+> históricos + el grupo de la captura (#2890197: Subtotal 142807.34 / Exento 38057.59 /
+> Total Liquidación 180864.93, los tres exactos). Detalle del relevamiento y trampas abajo.
+>
+> **Trampas que SÓLO se ven leyendo el código (sin ellas no cuadra):**
+> 1. **modo H, duración teórica:** `arma_duracion` suma `minutos_du` como **horas** (`*3600`
+>    en vez de `*60`) — es un **bug del FoxPro**, pero hay que replicarlo. En la práctica casi
+>    no afecta porque casi todos los servicios tienen `minutos_du = 0`.
+> 2. **Horas extra (modo H):** solo si la duración real supera la teórica. Tarifa = servicio
+>    `parametro.cliente_ad` (hoy `'HORA ADICIONAL'`). Fracción con `parametro.fraccion_h`
+>    (hoy **25**): minutos entre `fraccion_h` y 30 → +media hora; >30 → +hora entera.
+> 3. **`obtiene_tarifa` ignora la lista que recibe** y usa `cliente.id_lista_p` (modo
+>    `LISTA PRECIO`, 98% de clientes) o `cliente_tarifa` por vigencia (modo `CLIENTE`, 9).
+>    La **moneda** sale de `lista_precio_modelo.id_moneda_tipo`, no del precio.
+> 4. **modo K:** km = `km_recorri`, o `servicio.km` si `km_recorri = 0` (líneas 847-848).
+> 5. **Adicionales (`obtiene_adicional`):** si `viaje_adicional.precio > 0` se respeta **ese**
+>    precio; solo si viene en 0 se busca en `adicional_lista_precio`. ⚠️ **Este era un bug en
+>    `GetAdicionalesGrupoAsync`** (usaba siempre la tarifa) — corregido el 22/06/2026; sin el
+>    fix, el grupo #2890197 daba 31500 en vez de 38057.59 (el peaje `PJ_EZEIZA` trae precio
+>    propio 12857.59, no la tarifa 6300).
+>
+> **Limitación conocida (tarifa retroactiva):** las liquidaciones históricas se grabaron con
+> la tarifa vigente en su momento; la réplica solo guarda la tarifa **actual**. Por eso un
+> viaje viejo de `CABECERA_SERV` puede no cuadrar contra lo grabado (su tarifa fue pisada).
+> Para valorizar viajes **pendientes** con la tarifa de hoy esto es exactamente lo correcto.
+>
+> **Pendiente del motor:** servicios 2º/3º (`id_servic2/3`, rarísimos), rutas
+> (`id_viaje_i > 0`: tomar el último tramo con `hs_ini_ruta/hs_fin_ruta`) y el ajuste global
+> manual (porc/imp descuento/incremento con motivo). El IVA hoy es 0 (`parametro.piva = 0`).
 
 Por cada viaje del cliente/grupo (si `id_viaje_int > 0` es una RUTA: toma el **último**
 tramo y usa `hs_ini_ruta`/`hs_fin_ruta`; la ruta vale como un solo servicio):
@@ -265,12 +299,35 @@ Espejo del form de clientes con estas diferencias:
 
 ---
 
-## 5. Resumen de Liquidaciones (`liquidacion_cliente.scx`)
+## 5. Resumen de Liquidaciones (`liquidacion_cliente.scx`) — ✅ MIGRADO (solo lectura)
+
+> Migrado a Blazor el 18/06/2026 como `ResumenLiquidaciones.razor` (`/resumen-liquidaciones`),
+> solo lectura. Botón Revertir deshabilitado; botón Factura abre el comprobante en lectura
+> (`LiquidacionComprobanteDialog.razor`); Excel exporta cabeceras + detalle.
 
 Browser maestro: filtra por Nº exacto **o** tipo (CLIENTE/PROVEEDOR) + rango fecha +
 cliente. Grilla superior = cabeceras (`liquidacion` × `cliente`|`fletero`); grilla
 inferior = `liquidacion_detalle` de la fila seleccionada. Columna calculada
 `factura = tcp-lcp-ncp` si hay comprobante.
+
+**SQL real de la grilla de cabeceras** (`arma_grid`, código ACTIVO — el comentado de
+arriba está obsoleto). Cada columna que ve el usuario se CALCULA, el `total` de la tabla
+no se usa (viene NULL en muchas filas):
+
+```sql
+-- une contra cliente (tipo=CLIENTE) o fletero por id_contrat (tipo=PROVEEDOR)
+Subtotal  = ROUND((subtotal + extra) * t_cambio, 2)
+Iva       = iva
+Exento    = adicional                                    -- adicionales = exentos
+TotalGral = ROUND((subtotal + extra) * t_cambio + iva + adicional, 2)
+Factura   = tcp - lcp - SUBSTR(ncp,1,4) - SUBSTR(ncp,5)  -- si tcp no vacío
+-- + f_pago, forma_pago, banco, n_pago, retencion_iva, retencion_iibb, retencion_suss, pago
+```
+
+> ⚠️ **Mapeo de retenciones (verificado 18/06/2026 contra el form):** el FoxPro lee
+> `retencion_iva → liquidacion.retencion_`, `retencion_iibb → retencion2`,
+> `retencion_suss → retencion3`. (Corrige la nota previa que decía retencion3=GCIA /
+> retencion4=SUSS: el form de comprobante NO toca `retencion4`.)
 
 | Botón | Lógica |
 | --- | --- |
@@ -318,11 +375,20 @@ retencion_iva/iibb/suss, pago). **No genera asiento en ctacte.**
 
 ---
 
-## 7. Liquidaciones estimadas (`facturacion_cliente_estimada.scx`)
+## 7. Liquidaciones estimadas (`facturacion_cliente_estimada.scx`) — ✅ MIGRADO (resumen)
 
 Proyección de venta: toma TODOS los viajes `origen='T'` del rango (sin importar estado),
 los valoriza contra `lista_precio` vigente (sin horas extra ni adicionales) y agrupa por
 mes. Convierte con `moneda_cotizacion`. Solo lectura/Excel.
+
+> Migrado a Blazor el 18/06/2026 como `FacturacionEstimada.razor` (`/facturacion-estimada`).
+> **Decisión de migración:** en vez de re-valorizar viaje por viaje contra `lista_precio`
+> (la cascada de tarifas vive en el motor de `facturacion_cliente_nueva`, aún no migrado),
+> la versión Blazor agrega lo YA liquidado en `liquidacion_detalle` por mes/cliente —
+> fuente confiable para visualización y SQL 2012-friendly (`CONVERT(char(7), fecha, 120)`
+> para el mes). KPIs + gráfico mensual ApexCharts + tabla mes / tabla cliente. Cuando se
+> migre el motor de valorización, se puede sumar el modo "proyección real" sobre viajes
+> sin liquidar.
 
 ---
 
@@ -386,7 +452,7 @@ Estructura idéntica para venta (`lista_precio*`) y choferes (`lista_precio_chof
 
 | Tabla | Columnas trampa |
 | --- | --- |
-| `liquidacion` | **`idliquidac`** (PK autoinc), `tipo`, `fecha`, `id_cliente` (cliente O fletero), `moneda`, `subtotal`, `extra`, `t_cambio`, `adicional` (=exentos), `motivo`, `fcomp`, `tcp`/`lcp`/`ncp` (factura), `f_pago`, `forma_pago`, `banco`, `n_pago`, **`retencion_` = ret. IVA, `retencion2` = IIBB, `retencion3` = GCIA, `retencion4` = SUSS** (por orden de creación; verificar con datos), `pago`, `iva`, `piva`, `total` (NULL en tipo PROVEEDOR) |
+| `liquidacion` | **`idliquidac`** (PK autoinc), `tipo`, `fecha`, `id_cliente` (cliente O fletero), `moneda`, `subtotal`, `extra`, `t_cambio`, `adicional` (=exentos), `motivo`, `fcomp`, `tcp`/`lcp`/`ncp` (factura), `f_pago`, `forma_pago`, `banco`, `n_pago`, **`retencion_` = ret. IVA, `retencion2` = IIBB, `retencion3` = SUSS** (verificado 18/06/2026 contra el form de comprobante; `retencion4` existe pero el comprobante NO la usa), `pago`, `iva`, `piva`, `total` (NULL en tipo PROVEEDOR) |
 | `liquidacion_detalle` | `idliquidac`, `id_viaje`, **`id_viaje_i`** (ruta), `tipo` (SERVICIO/ADICIONAL), **`id_adicion`** (código servicio o adicional), `nombre`, `moneda`, `cantidad`, `precio`, `importe`, `descuento`, `incremento`, **`d_destino_`** (provincia), **`km_recorri`** |
 | `lista_precio` / `lista_precio_chofer` | **`id_lista_p`**, **`id_servici`**, **`id_vehicul`** (= tipo de vehículo), **`f_vigencia`** (desde), **`f_vigenci2`** (hasta), `precio`, `tipo` (S/C) |
 | `lista_precio_modelo[_chofer]` | `id_lista_p`, `nombre`, **`id_moneda_`**, `f_create/f_delete/f_modify` |

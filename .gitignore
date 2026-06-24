@@ -24,3 +24,11 @@ Thumbs.db
 # Secrets / local config
 appsettings.local.json
 secrets.json
+
+# Playwright / Node (smoke tests E2E)
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+tests/.env

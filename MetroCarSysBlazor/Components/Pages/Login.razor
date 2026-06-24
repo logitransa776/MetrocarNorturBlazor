@@ -1,102 +1,110 @@
 @page "/login"
 @layout EmptyLayout
-@inject AuthService Auth
-@inject NorturAuthStateProvider AuthState
-@inject IPermissionService Permisos
 @inject NavigationManager Nav
-@rendermode InteractiveServer
+@inject IHttpContextAccessor HttpCtx
+@using Microsoft.AspNetCore.Components.Forms
+
+@* SSR estático (sin rendermode interactivo): el form hace un POST HTML nativo a
+   /auth/login, que es donde SignInAsync puede escribir la cookie. Un @onclick
+   interactivo NO podría hacerlo (el response HTTP ya se envió). *@
 
 <PageTitle>Metrocar Nortur — Login</PageTitle>
 
 <div class="login-bg">
-    <div class="login-card">
+    <div class="login-anim"></div>
 
-        <div class="login-logo">
-            <img src="images/logo.png" alt="NORTUR" />
-        </div>
+    <form class="login-container" method="post" action="/auth/login">
+        <AntiforgeryToken />
+        <input type="hidden" name="destino" value="@_destino" />
 
-        <div class="login-field">
-            <label class="login-label">Usuario</label>
-            <div class="login-input-wrap">
-                <span class="login-icon">&#128100;</span>
-                <input class="login-input" type="text" placeholder=""
-                       @bind="_usuario" @bind:event="oninput"
-                       @onkeydown="OnKey" />
+        <header class="login-logo-section">
+            <div class="login-logo-img">
+                <img src="images/logo.png" alt="NORTUR" />
+            </div>
+        </header>
+
+        <div class="login-forms">
+            <div class="login-field">
+                <label class="login-label" for="login-user">Usuario</label>
+                <div class="login-input-wrap">
+                    <input id="login-user" name="usuario" class="login-input" type="text"
+                           placeholder="Ingrese su identificación" autocomplete="username"
+                           autofocus required />
+                </div>
+            </div>
+
+            <div class="login-field">
+                <label class="login-label" for="login-pass">Contraseña</label>
+                <div class="login-input-wrap">
+                    <input id="login-pass" name="password" class="login-input login-input--pass"
+                           type="password" placeholder="Ingrese su contraseña"
+                           autocomplete="current-password" required />
+                    <span class="login-eye" id="login-eye" title="Mostrar contraseña"
+                          onclick="norturLoginEye()">👁️</span>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <div class="login-error">@_error</div>
+            }
+
+            <div class="login-btn-group">
+                <button class="login-btn" type="submit">Ingresar</button>
             </div>
         </div>
 
-        <div class="login-field">
-            <label class="login-label">Contraseña</label>
-            <div class="login-input-wrap">
-                <span class="login-icon">&#128273;</span>
-                <input class="login-input" type="@(_mostrarPassword ? "text" : "password")"
-                       @bind="_password" @bind:event="oninput"
-                       @onkeydown="OnKey" />
-                <span class="login-eye" @onclick="() => _mostrarPassword = !_mostrarPassword"
-                      title="@(_mostrarPassword ? "Ocultar" : "Mostrar")">
-                    @(_mostrarPassword ? "🙈" : "👁️")
-                </span>
+        <footer class="login-footer">
+            <div class="login-footer-logo">
+                <img src="images/buslink_icon_e.png" alt="BUS LINK" class="login-footer-img" />
+                <span class="login-footer-text">BUS LINK</span>
             </div>
-        </div>
-
-        @if (!string.IsNullOrEmpty(_error))
-        {
-            <div class="login-error">@_error</div>
-        }
-
-        <button class="login-btn" disabled="@_cargando" @onclick="Ingresar">
-            @(_cargando ? "Validando..." : "Ingresar")
-        </button>
-
-        <div class="login-footer">
-            Sistema de Gestión de Tráfico
-            <strong>Acceso Seguro</strong>
-        </div>
-    </div>
+        </footer>
+    </form>
 </div>
 
+@* Mostrar/ocultar contraseña con JS puro (la página es SSR estática, sin Blazor interactivo). *@
+<script>
+    function norturLoginEye() {
+        var i = document.getElementById('login-pass');
+        var e = document.getElementById('login-eye');
+        if (i.type === 'password') { i.type = 'text'; e.textContent = '🙈'; e.title = 'Ocultar contraseña'; }
+        else { i.type = 'password'; e.textContent = '👁️'; e.title = 'Mostrar contraseña'; }
+    }
+</script>
+
 @code {
-    private string _usuario = "";
-    private string _password = "";
+    [SupplyParameterFromQuery] private string? Error { get; set; }
+
     private string? _error;
-    private bool _cargando;
-    private bool _mostrarPassword;
+    private string _destino = "/";
 
     protected override void OnInitialized()
     {
-        // Si ya hay sesión, ir directo al primer reporte que pueda ver.
-        if (AuthState.UsuarioActual is not null)
-            Nav.NavigateTo(Permisos.DestinoInicial() ?? "/", forceLoad: false);
-    }
+        _error = Error;
 
-    private async Task OnKey(KeyboardEventArgs e)
-    {
-        if (e.Key is "Enter" or "NumpadEnter")
-            await Ingresar();
-    }
-
-    private async Task Ingresar()
-    {
-        _error = null;
-        if (string.IsNullOrWhiteSpace(_usuario) || string.IsNullOrWhiteSpace(_password))
+        // Si ya hay cookie válida, el usuario está logueado: lo mandamos al
+        // dashboard en vez de mostrarle el login. El destino sale del query
+        // ?destino= (lo setea el guard de las páginas) o "/".
+        var user = HttpCtx.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated == true)
         {
-            _error = "Por favor completá usuario y contraseña";
+            Nav.NavigateTo(DestinoInicial(user), replace: true);
             return;
         }
 
-        _cargando = true;
-        var res = await Auth.LoginAsync(_usuario, _password);
-        _cargando = false;
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var qs = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (qs.TryGetValue("destino", out var d) && !string.IsNullOrWhiteSpace(d))
+            _destino = d!;
+    }
 
-        if (res.Exito)
-        {
-            // Carga claims con acceso/nivel/operador — espejo del login.scx del FoxPro.
-            AuthState.IniciarSesion(res.Usuario, res.Acceso, res.Nivel, res.Operador);
-            Nav.NavigateTo(Permisos.DestinoInicial() ?? "/", forceLoad: false);
-        }
-        else
-        {
-            _error = res.Error;
-        }
+    // Primer reporte que el usuario puede ver según sus claims de módulo.
+    private static string DestinoInicial(System.Security.Claims.ClaimsPrincipal u)
+    {
+        bool tiene(char m) => u.HasClaim(NorturClaims.Modulo, char.ToUpperInvariant(m).ToString());
+        return tiene('T') ? "/planilla-trafico"
+             : tiene('R') ? "/reservas-fecha-servicio"
+             : "/";
     }
 }

@@ -243,27 +243,27 @@ else if (_verCancelados)
                     </colgroup>
                     <thead>
                         <tr>
-                            <th class="r">#</th>
-                            <th class="c">Ob</th>
-                            <th class="c">Ad</th>
-                            <th>Reserva</th>
-                            <th>H.Ini</th>
-                            <th>H.Fin</th>
-                            <th>H.Avi</th>
-                            <th>H.Cie</th>
-                            <th>U/Pr</th>
-                            <th>U/Cb</th>
-                            <th>U/As</th>
-                            <th class="c">Chq</th>
-                            <th>Recorrido</th>
-                            <th>Motivo</th>
-                            <th>Veh</th>
-                            <th>Cliente</th>
-                            <th class="r">Pax</th>
-                            <th>Comentario</th>
-                            <th>Grupo</th>
-                            <th>Vuelo</th>
-                            <th>Guia</th>
+                            <th class="r" data-tooltip="Número de orden">#</th>
+                            <th class="c" data-tooltip="Observaciones del viaje">Ob</th>
+                            <th class="c" data-tooltip="Adjuntos vinculados al viaje">Ad</th>
+                            <th data-tooltip="Fecha de la reserva">Reserva</th>
+                            <th data-tooltip="Hora de inicio del servicio">H.Ini</th>
+                            <th data-tooltip="Hora de fin del servicio (estimada)">H.Fin</th>
+                            <th data-tooltip="Hora de aviso previo al cliente">H.Avi</th>
+                            <th data-tooltip="Hora de cierre del servicio">H.Cie</th>
+                            <th data-tooltip="Unidad programada (vehículo asignado en la programación)">U/Pr</th>
+                            <th data-tooltip="Unidad de cabecera">U/Cb</th>
+                            <th data-tooltip="Unidad asignada definitivamente al viaje">U/As</th>
+                            <th class="c" data-tooltip="Chequeo: el chofer confirmó el servicio">Chq</th>
+                            <th data-tooltip="Recorrido completo del viaje (origen → destino)">Recorrido</th>
+                            <th data-tooltip="Motivo registrado de la cancelación">Motivo</th>
+                            <th data-tooltip="Número interno del vehículo asignado">Veh</th>
+                            <th data-tooltip="Código del cliente que solicitó el servicio">Cliente</th>
+                            <th class="r" data-tooltip="Cantidad de pasajeros confirmados">Pax</th>
+                            <th data-tooltip="Observaciones internas del operador">Comentario</th>
+                            <th data-tooltip="Grupo de reservas al que pertenece este viaje">Grupo</th>
+                            <th data-tooltip="Número de vuelo asociado al traslado">Vuelo</th>
+                            <th data-tooltip="Guía de turismo asignado al servicio">Guia</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -361,50 +361,75 @@ else
                 </colgroup>
                 <thead>
                     <tr>
-                        <th class="r">#</th>
-                        <th>Estado</th>
-                        <th>Reserva</th>
-                        <th>H.Pre</th>
-                        <th>H.Ini</th>
-                        <th>H.Fin</th>
-                        <th>H.Avi</th>
-                        <th>H.Cie</th>
-                        <th>U/Pr</th>
-                        <th>U/Cb</th>
-                        <th>U/As</th>
-                        <th class="c">Chq</th>
-                        <th class="c">Ag</th>
-                        <th>Recorrido</th>
-                        <th>Fletero</th>
-                        <th>Chofer</th>
-                        <th>Veh</th>
-                        <th>Cliente</th>
-                        <th class="r">Pax</th>
-                        <th class="c">Agua</th>
-                        <th class="c">Adj</th>
-                        <th>Comentario</th>
-                        <th>Grupo</th>
-                        <th>Vuelo</th>
-                        <th>Guia</th>
+                        <th class="r" data-tooltip="Número de orden del servicio del día">#</th>
+                        <th data-tooltip="Estado actual: SIN ASIGNAR / ASIGNADO / EN CURSO / FINALIZADO / FACTURADO">Estado</th>
+                        <th data-tooltip="Fecha de la reserva">Reserva</th>
+                        <th data-tooltip="Hora de presentación del chofer en origen">H.Pre</th>
+                        <th data-tooltip="Hora de inicio del servicio">H.Ini</th>
+                        <th data-tooltip="Hora de fin del servicio (estimada)">H.Fin</th>
+                        <th data-tooltip="Hora de aviso previo al cliente">H.Avi</th>
+                        <th data-tooltip="Hora de cierre del servicio">H.Cie</th>
+                        <th data-tooltip="Unidad programada (vehículo asignado en la programación)">U/Pr</th>
+                        <th data-tooltip="Unidad de cabecera">U/Cb</th>
+                        <th data-tooltip="Unidad asignada definitivamente al viaje">U/As</th>
+                        <th class="c" data-tooltip="Chequeo: el chofer confirmó el servicio">Chq</th>
+                        <th class="c" data-tooltip="Agencia u operador intermediario">Ag</th>
+                        <th data-tooltip="Recorrido completo del viaje (origen → destino)">Recorrido</th>
+                        <th data-tooltip="Empresa propietaria del vehículo (NORTUR u otro fletero)">Fletero</th>
+                        <th data-tooltip="Nombre del chofer asignado al servicio">Chofer</th>
+                        <th data-tooltip="Número interno del vehículo asignado">Veh</th>
+                        <th data-tooltip="Código del cliente que solicitó el servicio">Cliente</th>
+                        <th class="r" data-tooltip="Cantidad de pasajeros confirmados">Pax</th>
+                        <th class="c" data-tooltip="Litros de agua requeridos para el servicio">Agua</th>
+                        <th class="c" data-tooltip="Adjuntos: documentos o archivos vinculados al viaje">Adj</th>
+                        <th data-tooltip="Observaciones internas del operador">Comentario</th>
+                        <th data-tooltip="Grupo de reservas al que pertenece este viaje">Grupo</th>
+                        <th data-tooltip="Número de vuelo asociado al traslado">Vuelo</th>
+                        <th data-tooltip="Guía de turismo asignado al servicio">Guia</th>
                     </tr>
                 </thead>
                 <tbody>
-                    @* Virtualize: solo renderiza las filas visibles en el viewport (~25),
-                       no las ~300 del día. El re-render por interacción pasa a ser O(filas
-                       visibles) en vez de O(total) — clave para igualar la fluidez de la
-                       grilla vieja con días cargados. ItemSize ≈ alto de fila en px. *@
-                    <Virtualize Items="visibles" Context="f" ItemSize="26" OverscanCount="6">
+                    @* <Virtualize> de Blazor: renderiza SOLO las filas visibles en el viewport
+                       (~25), no las ~400 del día. Esto resuelve los DOS costos a la vez:
+                         · el navegador pinta ~25 <tr>, no 400 → scroll fluido;
+                         · Blazor diffea ~25 <tr> en cada interacción (click de fila, tecla del
+                           buscador, tick del auto-refresh) → el patch SignalR es chico → sin lag.
+
+                       ItemSize=22 DEBE ser el alto REAL de fila en px. La fila mide 22px, fijado
+                       en app.css (.trafico-grid--virtual tbody tr/td { height:22px } + line-height
+                       18px). Al coincidir EXACTO, Virtualize no acumula error de posición de los
+                       spacers → la grilla no "salta" ni deja blancos. Si cambia el alto de fila en
+                       el CSS, cambiar este número.
+
+                       OverscanCount=20: pre-renderiza 20 filas extra arriba y abajo del viewport.
+                       Con scroll normal el colchón ya está pintado antes de entrar a la vista, así
+                       que no se ve el "blanco" mientras el servidor responde el round-trip.
+
+                       NOTA: la grilla principal NO debe llevar content-visibility (choca con los
+                       spacers de altura que inserta Virtualize → doble cálculo de alto → scroll
+                       inestable). Por eso la regla content-visibility en app.css excluye
+                       .trafico-grid--virtual. *@
+                    @* SpacerElement="tr": CRÍTICO porque <Virtualize> está dentro de un <tbody>.
+                       Por defecto Virtualize inserta sus spacers de altura como <div>, pero un
+                       <div> hijo directo de <tbody> es HTML inválido → el navegador lo reubica
+                       o lo ignora → el cálculo de posición del scroll se rompe (saltos/blancos).
+                       Con SpacerElement="tr" los spacers son <tr> válidos dentro de la tabla y el
+                       Intersection Observer de Virtualize mide bien. (Doc oficial .NET 10, sección
+                       "Control the spacer element tag name".) *@
+                    <Virtualize Items="visibles" Context="f" ItemSize="22" OverscanCount="20"
+                                SpacerElement="tr">
                         @{
-                            var _nro = visibles.IndexOf(f) + 1;
                             var esActiva = _filaActiva == f.IdViaje;
                         }
+                        @* class tg-row marca esto como fila de DATOS (alto fijo 22px en CSS);
+                           distingue del <tr> spacer de Virtualize, que NO la lleva. *@
                         <tr @key="f.IdViaje"
-                            class="@EstadoCss(f.Estado) @(esActiva ? "fila-activa" : "") @(_filasCambiadas.Contains(f.IdViaje) ? "fila-flash" : "")"
+                            class="tg-row @EstadoCss(f.Estado) @(esActiva ? "fila-activa" : "") @(_filasCambiadas.Contains(f.IdViaje) ? "fila-flash" : "")"
                             style="cursor:pointer;"
                             title="Doble click para ver el detalle del viaje"
                             @onclick="() => _filaActiva = (_filaActiva == f.IdViaje ? 0 : f.IdViaje)"
                             @ondblclick="() => AbrirZoom(f.IdViaje, f.Fecha)">
-                            <td class="r" style="color:#9AA7BC; font-size:0.72rem;">@_nro</td>
+                            <td class="r" style="color:#9AA7BC; font-size:0.72rem;">@(_indices.GetValueOrDefault(f.IdViaje))</td>
                             <td><span class="estado-chip estado-chip--@f.Estado.ToLowerInvariant().Replace(" ", "-")">@f.Estado</span></td>
                             <td>@f.Fecha.ToString("dd/MM/yyyy")</td>
                             <td class="td-bold">@f.HPre</td>
@@ -546,6 +571,11 @@ else
     private List<PlanillaTraficoRow> _visibles = new();
     private List<TraficoCanceladoRow> _canceladosVisibles = new();
 
+    // Nº de orden por fila (IdViaje → posición 1-based en _visibles). Memoizado: dentro de
+    // <Virtualize> no se puede usar IndexOf (sería O(n²) por scroll); el diccionario es O(1).
+    // Se reconstruye junto con _visibles en RecalcularVisibles.
+    private Dictionary<int, int> _indices = new();
+
     // Filtros de tipo de ingreso (réplica de Emp/Tur/Nortur del FoxPro).
     // Por defecto todo visible, igual que el form original (Nortur tildado).
     private bool _verEmpresa = true;   // origen 'P'
@@ -589,9 +619,9 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        if (AuthState.UsuarioActual is null)
+        if (!await AuthState.EstaAutenticadoAsync())
         {
-            Nav.NavigateTo("/login", forceLoad: false);
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
             return;
         }
         if (!Permisos.Tiene('T'))   // módulo Tráfico
@@ -867,6 +897,11 @@ else
     {
         _visibles = FilasVisibles();
         _canceladosVisibles = CanceladosVisibles();
+
+        // Nº de orden 1-based por IdViaje (la grilla lo lee O(1) dentro de <Virtualize>).
+        _indices = new Dictionary<int, int>(_visibles.Count);
+        for (int i = 0; i < _visibles.Count; i++)
+            _indices[_visibles[i].IdViaje] = i + 1;
     }
 
     private List<PlanillaTraficoRow> FilasVisibles()

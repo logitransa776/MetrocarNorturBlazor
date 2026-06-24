@@ -1,0 +1,332 @@
+@page "/resumen-liquidaciones"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Resumen de Liquidaciones — NORTUR</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-2">
+    <MudText Typo="Typo.h6" Style="font-weight:800; color:#112F5B;">
+        Resumen de Liquidaciones
+    </MudText>
+    <MudText Typo="Typo.caption" Style="color:#7A90AD;">
+        Facturación · Liquidaciones a clientes y proveedores — vista de solo lectura desde replicaVPF
+    </MudText>
+</div>
+
+@* ── Filtros (réplica de la toolbar FoxPro) ── *@
+<MudPaper Class="pa-2 px-3 mb-2" Elevation="1" Style="border-radius:12px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-end" style="gap:12px;">
+        <MudNumericField T="int" @bind-Value="_nroLiq" Label="Nº de Liquidación" Min="0"
+                         Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:150px;"
+                         HideSpinButtons="true" />
+        <div class="d-flex align-end" style="gap:10px;">
+            @* Mismo patrón que el datepicker de Planilla Tráfico (que funciona bien):
+               binding manual Date/DateChanged, sin Variant/Margin, PickerVariant.Dialog. *@
+            <MudDatePicker Date="_desde" Label="Desde" DateFormat="dd/MM/yyyy"
+                           Editable="true" Style="min-width:140px;"
+                           Culture="_ar" PickerVariant="PickerVariant.Dialog"
+                           DateChanged="@(d => _desde = d)" />
+            <MudDatePicker Date="_hasta" Label="Hasta" DateFormat="dd/MM/yyyy"
+                           Editable="true" Style="min-width:140px;"
+                           Culture="_ar" PickerVariant="PickerVariant.Dialog"
+                           DateChanged="@(d => _hasta = d)" />
+        </div>
+        <MudSelect T="string" @bind-Value="_tipo" Label="Tipo Liquidación"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;">
+            <MudSelectItem T="string" Value="@("CLIENTE")">CLIENTE</MudSelectItem>
+            <MudSelectItem T="string" Value="@("PROVEEDOR")">PROVEEDOR</MudSelectItem>
+        </MudSelect>
+        <MudAutocomplete T="ClienteOpt" @bind-Value="_cliente" Label="Cliente" Clearable="true"
+                         SearchFunc="BuscarCliente" ToStringFunc="@(c => c?.Texto ?? "")"
+                         Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:280px; flex:1;"
+                         ResetValueOnEmptyText="true" CoerceText="true" />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.FilterAlt"
+                   OnClick="Filtrar" Disabled="_cargando">Filtrar</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.Clear"
+                   OnClick="Limpiar" Disabled="_cargando">Limpia</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Success" StartIcon="@Icons.Material.Filled.TableView"
+                   OnClick="DescargarExcel" Disabled="_cargando || !_liquidaciones.Any()">Excel</MudButton>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    @* ── KPIs ── *@
+    <div class="d-flex flex-wrap mb-2" style="gap:10px;">
+        <KpiCard Label="Liquidaciones" Value="@Fmt(_liquidaciones.Count)" />
+        <KpiCard Label="Total general" Value="@($"$ {Money(_liquidaciones.Sum(l => l.TotalGral))}")" Color="@NorturColors.Naranja" />
+        <KpiCard Label="Con factura" Value="@Fmt(_liquidaciones.Count(l => l.TieneFactura))" />
+        <KpiCard Label="Pagado" Value="@($"$ {Money(_liquidaciones.Sum(l => l.Pago))}")" />
+    </div>
+
+    @* ── Grilla superior: cabeceras de liquidación ── *@
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;" Class="mb-3">
+        <MudTable Items="_liquidaciones" Dense="true" Hover="true" Striped="true"
+                  FixedHeader="true" Height="calc(55vh - 200px)" Bordered="false" Class="cli-grid grid-compacta"
+                  RowClassFunc="@RowClassSel" OnRowClick="@OnRowClick" T="LiquidacionRow"
+                  Virtualize="true">
+            <HeaderContent>
+                <MudTh>Idliquidacion</MudTh>
+                <MudTh>Tipo</MudTh>
+                <MudTh>Fecha</MudTh>
+                <MudTh>Codigo</MudTh>
+                <MudTh>Razon_social</MudTh>
+                <MudTh>Moneda</MudTh>
+                <MudTh Style="text-align:right;">Subtotal</MudTh>
+                <MudTh Style="text-align:right;">Iva</MudTh>
+                <MudTh Style="text-align:right;">Exento</MudTh>
+                <MudTh Style="text-align:right;">Totalgral</MudTh>
+                <MudTh>Fcomp</MudTh>
+                <MudTh>Factura</MudTh>
+                <MudTh>F_pago</MudTh>
+                <MudTh>Forma_pago</MudTh>
+                <MudTh>Banco</MudTh>
+                <MudTh Style="text-align:right;">N_pago</MudTh>
+                <MudTh Style="text-align:right;">Ret_iva</MudTh>
+                <MudTh Style="text-align:right;">Ret_iibb</MudTh>
+                <MudTh Style="text-align:right;">Ret_suss</MudTh>
+                <MudTh Style="text-align:right;">Pago</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Idliquidacion" Style="font-weight:700; color:#003AA0;">@context.IdLiquidacion</MudTd>
+                <MudTd DataLabel="Tipo">@context.Tipo</MudTd>
+                <MudTd DataLabel="Fecha">@Fecha(context.Fecha)</MudTd>
+                <MudTd DataLabel="Codigo">@context.Codigo</MudTd>
+                <MudTd DataLabel="Razon_social">@context.RazonSocial</MudTd>
+                <MudTd DataLabel="Moneda">@context.Moneda</MudTd>
+                <MudTd DataLabel="Subtotal" Style="text-align:right;">@Money(context.Subtotal)</MudTd>
+                <MudTd DataLabel="Iva" Style="text-align:right;">@Money(context.Iva)</MudTd>
+                <MudTd DataLabel="Exento" Style="text-align:right;">@Money(context.Exento)</MudTd>
+                <MudTd DataLabel="Totalgral" Style="text-align:right; font-weight:700;">@Money(context.TotalGral)</MudTd>
+                <MudTd DataLabel="Fcomp">@Fecha(context.Fcomp)</MudTd>
+                <MudTd DataLabel="Factura">@context.Factura</MudTd>
+                <MudTd DataLabel="F_pago">@Fecha(context.FPago)</MudTd>
+                <MudTd DataLabel="Forma_pago">@context.FormaPago</MudTd>
+                <MudTd DataLabel="Banco">@context.Banco</MudTd>
+                <MudTd DataLabel="N_pago" Style="text-align:right;">@(context.NPago > 0 ? context.NPago.ToString() : "")</MudTd>
+                <MudTd DataLabel="Ret_iva" Style="text-align:right;">@Money(context.RetIva)</MudTd>
+                <MudTd DataLabel="Ret_iibb" Style="text-align:right;">@Money(context.RetIibb)</MudTd>
+                <MudTd DataLabel="Ret_suss" Style="text-align:right;">@Money(context.RetSuss)</MudTd>
+                <MudTd DataLabel="Pago" Style="text-align:right;">@Money(context.Pago)</MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">No hay liquidaciones para el filtro aplicado.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        @* ── Botonera réplica FoxPro (Revertir/Factura → solo lectura) ── *@
+        <div class="cli-toolbar">
+            <MudButton Disabled="true" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Undo" Size="Size.Small">Revertir</MudButton>
+            <MudButton Variant="Variant.Text" Color="Color.Primary" StartIcon="@Icons.Material.Filled.ReceiptLong"
+                       Size="Size.Small" OnClick="VerComprobante" Disabled="_sel is null">Factura</MudButton>
+            <MudButton Variant="Variant.Text" Color="Color.Success" StartIcon="@Icons.Material.Filled.TableView"
+                       Size="Size.Small" OnClick="DescargarExcel" Disabled="!_liquidaciones.Any()">Excel</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" /> Solo lectura · seleccioná una fila para ver su detalle y comprobante
+            </span>
+        </div>
+    </MudPaper>
+
+    @* ── Grilla inferior: detalle de la liquidación seleccionada ── *@
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <div class="pa-2 px-3" style="background:#F4F7FC; border-bottom:1px solid #E2E9F3; font-weight:700; color:#112F5B; font-size:0.85rem;">
+            @if (_sel is null)
+            {
+                <span>Detalle de la liquidación — seleccioná una fila arriba</span>
+            }
+            else
+            {
+                <span>Detalle de la liquidación Nº @_sel.IdLiquidacion — @_sel.RazonSocial</span>
+            }
+        </div>
+        @if (_cargandoDetalle)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Style="border-radius:4px;" />
+        }
+        else
+        {
+            <MudTable Items="_detalle" Dense="true" Hover="true" Striped="true"
+                      FixedHeader="true" Height="calc(45vh - 120px)" Bordered="false" Class="cli-grid grid-compacta"
+                      T="LiquidacionDetalleRow" Virtualize="true">
+                <HeaderContent>
+                    <MudTh>Id</MudTh>
+                    <MudTh>Id_viaje</MudTh>
+                    <MudTh>Tipo</MudTh>
+                    <MudTh>Id_adicional</MudTh>
+                    <MudTh>Nombre</MudTh>
+                    <MudTh>Moneda</MudTh>
+                    <MudTh Style="text-align:right;">Cantidad</MudTh>
+                    <MudTh Style="text-align:right;">Precio</MudTh>
+                    <MudTh Style="text-align:right;">Importe</MudTh>
+                    <MudTh>D_destino_prov</MudTh>
+                    <MudTh Style="text-align:right;">Km_recorrido</MudTh>
+                    <MudTh Style="text-align:right;">Descuento</MudTh>
+                    <MudTh Style="text-align:right;">Incremento</MudTh>
+                    <MudTh Style="text-align:right;">Id_viaje_int</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Id">@context.Id</MudTd>
+                    <MudTd DataLabel="Id_viaje">@(context.IdViaje > 0 ? context.IdViaje.ToString() : "")</MudTd>
+                    <MudTd DataLabel="Tipo">@context.Tipo</MudTd>
+                    <MudTd DataLabel="Id_adicional">@context.IdAdicional</MudTd>
+                    <MudTd DataLabel="Nombre">@context.Nombre</MudTd>
+                    <MudTd DataLabel="Moneda">@context.Moneda</MudTd>
+                    <MudTd DataLabel="Cantidad" Style="text-align:right;">@context.Cantidad</MudTd>
+                    <MudTd DataLabel="Precio" Style="text-align:right;">@Money(context.Precio)</MudTd>
+                    <MudTd DataLabel="Importe" Style="text-align:right; font-weight:600;">@Money(context.Importe)</MudTd>
+                    <MudTd DataLabel="D_destino_prov">@context.DDestinoProv</MudTd>
+                    <MudTd DataLabel="Km_recorrido" Style="text-align:right;">@(context.KmRecorrido > 0 ? context.KmRecorrido.ToString() : "")</MudTd>
+                    <MudTd DataLabel="Descuento" Style="text-align:right;">@Money(context.Descuento)</MudTd>
+                    <MudTd DataLabel="Incremento" Style="text-align:right;">@Money(context.Incremento)</MudTd>
+                    <MudTd DataLabel="Id_viaje_int" Style="text-align:right;">@(context.IdViajeInt > 0 ? context.IdViajeInt.ToString() : "")</MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Typo="Typo.body2" Class="pa-4">Sin detalle.</MudText>
+                </NoRecordsContent>
+            </MudTable>
+        }
+    </MudPaper>
+}
+
+@code {
+    public record ClienteOpt(string Codigo, string Texto);
+
+    private List<LiquidacionRow> _liquidaciones = new();
+    private List<LiquidacionDetalleRow> _detalle = new();
+    private List<ClienteOpt> _clientes = new();
+
+    private bool _cargando = true;
+    private bool _cargandoDetalle;
+    private LiquidacionRow? _sel;
+
+    // Filtros — defaults parecidos al FoxPro (rango amplio, tipo CLIENTE)
+    private int _nroLiq;
+    private DateTime? _desde = new DateTime(2019, 1, 1);
+    private DateTime? _hasta = new DateTime(2030, 12, 31);
+    private string _tipo = "CLIENTE";
+    private ClienteOpt? _cliente;
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync()) { Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", false); return; }
+        if (!Permisos.Tiene('F')) { Nav.NavigateTo("/", false); return; }   // módulo Facturación
+
+        // Catálogo de clientes para el autocompletar del filtro
+        var clientes = await Reports.GetClientesAsync();
+        _clientes = clientes
+            .Select(c => new ClienteOpt(c.Codigo, $"{c.Codigo} — {c.RazonSocial}"))
+            .OrderBy(c => c.Texto)
+            .ToList();
+
+        await CargarAsync();
+    }
+
+    private Task<IEnumerable<ClienteOpt>> BuscarCliente(string valor, CancellationToken ct)
+    {
+        var res = string.IsNullOrWhiteSpace(valor)
+            ? _clientes.Take(50)
+            : _clientes.Where(c => c.Texto.Contains(valor, StringComparison.OrdinalIgnoreCase)).Take(50);
+        return Task.FromResult(res);
+    }
+
+    private async Task Filtrar() => await CargarAsync();
+
+    private async Task Limpiar()
+    {
+        _nroLiq = 0;
+        _desde = new DateTime(2019, 1, 1);
+        _hasta = new DateTime(2030, 12, 31);
+        _tipo = "CLIENTE";
+        _cliente = null;
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        _sel = null;
+        _detalle = new();
+        StateHasChanged();
+
+        var d = DateOnly.FromDateTime(_desde ?? new DateTime(2019, 1, 1));
+        var h = DateOnly.FromDateTime(_hasta ?? new DateTime(2030, 12, 31));
+        _liquidaciones = await Reports.GetLiquidacionesAsync(_nroLiq, _tipo, d, h, _cliente?.Codigo);
+
+        _cargando = false;
+    }
+
+    private async Task OnRowClick(TableRowClickEventArgs<LiquidacionRow> args)
+    {
+        _sel = args.Item;
+        if (_sel is null) return;
+        _cargandoDetalle = true;
+        StateHasChanged();
+        _detalle = await Reports.GetLiquidacionDetalleAsync(_sel.IdLiquidacion);
+        _cargandoDetalle = false;
+
+        // Doble clic abre el comprobante (como FoxPro abre el dialog de Factura)
+        if (args.MouseEventArgs.Detail >= 2)
+            await VerComprobante();
+    }
+
+    private async Task VerComprobante()
+    {
+        if (_sel is null) return;
+        var parametros = new DialogParameters<LiquidacionComprobanteDialog>
+        {
+            { x => x.Liq, _sel }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium, FullWidth = true,
+            CloseButton = false, CloseOnEscapeKey = true, BackdropClick = true
+        };
+        await DialogService.ShowAsync<LiquidacionComprobanteDialog>("Impuestos y Forma de Pago", parametros, opciones);
+    }
+
+    private async Task DescargarExcel()
+    {
+        // El Excel del FoxPro incluye cabeceras + detalle: traemos el detalle de cada
+        // liquidación filtrada. Para no traer 819K filas si el filtro es amplio, sólo
+        // exportamos detalle cuando el resultado es manejable (≤ 500 liquidaciones).
+        var detalle = new Dictionary<int, List<LiquidacionDetalleRow>>();
+        if (_liquidaciones.Count <= 500)
+        {
+            foreach (var l in _liquidaciones)
+                detalle[l.IdLiquidacion] = await Reports.GetLiquidacionDetalleAsync(l.IdLiquidacion);
+        }
+        else if (_sel is not null)
+        {
+            detalle[_sel.IdLiquidacion] = _detalle;
+        }
+
+        var bytes = Excel.ResumenLiquidaciones(_liquidaciones, detalle);
+        var nombre = $"liquidaciones_{_tipo.ToLower()}_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    private string RowClassSel(LiquidacionRow l, int _) =>
+        _sel is not null && l.IdLiquidacion == _sel.IdLiquidacion ? "cli-grid__row--sel" : "";
+
+    private string Fecha(DateOnly? f) => f is null ? "" : f.Value.ToString("dd/MM/yyyy", _ar);
+    private string Money(decimal v) => v.ToString("N2", _ar);
+    private string Fmt(int n) => n.ToString("#,0", _ar);
+}

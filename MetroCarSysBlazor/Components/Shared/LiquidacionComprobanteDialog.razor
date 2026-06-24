@@ -1,0 +1,113 @@
+@* Réplica de solo lectura del form liquidacion_cliente_carga_comprobante.scx
+   ("Impuestos y Forma de Pago"). Muestra el comprobante y el pago ya cargados de
+   una liquidación. Los botones Guardar siguen en FoxPro (strangler). *@
+
+<MudDialog Class="zoom-viaje-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.ReceiptLong" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Impuestos y Forma de Pago</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">Solo lectura</span>
+            <span class="zoom-title-bar__nro">Liq. Nº @Liq.IdLiquidacion</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @* ══════════ Número de comprobante ══════════ *@
+        <div class="zoom-box zoom-box--sec">
+            <span class="zoom-box__label">Número de comprobante</span>
+            <div class="zoom-row">
+                @F("Fecha", Fecha(Liq.Fcomp))
+                @F("Tipo", Tipo)
+                @F("Letra", Letra)
+                @F("Sucursal", Sucursal)
+                @F("Número", Numero, ancho: 2)
+            </div>
+            @if (!Liq.TieneFactura)
+            {
+                <div class="cli-footer__hint" style="margin-top:6px;">
+                    <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
+                    Esta liquidación todavía no tiene comprobante asignado.
+                </div>
+            }
+        </div>
+
+        @* ══════════ Pago de liquidación ══════════ *@
+        <div class="zoom-box zoom-box--sec">
+            <span class="zoom-box__label">Pago de liquidación</span>
+            <div class="zoom-row">
+                @F("Fecha Pago", Fecha(Liq.FPago))
+                @F("Forma de pago", Str(Liq.FormaPago), ancho: 2)
+                @F("Banco", Str(Liq.Banco), ancho: 2)
+                @F("Número", Liq.NPago > 0 ? Liq.NPago.ToString() : "—")
+            </div>
+            <div class="zoom-row" style="margin-top:8px;">
+                @F("Total Liquidación", Money(Liq.TotalGral), acento: true, ancho: 2)
+                @F("Retención IVA", Money(Liq.RetIva))
+                @F("Retención IIBB", Money(Liq.RetIibb))
+                @F("Retención SUSS", Money(Liq.RetSuss))
+                @F("Total Pago", Money(Liq.Pago), acento: true, ancho: 2)
+            </div>
+        </div>
+
+        @* ── Botonera réplica FoxPro (Guarda deshabilitado — solo lectura) ── *@
+        <div class="cli-footer">
+            <div class="cli-footer__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                Vista de solo lectura — la carga del comprobante se hace en Metrocar (FoxPro).
+            </div>
+            <div class="cli-footer__btns">
+                <MudButton Disabled="true" Variant="Variant.Outlined" Size="Size.Small">Guarda</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           OnClick="Cerrar">Salir</MudButton>
+            </div>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public LiquidacionRow Liq { get; set; } = default!;
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    // El comprobante en FoxPro es tcp-lcp-sucursal(4)-número(8). Acá ya nos llega
+    // pre-armado en Liq.Factura como "FAC-A-0005-00000030"; lo desarmamos para mostrar
+    // cada campo en su casillero, igual que el dialog original.
+    private string[] Partes => string.IsNullOrWhiteSpace(Liq.Factura)
+        ? Array.Empty<string>()
+        : Liq.Factura.Split('-');
+
+    private string Tipo     => Partes.Length > 0 ? Partes[0] : "—";
+    private string Letra    => Partes.Length > 1 ? Partes[1] : "—";
+    private string Sucursal => Partes.Length > 2 ? Partes[2] : "—";
+    private string Numero   => Partes.Length > 3 ? Partes[3] : "—";
+
+    private void Cerrar() => MudDialog.Close();
+
+    private string Fecha(DateOnly? f) => f is null ? "—" : f.Value.ToString("dd/MM/yyyy", _ar);
+    private string Str(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+    private string Money(decimal v) => v == 0 ? "—" : v.ToString("N2", _ar);
+
+    private RenderFragment F(string label, string valor, bool acento = false, int ancho = 1) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", $"zoom-field zoom-field--{ancho}");
+        if (!string.IsNullOrEmpty(label))
+        {
+            b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label");
+            b.AddContent(4, label); b.CloseElement();
+        }
+        b.OpenElement(5, "div");
+        b.AddAttribute(6, "class", acento ? "zoom-field__value zoom-field__value--acento" : "zoom-field__value");
+        b.AddContent(7, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+}

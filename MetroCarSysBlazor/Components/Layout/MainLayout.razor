@@ -80,7 +80,7 @@
                                 <span>Destinos</span>
                             </span>
                             @* Plantillas — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_plantillasExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_plantillasExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _plantillasExpanded = !_plantillasExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.Article" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Plantillas</span>
@@ -170,7 +170,7 @@
                                 <span>Cabeceras - Recorridos</span>
                             </span>
                             @* Francos — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_francosExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_francosExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _francosExpanded = !_francosExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.EventBusy" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Francos</span>
@@ -195,7 +195,7 @@
                                 </div>
                             }
                             @* Viáticos — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_viaticosExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_viaticosExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _viaticosExpanded = !_viaticosExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.AttachMoney" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Viáticos</span>
@@ -228,7 +228,7 @@
                                 <span>Guardia</span>
                             </span>
                             @* Contactos y Proveedores — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_contactosExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_contactosExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _contactosExpanded = !_contactosExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.Contacts" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Contactos y Proveedores</span>
@@ -257,7 +257,7 @@
                                 <span>Controles sobre los estados de las reservas</span>
                             </span>
                             @* Adicionales Stock — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_adicionalesStockExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_adicionalesStockExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _adicionalesStockExpanded = !_adicionalesStockExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.Inventory" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Adicionales Stock</span>
@@ -278,7 +278,7 @@
                                 </div>
                             }
                             @* Libro de Novedades — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_libroNovedadesExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_libroNovedadesExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _libroNovedadesExpanded = !_libroNovedadesExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.MenuBook" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Libro de Novedades</span>
@@ -331,7 +331,7 @@
                                 <span>Choferes</span>
                             </a>
                             @* Apercibimientos — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_apercibimientosExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_apercibimientosExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _apercibimientosExpanded = !_apercibimientosExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.GppBad" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Apercibimientos</span>
@@ -352,7 +352,7 @@
                                 </div>
                             }
                             @* Capacitaciones — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_capacitacionesExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_capacitacionesExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _capacitacionesExpanded = !_capacitacionesExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.School" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Capacitaciones</span>
@@ -460,7 +460,7 @@
                                 <span>Grupos</span>
                             </span>
                             @* Tarifario de Venta — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_tarifaVentaExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_tarifaVentaExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _tarifaVentaExpanded = !_tarifaVentaExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.PriceCheck" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Tarifario de Venta</span>
@@ -489,7 +489,7 @@
                                 </div>
                             }
                             @* Tarifario de Choferes — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_tarifaChofExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_tarifaChofExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _tarifaChofExpanded = !_tarifaChofExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.PersonSearch" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Tarifario de Choferes</span>
@@ -518,7 +518,7 @@
                                 </div>
                             }
                             @* Adicionales — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_adicionalesExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_adicionalesExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _adicionalesExpanded = !_adicionalesExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.AddShoppingCart" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Adicionales</span>
@@ -546,20 +546,24 @@
                                     </span>
                                 </div>
                             }
-                            <span class="nav-item nav-item--disabled">
+                            <a href="/resumen-liquidaciones"
+                               class="nav-item @(Nav.Uri.Contains("resumen-liquidaciones") ? "nav-item--active" : "")"
+                               @onclick="ToggleDrawer">
                                 <MudIcon Icon="@Icons.Material.Filled.Summarize" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Resumen de Liquidaciones</span>
-                            </span>
-                            <span class="nav-item nav-item--disabled">
+                            </a>
+                            <a href="/liquidacion-clientes"
+                               class="nav-item @(Nav.Uri.Contains("liquidacion-clientes") ? "nav-item--active" : "")"
+                               @onclick="ToggleDrawer">
                                 <MudIcon Icon="@Icons.Material.Filled.RequestPage" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Liquidación a Clientes</span>
-                            </span>
+                            </a>
                             <span class="nav-item nav-item--disabled">
                                 <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Liquidación a Fleteros</span>
                             </span>
                             @* Liquidación a Choferes — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_liquidChofExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_liquidChofExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _liquidChofExpanded = !_liquidChofExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Liquidación a Choferes</span>
@@ -591,10 +595,6 @@
                                     </span>
                                 </div>
                             }
-                            <span class="nav-item nav-item--disabled">
-                                <MudIcon Icon="@Icons.Material.Filled.Assessment" Size="Size.Small" Class="nav-item__icon" />
-                                <span>Liquidaciones estimadas</span>
-                            </span>
                         </div>
                     }
                 </div>
@@ -605,8 +605,8 @@
 
                 @if (Permisos.Tiene('L'))
                 {
-                @* ── TALLER ── *@
-                <div class="nav-section">
+                @* ── TALLER ── (oculta: sin pantallas migradas — quitar nav-section--soon al migrar la 1ª) *@
+                <div class="nav-section nav-section--soon">
                     <button class="nav-section__title @(_tallerExpanded ? "nav-section__title--open" : "")"
                             @onclick="() => _tallerExpanded = !_tallerExpanded">
                         <MudIcon Icon="@Icons.Material.Filled.Build" Size="Size.Small" Class="nav-section__icon" />
@@ -731,8 +731,8 @@
                 @* Combustible es la letra M (C son los avisos de chequeo) *@
                 @if (Permisos.Tiene('M'))
                 {
-                @* ── COMBUSTIBLE ── *@
-                <div class="nav-section">
+                @* ── COMBUSTIBLE ── (oculta: sin pantallas migradas — quitar nav-section--soon al migrar la 1ª) *@
+                <div class="nav-section nav-section--soon">
                     <button class="nav-section__title @(_combustibleExpanded ? "nav-section__title--open" : "")"
                             @onclick="() => _combustibleExpanded = !_combustibleExpanded">
                         <MudIcon Icon="@Icons.Material.Filled.LocalGasStation" Size="Size.Small" Class="nav-section__icon" />
@@ -798,8 +798,8 @@
 
                 @if (Permisos.Tiene('A'))
                 {
-                @* ── ABM DEL SISTEMA ── *@
-                <div class="nav-section">
+                @* ── ABM DEL SISTEMA ── (oculta: sin pantallas migradas — quitar nav-section--soon al migrar la 1ª) *@
+                <div class="nav-section nav-section--soon">
                     <button class="nav-section__title @(_abmExpanded ? "nav-section__title--open" : "")"
                             @onclick="() => _abmExpanded = !_abmExpanded">
                         <MudIcon Icon="@Icons.Material.Filled.ManageAccounts" Size="Size.Small" Class="nav-section__icon" />
@@ -942,8 +942,8 @@
 
                 @if (Permisos.Tiene('U'))
                 {
-                @* ── UTILITARIOS ── *@
-                <div class="nav-section">
+                @* ── UTILITARIOS ── (oculta: sin pantallas migradas — quitar nav-section--soon al migrar la 1ª) *@
+                <div class="nav-section nav-section--soon">
                     <button class="nav-section__title @(_utilitariosExpanded ? "nav-section__title--open" : "")"
                             @onclick="() => _utilitariosExpanded = !_utilitariosExpanded">
                         <MudIcon Icon="@Icons.Material.Filled.Tune" Size="Size.Small" Class="nav-section__icon" />
@@ -1111,11 +1111,14 @@
                 <MudText Typo="Typo.body2" Style="color:#C7D6EC;" Class="mr-3">
                     <strong style="color:#fff;">Usuario:</strong> @AuthState.UsuarioActual
                 </MudText>
-                <MudButton Variant="Variant.Filled" Color="Color.Secondary"
-                           OnClick="CerrarSesion" Size="Size.Small"
-                           Style="text-transform:none;">
-                    Cerrar sesión
-                </MudButton>
+                <form method="post" action="/auth/logout" style="margin:0;">
+                    <AntiforgeryToken />
+                    <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                               ButtonType="ButtonType.Submit" Size="Size.Small"
+                               Style="text-transform:none;">
+                        Cerrar sesión
+                    </MudButton>
+                </form>
             </MudAppBar>
 
             <MudMainContent>
@@ -1215,11 +1218,5 @@
     {
         _themeGris = !_themeGris;
         await JS.InvokeVoidAsync("norturTheme.set", _themeGris ? "gris" : "clasico");
-    }
-
-    private void CerrarSesion()
-    {
-        AuthState.CerrarSesion();
-        Nav.NavigateTo("/login", forceLoad: false);
     }
 }

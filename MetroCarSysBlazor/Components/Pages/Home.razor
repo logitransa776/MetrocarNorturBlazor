@@ -16,9 +16,9 @@
 @code {
     private bool _sinModulos;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        if (AuthState.UsuarioActual is null)
+        if (!await AuthState.EstaAutenticadoAsync())
         {
             Nav.NavigateTo("/login", forceLoad: false);
             return;

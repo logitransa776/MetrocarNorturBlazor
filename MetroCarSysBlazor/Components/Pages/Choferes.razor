@@ -51,7 +51,7 @@ else
     <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
         <MudTable Items="Filtrados" Dense="true" Hover="true" Striped="true"
                   FixedHeader="true" Height="calc(100vh - 290px)"
-                  Bordered="false" Class="cli-grid"
+                  Bordered="false" Class="cli-grid grid-compacta"
                   RowClass="cli-grid__row" RowClassFunc="@RowClass"
                   OnRowClick="@OnRowClick" T="ChoferListaRow">
             <HeaderContent>
@@ -130,9 +130,9 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        if (AuthState.UsuarioActual is null)
+        if (!await AuthState.EstaAutenticadoAsync())
         {
-            Nav.NavigateTo("/login", forceLoad: false);
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
             return;
         }
         if (!Permisos.Tiene('V'))   // módulo Vehículos y Choferes

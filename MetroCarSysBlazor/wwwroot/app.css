@@ -4,106 +4,189 @@ html, body {
 }
 
 /* ═══════════════════════════════════════════
-   LOGIN — fondo punteado + card moderna
+   LOGIN — AntiGravity (oscuro + neón) con paleta NORTUR
+   Todo acotado bajo .login-bg para no chocar con MudBlazor.
    ═══════════════════════════════════════════ */
 
 .login-bg {
+    --lg-blue: #00ccff;          /* neón celeste de apoyo */
+    --lg-nortur: #003AA0;        /* azul corporativo NORTUR */
+    --lg-orange: #F99410;        /* naranja corporativo NORTUR */
+    --lg-dark: #050a14;          /* fondo interior de la card */
+    --lg-panel: rgba(10, 20, 30, 0.85);
+    --lg-text: #e0e0e0;
+
+    position: relative;
     min-height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
-    background-color: #C8D4E3;
-    background-image: radial-gradient(rgba(255,255,255,0.45) 1px, transparent 1px);
-    background-size: 20px 20px;
-    font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif;
+    overflow: hidden;
+    font-family: 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+    color: var(--lg-text);
+    background: radial-gradient(circle at center, #e4ebf5 0%, #C8D4E3 100%);
 }
 
-.login-card {
-    background: #ffffff;
-    padding: 2.5rem;
-    border-radius: 16px;
-    box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);
+/* Fondo: grilla animada en diagonal */
+.login-bg .login-anim {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background:
+        linear-gradient(45deg, transparent 48%, rgba(0, 58, 160, 0.06) 50%, transparent 52%),
+        linear-gradient(-45deg, transparent 48%, rgba(249, 148, 16, 0.05) 50%, transparent 52%);
+    background-size: 60px 60px;
+    animation: loginGridMove 20s linear infinite;
+}
+
+@keyframes loginGridMove {
+    0%   { background-position: 0 0; }
+    100% { background-position: 60px 60px; }
+}
+
+/* Card translúcida con borde perimetral giratorio */
+.login-bg .login-container {
+    position: relative;
+    z-index: 1;
     width: 100%;
-    max-width: 400px;
-    text-align: center;
+    max-width: 405px;
+    min-height: 440px;
+    padding: 2.2rem 2rem 1rem;
+    background: var(--lg-panel);
+    border-radius: 20px;
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.7);
+    -webkit-backdrop-filter: blur(15px);
+    backdrop-filter: blur(15px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.login-logo {
-    margin-bottom: 2rem;
+.login-bg .login-container::before {
+    content: '';
+    position: absolute;
+    width: 200%;
+    height: 200%;
+    top: -50%;
+    left: -50%;
+    z-index: -2;
+    background: conic-gradient(transparent, transparent, transparent,
+                               var(--lg-blue), var(--lg-nortur), transparent);
+    animation: loginRotateBorder 6s linear infinite;
+}
+
+.login-bg .login-container::after {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    z-index: -1;
+    background: linear-gradient(160deg, #7a828d 0%, #565c66 100%);
+    border-radius: 18px;
+    opacity: 0.95;
+}
+
+@keyframes loginRotateBorder {
+    0%   { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Logo */
+.login-bg .login-logo-section {
+    text-align: center;
+    margin-bottom: 1.5rem;
+}
+
+.login-bg .login-logo-img {
     display: flex;
     justify-content: center;
     align-items: center;
+    margin: 0.2rem 0 0.6rem;
 }
 
-.login-logo img {
-    max-width: 180px;
-    height: auto;
+.login-bg .login-logo-img img {
+    max-height: 56px;
+    width: auto;
+    /* Efecto neón "outline": contorno blanco fino y nítido pegado al borde de
+       cada letra (un solo halo de 0.5px) + halo celeste suave por fuera.
+       Sin invertir el color: el centro de las letras queda oscuro. */
+    filter:
+        drop-shadow(0 0 0.5px #ffffff)
+        drop-shadow(0 0 2px rgba(0, 204, 255, 0.25));
 }
 
-.login-logo-buslink {
-    width: 460px;
-    max-width: 100%;
-    height: auto;
-    display: block;
+/* Campos */
+.login-bg .login-forms {
+    flex-grow: 0;
+    animation: loginFadeIn 0.5s ease;
 }
 
-.login-logo-text {
-    font-size: 2rem;
-    font-weight: 900;
-    letter-spacing: 2px;
-    color: #1f2937;
-    text-transform: uppercase;
-    justify-content: center;
-    align-items: center;
-    gap: 4px;
+@keyframes loginFadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
-.login-field {
-    margin-bottom: 1.5rem;
+.login-bg .login-field {
+    margin-bottom: 1.4rem;
+    position: relative;
     text-align: left;
 }
 
-.login-label {
+.login-bg .login-label {
     display: block;
-    margin-bottom: 0.5rem;
-    color: #1f2937;
-    font-weight: 600;
-    font-size: 0.9rem;
+    margin-bottom: 5px;
+    font-size: 0.8rem;
+    color: #fff;
+    letter-spacing: 1px;
 }
 
-.login-input-wrap {
+.login-bg .login-input-wrap {
     position: relative;
     display: flex;
     align-items: center;
 }
 
-.login-icon {
-    position: absolute;
-    left: 14px;
-    font-size: 1rem;
-    pointer-events: none;
-    line-height: 1;
-}
-
-.login-input {
+.login-bg .login-input {
     width: 100%;
-    padding: 12px 40px;
-    border: 2px solid #e5e7eb;
+    padding: 10px 15px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 8px;
+    color: #fff;
+    font-family: 'Roboto', sans-serif;
     font-size: 1rem;
-    font-family: inherit;
     outline: none;
-    background: #f9fafb;
-    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+    transition: all 0.3s ease;
 }
 
-.login-input:focus {
-    border-color: #003AA0;
-    background: #fff;
-    box-shadow: 0 0 0 4px rgba(0,58,160,0.1);
+.login-bg .login-input--pass {
+    padding-right: 44px;
 }
 
-.login-eye {
+.login-bg .login-input::placeholder {
+    color: #fff;
+}
+
+.login-bg .login-input:focus {
+    border-color: var(--lg-blue);
+    background: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 0 15px rgba(0, 204, 255, 0.3);
+}
+
+/* El autofill de Chrome pinta el input de blanco/lila — lo forzamos a oscuro */
+.login-bg .login-input:-webkit-autofill,
+.login-bg .login-input:-webkit-autofill:hover,
+.login-bg .login-input:-webkit-autofill:focus {
+    -webkit-text-fill-color: #fff;
+    caret-color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    -webkit-box-shadow: 0 0 0 1000px rgba(20, 32, 46, 0.95) inset;
+    box-shadow: 0 0 0 1000px rgba(20, 32, 46, 0.95) inset;
+    transition: background-color 9999s ease-in-out 0s;
+}
+
+.login-bg .login-eye {
     position: absolute;
     right: 14px;
     cursor: pointer;
@@ -113,10 +196,10 @@ html, body {
     user-select: none;
 }
 
-.login-error {
-    background: #fef2f2;
-    border: 1px solid #fca5a5;
-    color: #b91c1c;
+.login-bg .login-error {
+    background: rgb(220, 38, 38);
+    border: 1px solid rgb(248, 113, 113);
+    color: #fff;
     border-radius: 6px;
     padding: 8px 12px;
     font-size: 0.875rem;
@@ -124,47 +207,79 @@ html, body {
     text-align: left;
 }
 
-.login-btn {
+/* Botón */
+.login-bg .login-btn-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 1.2rem;
+}
+
+.login-bg .login-btn {
     width: 100%;
-    padding: 14px;
-    background-color: #003AA0;
-    color: white;
+    padding: 12px;
     border: none;
     border-radius: 8px;
-    font-size: 1rem;
-    font-weight: 600;
-    font-family: inherit;
+    color: #fff;
+    font-weight: 700;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
     cursor: pointer;
-    transition: background-color 0.2s, transform 0.1s;
-    margin-top: 0.5rem;
+    background: linear-gradient(90deg, var(--lg-blue), var(--lg-nortur));
+    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
-.login-btn:hover:not(:disabled) {
-    background-color: #002880;
+.login-bg .login-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 20px rgba(0, 58, 160, 0.5);
 }
 
-.login-btn:active:not(:disabled) {
-    transform: scale(0.98);
+.login-bg .login-btn:active:not(:disabled) {
+    transform: translateY(0) scale(0.99);
 }
 
-.login-btn:disabled {
+.login-bg .login-btn:disabled {
     opacity: 0.7;
     cursor: not-allowed;
 }
 
-.login-footer {
-    margin-top: 2rem;
-    color: #6b7280;
-    font-size: 0.85rem;
-    border-top: 1px solid #e5e7eb;
-    padding-top: 1rem;
+/* Footer BUS LINK */
+.login-bg .login-footer {
+    flex-grow: 0;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-top: 18px;
+    margin-bottom: 8px;
 }
 
-.login-footer strong {
-    color: #003AA0;
-    display: block;
-    margin-top: 4px;
-    font-size: 0.9rem;
+.login-bg .login-footer-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.login-bg .login-footer-img {
+    max-height: 38px;
+    width: auto;
+    opacity: 0.9;
+    mix-blend-mode: screen;
+    filter: drop-shadow(0 0 8px rgba(0, 204, 255, 0.4));
+}
+
+.login-bg .login-footer-text {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    font-size: 1.4rem;
+    letter-spacing: 2px;
+    color: transparent;
+    background: linear-gradient(90deg, var(--lg-blue), var(--lg-orange));
+    -webkit-background-clip: text;
+    background-clip: text;
+    filter: drop-shadow(0 0 8px rgba(0, 204, 255, 0.35));
 }
 
 .page-header {
@@ -364,10 +479,20 @@ html, body {
     padding-left: 33px;
 }
 
-.nav-item--disabled {
-    color: #A8BDD0;
-    cursor: default;
-    pointer-events: none;
+/* Ítems/submenús/secciones aún NO migrados: OCULTOS (no borrados — el markup
+   queda en MainLayout.razor). Se reactivan al construir su pantalla:
+   · ítem    → convertir el <span> en <a href> y quitar "nav-item--disabled"
+   · submenú → quitar "nav-section__title--soon" del toggle del grupo
+   · sección → quitar "nav-section--soon" del <div class="nav-section"> */
+.nav-item--disabled,
+.nav-section__title--soon,
+.nav-section--soon {
+    display: none;
+}
+
+/* Evita el divisor huérfano cuando la sección que lo precede está oculta */
+.nav-section--soon + .nav-divider {
+    display: none;
 }
 
 .nav-item__icon {
@@ -722,6 +847,30 @@ body.planilla-fixed .trafico-panel {
 .trafico-grid thead th.c { text-align: center; }
 .trafico-grid thead th.r { text-align: right; }
 
+/* Tooltips de encabezado de columna — CSS puro, sin componentes Blazor dentro de <th> */
+.trafico-grid thead th[data-tooltip] { cursor: help; }
+.trafico-grid thead th[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 4px);   /* debajo del header sticky para no quedar oculto */
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(17, 47, 91, 0.96);   /* AzulNoche NORTUR */
+    color: #fff;
+    font-size: 0.71rem;
+    font-weight: 400;
+    padding: 5px 10px;
+    border-radius: 5px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease;
+    z-index: 9999;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+    letter-spacing: 0;
+}
+.trafico-grid thead th[data-tooltip]:hover::after { opacity: 1; }
+
 .trafico-grid tbody td {
     padding: 1px 6px;
     border: 1px solid var(--nt-grid-row-border);
@@ -732,6 +881,28 @@ body.planilla-fixed .trafico-panel {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* line-height determinístico: el alto de la celda no depende de la fuente del SO.
+       Junto al alto de fila fijo de abajo, da un alto de fila constante (22px) que
+       coincide con el 'contain-intrinsic-size' del content-visibility → la barra de
+       scroll no "salta" cuando el browser pinta/despinta filas al scrollear. */
+    line-height: 18px;
+    box-sizing: border-box;
+}
+
+/* ALTO DE FILA FIJO (22px) — la fila mide EXACTAMENTE 18 de line-height + 2 de padding
+   vertical + ~2 de bordes collapse. Debe coincidir con el ItemSize="22" del <Virtualize>
+   en PlanillaTrafico.razor, para que la posición de los spacers sea correcta y el scroll
+   quede estable (sin saltos). Si cambia uno, cambiar el otro.
+
+   IMPORTANTE: se aplica solo a las filas de DATOS (clase .tg-row), NO a los <tr> spacer
+   que inyecta <Virtualize> (SpacerElement="tr"). Esos spacers necesitan su altura dinámica
+   propia (el offset de scroll); forzarles 22px rompería el cálculo. Por eso targeteamos
+   .tg-row y no "tbody tr" a secas. */
+.trafico-grid--virtual tbody tr.tg-row {
+    height: 22px;
+}
+.trafico-grid--virtual tbody tr.tg-row td {
+    height: 22px;
 }
 
 .trafico-grid tbody td.c { text-align: center; }
@@ -746,17 +917,17 @@ body.planilla-fixed .trafico-panel {
 /* PERFORMANCE — render virtual (dos capas, complementarias).
 
    1) Lado SERVIDOR: la grilla principal usa <Virtualize> (Blazor). El servidor genera
-      solo las filas visibles (~25) en vez de las ~300 del día, así solo esas se
-      diffean y viajan por SignalR en cada re-render (al abrir el Zoom, al filtrar).
+      solo las filas visibles (~25) en vez de las ~400 del día, así solo esas se diffean
+      y viajan por SignalR en cada re-render (al abrir el Zoom, al filtrar, al clickear
+      una fila). Eso mantiene fluido tanto el scroll como el click.
 
-   2) Lado NAVEGADOR: 'content-visibility: auto' hace que el browser pinte solo las
-      filas dentro del viewport del scroll. Esto fue lo que bajó el Zoom de 6-7s
-      (el navegador re-pintaba toda la tabla detrás del overlay del modal).
+   2) Lado NAVEGADOR: 'content-visibility: auto' hace que el browser pinte solo las filas
+      dentro del viewport del scroll. Se usa en las grillas SECUNDARIAS (cancelados, panel
+      Buses), que renderizan todas sus filas con foreach normal.
 
-   No se aplica 'content-visibility' a la grilla principal: choca con los spacers de
-   altura que inserta <Virtualize> (doble cálculo de alto → scroll inestable). La
-   grilla principal lleva la clase .trafico-grid--virtual y queda excluida; el resto
-   de las tablas (cancelados, panel Buses) conservan la virtualización por CSS. */
+   La grilla principal queda EXCLUIDA de content-visibility (selector :not(...--virtual)):
+   choca con los spacers de altura que inserta <Virtualize> (doble cálculo de alto →
+   scroll inestable). Su alto de fila fijo (22px = ItemSize) ya hace el scroll estable. */
 .trafico-grid:not(.trafico-grid--virtual) tbody tr {
     content-visibility: auto;
     contain-intrinsic-size: auto 22px;
@@ -1398,10 +1569,10 @@ h1:focus {
     color: #fff;
     border-bottom-color: #F99410;
 }
-.zoom-adic { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.zoom-adic { width: 100%; border-collapse: collapse; font-size: 0.89rem; }
 .zoom-adic th {
     text-align: left;
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: #F99410;
@@ -1414,7 +1585,7 @@ h1:focus {
     padding: 4px 8px;
     border-bottom: 1px solid rgba(249,148,16,0.2);
     color: var(--z-value);
-    font-size: 0.92rem;
+    font-size: 0.69rem;
 }
 .zoom-adic tr:last-child td { border-bottom: none; }
 .zoom-adic .r { text-align: right; }
@@ -1495,6 +1666,12 @@ h1:focus {
 .cli-grid__row--egresado:hover {
     background: #FDE68A !important;
 }
+.cli-grid__row--sel {
+    background: #DBEAFE !important;   /* fila seleccionada (azul claro) — maestro/detalle */
+}
+.cli-grid__row--sel:hover {
+    background: #BFDBFE !important;
+}
 
 .cli-toolbar {
     display: flex;
@@ -1503,6 +1680,32 @@ h1:focus {
     padding: 6px 12px;
     border-top: 1px solid #E8EFF9;
     background: #F8FAFD;
+}
+
+/* ════════════════════════════════════════════════════════════
+   Grillas compactas (Facturación — Resumen / Estimadas)
+   Densidad menor: fuente ~3-4px más chica y menos padding vertical,
+   sin tocar los ABMs ya validados. Aplicar la clase .grid-compacta
+   al MudTable junto con .cli-grid.
+   ════════════════════════════════════════════════════════════ */
+.grid-compacta th,
+.grid-compacta td {
+    font-size: 0.72rem !important;   /* ~11.5px vs ~14px del default */
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif !important;
+    padding-top: 3px !important;
+    padding-bottom: 3px !important;
+    line-height: 1.25 !important;
+}
+.grid-compacta th {
+    font-weight: 700 !important;
+    color: #112F5B !important;
+    background: #F4F7FC !important;
+    white-space: nowrap;
+}
+/* Una sola línea por celda: evita que la razón social larga rompa el alto de fila.
+   Si el texto excede, la grilla scrollea en horizontal (no se trunca el monto). */
+.grid-compacta td {
+    white-space: nowrap;
 }
 .cli-toolbar__hint {
     display: inline-flex;
@@ -1619,4 +1822,421 @@ h1:focus {
     background: #FEF3C7;
     border-radius: 4px;
     padding: 1px 6px;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Liquidación a Clientes (facturacion_cliente_nueva.scx) — visor read-only
+   Árbol cliente→liquidación (izquierda) + pageframe de 4 solapas (derecha)
+   ════════════════════════════════════════════════════════════════════════ */
+.fcn-layout {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+.fcn-side {
+    width: 300px;
+    flex: 0 0 300px;
+    display: flex;
+    flex-direction: column;
+}
+.fcn-main {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* ── Árbol ── */
+.fcn-tree {
+    background: #fff;
+    border: 1px solid #D9E2EF;
+    border-radius: 10px;
+    overflow-y: auto;
+    height: calc(100vh - 280px);
+    padding: 4px;
+}
+.fcn-tree__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    color: #8aa0bd;
+    text-align: center;
+    padding: 28px 14px;
+    font-size: 0.82rem;
+}
+.fcn-tree__cli {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 700;
+    color: #112F5B;
+    font-size: 0.82rem;
+}
+.fcn-tree__cli:hover { background: #EEF3FB; }
+.fcn-tree__cli--open { background: #E6EEFA; }
+.fcn-tree__cli-nom {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fcn-tree__badge {
+    background: #003AA0;
+    color: #fff;
+    font-size: 0.68rem;
+    font-weight: 700;
+    border-radius: 9px;
+    padding: 0 7px;
+    min-width: 20px;
+    text-align: center;
+}
+.fcn-tree__liq {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px 3px 24px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: #34465f;
+}
+.fcn-tree__liq:hover { background: #F4F7FC; }
+.fcn-tree__liq--sel {
+    background: #FFF1DC;
+    border-left: 3px solid #F99410;
+    font-weight: 700;
+    color: #B45309;
+}
+.fcn-tree__liq-fecha { margin-left: auto; font-size: 0.72rem; color: #8aa0bd; }
+
+/* ── Cajas azules (Text2/Text3 del FoxPro) ── */
+.fcn-blue {
+    background: #0080C0;
+    color: #fff;
+    font-weight: 700;
+    font-size: 0.82rem;
+    padding: 5px 10px;
+    border-radius: 6px;
+    margin-top: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ── Placeholder solapas ── */
+.fcn-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    color: #8aa0bd;
+    padding: 60px 20px;
+    background: #fff;
+    border: 1px dashed #D9E2EF;
+    border-radius: 10px;
+}
+
+/* ── Solapa Liquidacion ── */
+.fcn-liq-title {
+    font-size: 1rem;
+    font-weight: 800;
+    color: #112F5B;
+    margin-bottom: 8px;
+}
+.fcn-sep {
+    height: 2px;
+    background: #354A63;
+    opacity: 0.55;
+    margin: 12px 0;
+    border-radius: 2px;
+}
+.fcn-tot-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.fcn-cond-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 14px;
+    margin-bottom: 8px;
+}
+.fcn-cond-lbl {
+    font-weight: 700;
+    color: #1A2A45;
+    font-size: 0.85rem;
+    flex: 1 1 240px;
+    min-width: 180px;
+}
+
+/* Caja read-only estilo textbox FoxPro deshabilitado */
+.fcn-tb { flex: 1 1 0; min-width: 120px; }
+.fcn-tb--chico { flex: 0 0 140px; }
+.fcn-tb--ancho2 { flex: 2 1 0; min-width: 220px; }
+.fcn-tb__lbl {
+    font-size: 0.72rem;
+    color: #5b6f8a;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fcn-tb__val {
+    background: #EEF1F5;
+    border: 1px solid #CBD5E1;
+    border-radius: 4px;
+    padding: 4px 8px;
+    text-align: right;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: #1A2A45;
+    min-height: 28px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fcn-tb--ancho2 .fcn-tb__val { text-align: left; }
+.fcn-tb__val--acento {
+    background: #FFF6EA;
+    border-color: #F99410;
+    color: #B45309;
+    font-weight: 800;
+}
+
+/* Cajas finales (Totales Exento / Total Liquidación) */
+.fcn-finalbox {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    background: #F4F7FC;
+    border: 1px solid #D9E2EF;
+    border-radius: 8px;
+    padding: 8px 14px;
+    min-width: 180px;
+}
+.fcn-finalbox__lbl {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: #34465f;
+}
+.fcn-finalbox__val {
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: #112F5B;
+    text-align: right;
+}
+.fcn-finalbox--acento {
+    background: #FFF6EA;
+    border-color: #F99410;
+}
+.fcn-finalbox--acento .fcn-finalbox__val { color: #B45309; }
+
+/* Botonera read-only de la solapa Liquidacion */
+.fcn-btns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
+    max-width: 640px;
+}
+
+/* Badge de estado del adicional (ABONA / EXCLUIDO) */
+.fcn-badge {
+    display: inline-block;
+    padding: 1px 9px;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+.fcn-badge--abona {
+    background: #E6F4EA;
+    color: #1B7A3D;
+    border: 1px solid #B7E0C4;
+}
+.fcn-badge--excl {
+    background: #FBE9E9;
+    color: #B42318;
+    border: 1px solid #F1C4C0;
+}
+
+/* Mini grilla (Rubro de adicionales excluidos, en la solapa Cliente) */
+.fcn-mini-grid {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+}
+.fcn-mini-grid th {
+    text-align: left;
+    background: #EEF3FA;
+    color: #34465f;
+    font-weight: 700;
+    padding: 5px 10px;
+    border-bottom: 1px solid #D9E2EF;
+}
+.fcn-mini-grid td {
+    padding: 4px 10px;
+    border-bottom: 1px solid #EDF1F7;
+    color: #112F5B;
+}
+.fcn-mini-grid tr:last-child td { border-bottom: none; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Comprobante de liquidación formato RESUMEN (LiquidacionResumenDialog)
+   Réplica de la vista previa del reporte FoxPro (viaje_adicional*.frx).
+   ════════════════════════════════════════════════════════════════════════ */
+.liq-comp {
+    background: #fff;
+    color: #112F5B;
+    font-size: 0.84rem;
+    padding: 4px 2px 8px;
+}
+
+/* Membrete */
+.liq-comp__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 8px;
+    border-bottom: 3px solid #003AA0;
+}
+.liq-comp__brand { display: flex; flex-direction: column; }
+.liq-comp__brand-name {
+    font-size: 1.5rem;
+    font-weight: 900;
+    letter-spacing: 2px;
+    color: #003AA0;
+    line-height: 1;
+}
+.liq-comp__brand-sub {
+    font-size: 0.78rem;
+    color: #5b6f8c;
+    margin-top: 2px;
+}
+.liq-comp__meta {
+    text-align: right;
+    font-size: 0.82rem;
+}
+.liq-comp__meta span { color: #7A90AD; }
+
+/* Datos del cliente */
+.liq-comp__cli {
+    margin: 10px 0 4px;
+    padding: 8px 10px;
+    background: #F4F7FC;
+    border: 1px solid #DCE6F4;
+    border-radius: 8px;
+}
+.liq-comp__cli-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 70px 1fr;
+    gap: 4px 10px;
+    align-items: baseline;
+}
+.liq-comp__cli-row + .liq-comp__cli-row { margin-top: 4px; }
+.liq-comp__cli-lbl {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #7A90AD;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.liq-comp__cli-val { color: #112F5B; }
+.liq-comp__cli-val--big { font-weight: 800; font-size: 0.95rem; }
+
+/* Títulos de sección */
+.liq-comp__sectitle {
+    margin: 14px 0 5px;
+    font-weight: 800;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #003AA0;
+}
+
+/* Grillas del comprobante */
+.liq-comp__grid {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+.liq-comp__grid th {
+    background: #112F5B;
+    color: #fff;
+    font-weight: 700;
+    text-align: left;
+    padding: 5px 8px;
+    white-space: nowrap;
+}
+.liq-comp__grid td {
+    padding: 4px 8px;
+    border-bottom: 1px solid #EDF1F7;
+    vertical-align: top;
+}
+.liq-comp__grid tbody tr:nth-child(even) td { background: #F8FAFD; }
+.liq-comp__grid tfoot td {
+    border-top: 2px solid #B7C6DD;
+    background: #EEF3FA;
+    padding: 6px 8px;
+}
+.liq-comp__grid--adi { max-width: 480px; }
+.liq-comp__empty { text-align: center; color: #7A90AD; padding: 10px; }
+.liq-comp__notar {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 9px;
+    background: #FBE9E9;
+    color: #B42318;
+    border: 1px solid #F1C4C0;
+    font-size: 0.68rem;
+    font-weight: 700;
+}
+
+/* Cuadro de totales */
+.liq-comp__tot {
+    margin-top: 4px;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    min-width: 340px;
+    max-width: 480px;
+}
+.liq-comp__tot td {
+    padding: 4px 12px;
+    border-bottom: 1px solid #EDF1F7;
+}
+.liq-comp__tot td:first-child { color: #34465f; }
+.liq-comp__tot-final td {
+    border-top: 2px solid #003AA0;
+    border-bottom: none;
+    background: #FFF4E6;
+    font-weight: 900;
+    font-size: 1rem;
+    color: #003AA0;
+    padding: 7px 12px;
+}
+
+.liq-comp__foot {
+    margin-top: 14px;
+    padding-top: 6px;
+    border-top: 1px solid #E3EAF4;
+    font-size: 0.7rem;
+    color: #97A6BC;
+    font-style: italic;
+}
+
+.ta-r { text-align: right !important; }
+
+/* Al imprimir el comprobante (ventana aislada de imprimirElemento): márgenes y
+   colores fieles (force-color para conservar el header oscuro y el total naranja). */
+@media print {
+    .liq-comp, .liq-comp * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .liq-comp { font-size: 11px; }
 }

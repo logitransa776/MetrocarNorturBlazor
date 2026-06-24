@@ -1,0 +1,313 @@
+@inject IJSRuntime JS
+@inject ExcelExportService Excel
+
+@* ════════════════════════════════════════════════════════════════════════════
+   Comprobante de liquidación, formato RESUMEN — réplica de solo lectura del
+   reporte que arma el botón "Genera Resumen" (bGenera) del form FoxPro
+   facturacion_cliente_nueva.scx (reportes viaje_adicional.frx + viaje_adicional_total.frx).
+
+   bGenera NO graba: valida, llena los cursores temporales (viaje_cabecera /
+   viaje_detalle / tmpLiquidacion / tmpLiquidacionTotal) y lanza la vista previa
+   del reporte. Acá reproducimos esa vista previa con los datos YA calculados en
+   vivo por el motor de tarifas (ValorizarGrupoAsync + CalcularTotalesLiquidacionAsync
+   + GetAdicionalesGrupoAsync), sin tocar la base (estrategia strangler).
+
+   Estructura del reporte original:
+     • Encabezado: empresa (NORTUR) + cliente + grupo + fecha de emisión.
+     • Detalle por viaje (cursor tmpLiquidacion): fecha/hora, servicio, vehículo,
+       recorrido (desde→hasta), pax, km, importe del servicio, adicional.
+     • Pie de totales (cursor tmpLiquidacionTotal): Servicios {moneda} (subtotal /
+       extras / total / cambio / total liquidación), IVA, ADICIONALES EXENTOS
+       (uno por rubro) + Total Exento, y el Total final.
+   ════════════════════════════════════════════════════════════════════════════ *@
+
+<MudDialog Class="zoom-viaje-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.Summarize" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Liquidación — Resumen</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">Solo lectura · valorizado en vivo</span>
+            <span class="zoom-title-bar__nro">Grupo @Grupo</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @* Aviso de errores de tarifa (en el FoxPro esto bloquea el Genera/Graba) *@
+        @if (Totales.HayErroresTarifa)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2" Icon="@Icons.Material.Filled.ReportProblem">
+                Hay viajes o adicionales <b>sin tarifa vigente</b> en la lista del cliente.
+                En el Metrocar (FoxPro) esto impide generar/grabar la liquidación.
+                El total de abajo <b>excluye</b> esas filas.
+            </MudAlert>
+        }
+
+        @* ══════════ COMPROBANTE imprimible (todo lo de adentro va al PDF) ══════════ *@
+        <div id="liq-resumen-print" class="liq-comp">
+
+            @* ── Membrete ── *@
+            <div class="liq-comp__head">
+                <div class="liq-comp__brand">
+                    <span class="liq-comp__brand-name">NORTUR</span>
+                    <span class="liq-comp__brand-sub">Liquidación a Clientes · Resumen de servicios</span>
+                </div>
+                <div class="liq-comp__meta">
+                    <div><span>Fecha de emisión:</span> <b>@Fecha(DateTime.Today)</b></div>
+                    <div><span>Grupo:</span> <b>@Grupo</b></div>
+                </div>
+            </div>
+
+            @* ── Datos del cliente ── *@
+            <div class="liq-comp__cli">
+                <div class="liq-comp__cli-row">
+                    <span class="liq-comp__cli-lbl">Cliente</span>
+                    <span class="liq-comp__cli-val liq-comp__cli-val--big">@ClienteNombre</span>
+                    <span class="liq-comp__cli-lbl">CUIT</span>
+                    <span class="liq-comp__cli-val">@(Cliente?.Ncuit is null or "" ? "—" : Cliente.Ncuit)</span>
+                </div>
+                <div class="liq-comp__cli-row">
+                    <span class="liq-comp__cli-lbl">Domicilio</span>
+                    <span class="liq-comp__cli-val">@Domicilio</span>
+                    <span class="liq-comp__cli-lbl">Resp. IVA</span>
+                    <span class="liq-comp__cli-val">@(Cliente?.TipoResp is null or "" ? "—" : Cliente.TipoResp)</span>
+                </div>
+            </div>
+
+            @* ── Detalle de servicios (cursor tmpLiquidacion) ── *@
+            <div class="liq-comp__sectitle">Detalle de servicios de transportación</div>
+            <table class="liq-comp__grid">
+                <thead>
+                    <tr>
+                        <th class="ta-r">Id Viaje</th>
+                        <th>Fecha / Hora</th>
+                        <th>Servicio / Cabecera</th>
+                        <th>Recorrido</th>
+                        <th>Vehículo</th>
+                        <th class="ta-r">Pax</th>
+                        <th class="ta-r">Km</th>
+                        <th class="ta-r">Importe</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Viajes.Count == 0)
+                    {
+                        <tr><td colspan="8" class="liq-comp__empty">Sin servicios en el grupo.</td></tr>
+                    }
+                    else
+                    {
+                        @foreach (var v in Viajes)
+                        {
+                            <tr>
+                                <td class="ta-r">@(v.IdViaje > 0 ? v.IdViaje.ToString() : "")</td>
+                                <td>@Hora(v.HsInicio)</td>
+                                <td>@(string.IsNullOrWhiteSpace(v.Cabecera) ? v.Servicio : v.Cabecera)</td>
+                                <td>@Recorrido(v)</td>
+                                <td>@v.Vehiculo</td>
+                                <td class="ta-r">@(v.Pax > 0 ? v.Pax.ToString() : "")</td>
+                                <td class="ta-r">@(v.Km > 0 ? v.Km.ToString() : "")</td>
+                                <td class="ta-r">
+                                    @if (v.SinTarifa)
+                                    {
+                                        <span class="liq-comp__notar">S/TARIFA</span>
+                                    }
+                                    else
+                                    {
+                                        @Money(v.ImporteNeto)
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+                @if (Viajes.Count > 0)
+                {
+                    <tfoot>
+                        <tr>
+                            <td colspan="5" class="ta-r"><b>Subtotal servicios</b></td>
+                            <td class="ta-r"><b>@Viajes.Sum(v => v.Pax)</b></td>
+                            <td class="ta-r"><b>@Viajes.Sum(v => v.Km)</b></td>
+                            <td class="ta-r"><b>@Money(Viajes.Where(v => !v.SinTarifa).Sum(v => v.ImporteNeto))</b></td>
+                        </tr>
+                    </tfoot>
+                }
+            </table>
+
+            @* ── Adicionales que abona el cliente (exentos) ── *@
+            @{
+                var adiAbona = Adicionales.Where(a => a.Estado != "EXCLUIDO" && !a.SinTarifa).ToList();
+                var adiPorRubro = adiAbona
+                    .GroupBy(a => a.Nombre)
+                    .Select(g => new { Nombre = g.Key, Total = g.Sum(x => x.Total) })
+                    .OrderBy(x => x.Nombre)
+                    .ToList();
+            }
+            @if (adiPorRubro.Count > 0)
+            {
+                <div class="liq-comp__sectitle">Adicionales exentos</div>
+                <table class="liq-comp__grid liq-comp__grid--adi">
+                    <thead>
+                        <tr>
+                            <th>Rubro</th>
+                            <th class="ta-r">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var a in adiPorRubro)
+                        {
+                            <tr>
+                                <td>@a.Nombre</td>
+                                <td class="ta-r">@Money(a.Total)</td>
+                            </tr>
+                        }
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td class="ta-r"><b>Total Exento</b></td>
+                            <td class="ta-r"><b>@Money(Totales.Adicionales)</b></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            }
+
+            @* ── Cuadro de totales (cursor tmpLiquidacionTotal) ── *@
+            <div class="liq-comp__sectitle">Totales de la liquidación</div>
+            <table class="liq-comp__tot">
+                <tbody>
+                    <tr>
+                        <td>Servicios @(Totales.Moneda.Length > 0 ? Totales.Moneda : "PESOS")</td>
+                        <td class="ta-r">@Money(Totales.Total)</td>
+                    </tr>
+                    @if (Totales.Extra != 0)
+                    {
+                        <tr><td>Extras</td><td class="ta-r">@Money(Totales.Extra)</td></tr>
+                    }
+                    @if (Totales.Descuento != 0)
+                    {
+                        <tr><td>Descuento</td><td class="ta-r">-@Money(Totales.Descuento)</td></tr>
+                    }
+                    @if (Totales.Incremento != 0)
+                    {
+                        <tr><td>Incremento</td><td class="ta-r">@Money(Totales.Incremento)</td></tr>
+                    }
+                    @if (Totales.TipoCambio != 1m)
+                    {
+                        <tr>
+                            <td>Tipo de cambio (× @Money(Totales.TipoCambio))</td>
+                            <td class="ta-r">@Money(Totales.TotalFinal)</td>
+                        </tr>
+                    }
+                    @if (Totales.Iva > 0)
+                    {
+                        <tr>
+                            <td>IVA @Money(Totales.Piva)%</td>
+                            <td class="ta-r">@Money(Totales.Iva)</td>
+                        </tr>
+                        <tr>
+                            <td>Total más IVA</td>
+                            <td class="ta-r">@Money(Totales.TotalConIva)</td>
+                        </tr>
+                    }
+                    @if (Totales.Adicionales > 0)
+                    {
+                        <tr><td>Adicionales exentos</td><td class="ta-r">@Money(Totales.Adicionales)</td></tr>
+                    }
+                    <tr class="liq-comp__tot-final">
+                        <td>TOTAL LIQUIDACIÓN</td>
+                        <td class="ta-r">@Money(Totales.TotalLiquidacion)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="liq-comp__foot">
+                Comprobante generado por el sistema de Informes y Reportes NORTUR ·
+                vista de solo lectura · los importes se calculan en vivo contra el tarifario vigente.
+            </div>
+        </div>
+
+        @* ── Botonera (réplica de la del FoxPro; Graba sigue en FoxPro) ── *@
+        <div class="cli-footer">
+            <div class="cli-footer__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                Equivale al reporte <b>RESUMEN</b> del Metrocar. La grabación de la liquidación se hace en FoxPro.
+            </div>
+            <div class="cli-footer__btns">
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.TableView"
+                           OnClick="DescargarExcel" Disabled="_ocupado">Excel</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Print"
+                           OnClick="Imprimir" Disabled="_ocupado">Imprimir / PDF</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           OnClick="Cerrar">Salir</MudButton>
+            </div>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    // Todo llega ya calculado por la página (no re-consultamos): los mismos datos que
+    // muestran las solapas Servicios / Adicionales / Liquidación.
+    [Parameter] public string Grupo { get; set; } = "";
+    [Parameter] public ClienteDetalleDto? Cliente { get; set; }
+    [Parameter] public List<ViajeValorizadoRow> Viajes { get; set; } = new();
+    [Parameter] public List<ViajeAdicionalRow> Adicionales { get; set; } = new();
+    [Parameter] public LiquidacionTotalesRow Totales { get; set; } = default!;
+
+    private bool _ocupado;
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private string ClienteNombre => Cliente?.RazonSocial is { Length: > 0 } rs ? rs : "—";
+    private string Domicilio =>
+        Cliente is null ? "—"
+        : $"{Cliente.Domicilio} {Cliente.Nro} {Str(Cliente.Localidad)} {Str(Cliente.Provincia)}".Trim();
+
+    // Recorrido del viaje: el reporte muestra Desde→Hasta; en la réplica el destino
+    // ya viene resuelto en ViajeValorizadoRow.Destino (puede traer "ORIGEN - DESTINO").
+    private string Recorrido(ViajeValorizadoRow v) =>
+        string.IsNullOrWhiteSpace(v.Destino) ? "—" : v.Destino;
+
+    private void Cerrar() => MudDialog.Close();
+
+    private async Task Imprimir()
+    {
+        _ocupado = true;
+        try
+        {
+            await JS.InvokeVoidAsync("imprimirElemento", "liq-resumen-print",
+                $"Liquidacion Resumen - Grupo {Grupo}");
+        }
+        finally { _ocupado = false; }
+    }
+
+    // Excel del resumen: detalle de servicios valorizados + adicionales + totales,
+    // igual que "Liq Excel" del FoxPro (que vuelca el cursor tmpLiquidacion).
+    private async Task DescargarExcel()
+    {
+        _ocupado = true;
+        try
+        {
+            var bytes = Excel.LiquidacionResumen(Grupo, ClienteNombre, Viajes, Adicionales, Totales);
+            var nombre = $"Liquidacion_Resumen_{Limpio(Grupo)}_{DateTime.Today:yyyyMMdd}.xlsx";
+            using var stream = new MemoryStream(bytes);
+            using var streamRef = new DotNetStreamReference(stream);
+            await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+        }
+        finally { _ocupado = false; }
+    }
+
+    private static string Limpio(string s) =>
+        new string(s.Where(c => char.IsLetterOrDigit(c)).ToArray());
+
+    private string Fecha(DateTime? f) => f is null ? "—" : f.Value.ToString("dd/MM/yyyy", _ar);
+    private string Hora(DateTime? f) => f is null ? "" : f.Value.ToString("dd/MM HH:mm", _ar);
+    private string Money(decimal v) => v.ToString("N2", _ar);
+    private string Str(string? s) => string.IsNullOrWhiteSpace(s) ? "" : s;
+}

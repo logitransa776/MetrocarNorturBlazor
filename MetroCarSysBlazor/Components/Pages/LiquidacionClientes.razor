@@ -1,0 +1,669 @@
+@page "/liquidacion-clientes"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+@* ════════════════════════════════════════════════════════════════════════════
+   Réplica de solo lectura del form FoxPro facturacion_cliente_nueva.scx
+   ("Liquidación a Clientes" / caption real "Mantenimiento de Base de Datos").
+
+   El form original arma el árbol cliente → grupo desde los VIAJES FINALIZADOS
+   pendientes de liquidar (búsqueda bBusca), los valoriza en vivo contra los
+   tarifarios y graba la liquidación.
+
+   Como el motor de tarifas aún no se migró y rige el strangler (tablas con dueño
+   FoxPro = solo lectura), acá NO valorizamos: reproducimos la misma cara (toolbar
+   + árbol cliente → grupo + grilla de servicios del grupo) mostrando QUÉ falta
+   liquidar, sin importes calculados. Toda la botonera de escritura queda visible
+   pero deshabilitada.
+
+   Modos del combo "Estado de las reservas" (igual al FoxPro):
+     • POR ESTADO (default, el más usado): trae TODOS los grupos vencidos
+       (f_grupo_fi < HOY); las cajas de fecha se deshabilitan.
+     • POR FECHA: filtra f_grupo_fi por el rango Desde/Hasta.
+   ════════════════════════════════════════════════════════════════════════════ *@
+
+<PageTitle>Liquidación a Clientes — NORTUR</PageTitle>
+
+<div class="page-header mb-2">
+    <MudText Typo="Typo.h6" Style="font-weight:800; color:#112F5B;">
+        Liquidación a Clientes
+    </MudText>
+    <MudText Typo="Typo.caption" Style="color:#7A90AD;">
+        Facturación · Mantenimiento de Base de Datos — vista de solo lectura desde replicaVPF
+    </MudText>
+</div>
+
+@{
+    // POR ESTADO no usa fechas (igual al FoxPro): las cajas se deshabilitan.
+    var porFecha = _modo == "POR FECHA";
+}
+
+@* ── Toolbar "Estado de las reservas" (réplica de la imagen 2) ── *@
+<MudPaper Class="pa-2 px-3 mb-2" Elevation="1" Style="border-radius:12px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-end" style="gap:12px;">
+        <MudText Typo="Typo.body2" Style="font-weight:700; color:#112F5B; padding-bottom:8px;">
+            Estado de las reservas
+        </MudText>
+        <MudSelect T="string" Value="_modo" ValueChanged="OnModoChanged" Variant="Variant.Outlined"
+                   Margin="Margin.Dense" Style="width:160px;">
+            <MudSelectItem T="string" Value="@("POR ESTADO")">POR ESTADO</MudSelectItem>
+            <MudSelectItem T="string" Value="@("POR FECHA")">POR FECHA</MudSelectItem>
+        </MudSelect>
+        <MudDatePicker Date="_desde" Label="Desde" DateFormat="dd/MM/yyyy"
+                       Editable="true" Style="min-width:140px;" Disabled="@(!porFecha)"
+                       Culture="_ar" PickerVariant="PickerVariant.Dialog"
+                       DateChanged="@(d => _desde = d)" />
+        <MudDatePicker Date="_hasta" Label="Hasta" DateFormat="dd/MM/yyyy"
+                       Editable="true" Style="min-width:140px;" Disabled="@(!porFecha)"
+                       Culture="_ar" PickerVariant="PickerVariant.Dialog"
+                       DateChanged="@(d => _hasta = d)" />
+        @* El botón "...." (bBusca) del FoxPro: arma el árbol cliente → grupo. *@
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Style="min-width:52px; font-weight:800; letter-spacing:2px;"
+                   OnClick="Cargar" Disabled="_cargando" title="Buscar grupos pendientes de liquidar">....</MudButton>
+        <span style="flex:1;"></span>
+        <span class="cli-toolbar__hint" style="padding-bottom:8px;">
+            <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" /> Solo lectura · valorizado en vivo
+        </span>
+        <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.Logout"
+                   OnClick="@(() => Nav.NavigateTo("/"))">Salir</MudButton>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <div class="fcn-layout">
+        @* ════════ Columna izquierda: árbol cliente → grupo ════════ *@
+        <div class="fcn-side">
+            <div class="fcn-tree">
+                @if (_arbol.Count == 0)
+                {
+                    <div class="fcn-tree__empty">
+                        <MudIcon Icon="@Icons.Material.Filled.AccountTree" />
+                        <span>
+                            Sin grupos pendientes de liquidar@(porFecha ? " en el período." : ".")<br />
+                            @(porFecha ? "Ajustá las fechas y tocá " : "Tocá ")<b>....</b>
+                        </span>
+                    </div>
+                }
+                else
+                {
+                    @foreach (var cli in _arbol)
+                    {
+                        <div class="fcn-tree__cli @(EsClienteAbierto(cli.IdCliente) ? "fcn-tree__cli--open" : "")"
+                             @onclick="@(() => ToggleCliente(cli.IdCliente))">
+                            <MudIcon Icon="@(EsClienteAbierto(cli.IdCliente) ? Icons.Material.Filled.IndeterminateCheckBox : Icons.Material.Filled.AddBox)"
+                                     Size="Size.Small" />
+                            <span class="fcn-tree__cli-nom" title="@cli.Cliente">@cli.Cliente</span>
+                            <span class="fcn-tree__badge">@cli.TotalViajes</span>
+                        </div>
+                        @if (EsClienteAbierto(cli.IdCliente))
+                        {
+                            @foreach (var grp in cli.Grupos)
+                            {
+                                <div class="fcn-tree__liq @(_sel == grp ? "fcn-tree__liq--sel" : "")"
+                                     @onclick="@(() => Seleccionar(grp))">
+                                    <MudIcon Icon="@Icons.Material.Filled.Workspaces" Size="Size.Small" />
+                                    <span title="@grp.Grupo">@grp.Grupo</span>
+                                    <span class="fcn-tree__liq-fecha">@grp.Viajes.Count viajes</span>
+                                </div>
+                            }
+                        }
+                    }
+                }
+            </div>
+
+            @* Botón "Liquida Varios Grupos" (FoxPro) — escritura, deshabilitado *@
+            <MudButton Disabled="true" Variant="Variant.Outlined" FullWidth="true" Class="mt-2"
+                       StartIcon="@Icons.Material.Filled.PlaylistAddCheck">Liquida Varios Grupos</MudButton>
+
+            @* Las dos cajas azules del FoxPro: cliente / grupo seleccionados *@
+            <div class="fcn-blue">@(_sel is null || _sel.Viajes.Count == 0 ? "—" : _sel.Viajes[0].Cliente)</div>
+            <div class="fcn-blue">@(_sel is null ? "—" : $"Grupo: {_sel.Grupo}")</div>
+        </div>
+
+        @* ════════ Columna derecha: pageframe de solapas ════════ *@
+        <div class="fcn-main">
+            @if (_sel is null)
+            {
+                <div class="fcn-placeholder">
+                    <MudIcon Icon="@Icons.Material.Filled.TouchApp" Size="Size.Large" />
+                    <MudText Typo="Typo.body1">Seleccioná un grupo en el árbol para ver sus servicios.</MudText>
+                </div>
+            }
+            else
+            {
+                <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-3" Border="true"
+                         @bind-ActivePanelIndex="_tab">
+                    @* ───────── Solapa 1: Servicios ───────── *@
+                    <MudTabPanel Text="Servicios" Icon="@Icons.Material.Filled.DirectionsBus">
+                        @*<MudAlert Severity="Severity.Info" Dense="true" Class="mb-2" Icon="@Icons.Material.Filled.Info">
+                            Viajes FINALIZADOS pendientes de liquidar de este grupo, <b>valorizados</b>
+                            contra el tarifario (cascada convenido → cabecera → servicio por modo S/H/K
+                            + horas extra), igual que el FoxPro. <b>Cliqueá una fila</b> para el Zoom del Viaje.
+                            <b>S/TARIFA</b> = falta el precio vigente en la lista del cliente.
+                        </MudAlert>*@
+                        <MudTable Items="_sel.Viajes" Dense="true" Hover="true" Striped="true" FixedHeader="true"
+                                  Height="calc(100vh - 460px)" Class="cli-grid grid-compacta" T="ViajePendienteRow"
+                                  Virtualize="true" RowStyle="cursor:pointer;"
+                                  OnRowClick="@(args => AbrirZoom(args.Item))">
+                            <HeaderContent>
+                                <MudTh>Id Viaje</MudTh>
+                                <MudTh>Ruta</MudTh>
+                                <MudTh>H. Inicio</MudTh>
+                                <MudTh>H. Fin</MudTh>
+                                <MudTh>Servicio / Cabecera</MudTh>
+                                <MudTh>Destino</MudTh>
+                                <MudTh>Vehículo</MudTh>
+                                <MudTh>Chofer</MudTh>
+                                <MudTh Style="text-align:right;">Pax</MudTh>
+                                <MudTh Style="text-align:right;">Km. Rec.</MudTh>
+                                <MudTh Style="text-align:right;">Importe</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd DataLabel="Id Viaje">@(context.IdViaje > 0 ? context.IdViaje.ToString() : "")</MudTd>
+                                <MudTd DataLabel="Ruta">@(context.IdViajeInt > 0 ? context.IdViajeInt.ToString() : "")</MudTd>
+                                <MudTd DataLabel="H. Inicio">@Hora(context.HsInicio)</MudTd>
+                                <MudTd DataLabel="H. Fin">@Hora(context.HsFin)</MudTd>
+                                <MudTd DataLabel="Servicio / Cabecera">
+                                    @(!string.IsNullOrWhiteSpace(context.Cabecera) ? context.Cabecera : context.Servicio)
+                                </MudTd>
+                                <MudTd DataLabel="Destino">@context.Destino</MudTd>
+                                <MudTd DataLabel="Vehículo">@context.Vehiculo</MudTd>
+                                <MudTd DataLabel="Chofer">@context.Chofer</MudTd>
+                                <MudTd DataLabel="Pax" Style="text-align:right;">@(context.Pax > 0 ? context.Pax.ToString() : "")</MudTd>
+                                <MudTd DataLabel="Km. Rec." Style="text-align:right;">@(context.KmRecorrido > 0 ? context.KmRecorrido.ToString() : "")</MudTd>
+                                <MudTd DataLabel="Importe" Style="text-align:right;">
+                                    @{ var val = ValDe(context.IdViaje); }
+                                    @if (val is null)
+                                    {
+                                        <span style="color:#7A90AD;">—</span>
+                                    }
+                                    else if (val.SinTarifa)
+                                    {
+                                        <span class="fcn-badge fcn-badge--excl" title="Sin precio vigente en la lista del cliente">S/TARIFA</span>
+                                    }
+                                    else
+                                    {
+                                        <span style="font-weight:700;"
+                                              title="@TituloDesglose(val)">@Money(val.ImporteNeto) @val.Moneda</span>
+                                    }
+                                </MudTd>
+                            </RowTemplate>
+                            <NoRecordsContent><MudText Typo="Typo.body2" Class="pa-3">Sin viajes en el grupo.</MudText></NoRecordsContent>
+                        </MudTable>
+                        <div class="fcn-tot-row">
+                            @TB("Viajes del grupo", _sel.Viajes.Count.ToString())
+                            @TB("Pax totales", _sel.Viajes.Sum(v => v.Pax).ToString())
+                            @TB("Km totales", _sel.Viajes.Sum(v => v.KmRecorrido).ToString())
+                            @if (_valorizados.Any(v => v.SinTarifa))
+                            {
+                                @TB("Sin tarifa", _valorizados.Count(v => v.SinTarifa).ToString())
+                            }
+                            @TB($"Subtotal servicios{(_totales is not null && _totales.Moneda.Length > 0 ? $" ({_totales.Moneda})" : "")}",
+                                Money(_valorizados.Where(v => !v.SinTarifa).Sum(v => v.ImporteNeto)), acento: true)
+                        </div>
+                    </MudTabPanel>
+
+                    @* ───────── Solapa 2: Adicionales ───────── *@
+                    <MudTabPanel Text="Adicionales" Icon="@Icons.Material.Filled.AddCircleOutline">
+                        @*<MudAlert Severity="Severity.Info" Dense="true" Class="mb-2" Icon="@Icons.Material.Filled.Info">
+                            Adicionales de los viajes del grupo, <b>valorizados</b> contra el tarifario
+                            (<i>adicional_lista_precio</i>: adicional × tipo de vehículo × vigencia), igual que el FoxPro.
+                            <b>EXCLUIDO</b> = rubro que el cliente no paga (no suma).
+                            <b>S/TARIFA</b> = falta el precio vigente en el tarifario.
+                        </MudAlert>*@
+                        <MudTable Items="_adicionales" Dense="true" Hover="true" Striped="true" FixedHeader="true"
+                                  Height="calc(100vh - 460px)" Class="cli-grid grid-compacta" T="ViajeAdicionalRow"
+                                  Virtualize="true">
+                            <HeaderContent>
+                                <MudTh>Id Viaje</MudTh>
+                                <MudTh>Adicional</MudTh>
+                                <MudTh>Nombre</MudTh>
+                                <MudTh Style="text-align:right;">Cantidad</MudTh>
+                                <MudTh Style="text-align:right;">Precio</MudTh>
+                                <MudTh Style="text-align:right;">Total</MudTh>
+                                <MudTh>Estado</MudTh>
+                                <MudTh>Inicio</MudTh>
+                                <MudTh>Vehículo</MudTh>
+                                <MudTh>Servicio / Cabecera</MudTh>
+                                <MudTh>Destino</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd DataLabel="Id Viaje">@(context.IdViaje > 0 ? context.IdViaje.ToString() : "")</MudTd>
+                                <MudTd DataLabel="Adicional">@context.IdAdicional</MudTd>
+                                <MudTd DataLabel="Nombre">@context.Nombre</MudTd>
+                                <MudTd DataLabel="Cantidad" Style="text-align:right; font-weight:600;">@context.Cantidad</MudTd>
+                                <MudTd DataLabel="Precio" Style="text-align:right;">@(context.Estado == "EXCLUIDO" ? "" : Money(context.Precio))</MudTd>
+                                <MudTd DataLabel="Total" Style="text-align:right; font-weight:700;">@(context.Estado == "EXCLUIDO" ? "" : Money(context.Total))</MudTd>
+                                <MudTd DataLabel="Estado">
+                                    <span class="@(context.Estado == "EXCLUIDO" ? "fcn-badge fcn-badge--excl" : "fcn-badge fcn-badge--abona")">
+                                        @context.Estado
+                                    </span>
+                                    @if (context.SinTarifa)
+                                    {
+                                        <span class="fcn-badge fcn-badge--excl" style="margin-left:4px;" title="Sin precio vigente en el tarifario">S/TARIFA</span>
+                                    }
+                                </MudTd>
+                                <MudTd DataLabel="Inicio">@Hora(context.Inicio)</MudTd>
+                                <MudTd DataLabel="Vehículo">@context.Vehiculo</MudTd>
+                                <MudTd DataLabel="Servicio / Cabecera">
+                                    @(!string.IsNullOrWhiteSpace(context.Cabecera) ? context.Cabecera : context.Servicio)
+                                </MudTd>
+                                <MudTd DataLabel="Destino">@context.Destino</MudTd>
+                            </RowTemplate>
+                            <NoRecordsContent><MudText Typo="Typo.body2" Class="pa-3">Sin adicionales en el grupo.</MudText></NoRecordsContent>
+                        </MudTable>
+                        <div class="fcn-tot-row">
+                            @TB("Adicionales", _adicionales.Count.ToString())
+                            @TB("Cantidad total", _adicionales.Sum(a => a.Cantidad).ToString())
+                            @TB("Excluidos", _adicionales.Count(a => a.Estado == "EXCLUIDO").ToString())
+                            @if (_adicionales.Any(a => a.SinTarifa))
+                            {
+                                @TB("Sin tarifa", _adicionales.Count(a => a.SinTarifa).ToString())
+                            }
+                            @TB("Total adicionales", Money(_adicionales.Sum(a => a.Total)), acento: true)
+                        </div>
+                    </MudTabPanel>
+
+                    @* ───────── Solapa 3: Cliente ───────── *@
+                    <MudTabPanel Text="Cliente" Icon="@Icons.Material.Filled.Person">
+                        @if (_cliente is null)
+                        {
+                            <MudText Typo="Typo.body2" Class="pa-3">No se encontró la ficha del cliente.</MudText>
+                        }
+                        else
+                        {
+                            <div class="zoom-box zoom-box--sec">
+                                <span class="zoom-box__label">Datos del cliente</span>
+                                <div class="zoom-row">
+                                    @F("Código", _cliente.Codigo)
+                                    @F("Razón social", _cliente.RazonSocial, ancho: 3)
+                                    @F("CUIT", Str(_cliente.Ncuit))
+                                </div>
+                                <div class="zoom-row">
+                                    @F("Domicilio", $"{_cliente.Domicilio} {_cliente.Nro}".Trim(), ancho: 2)
+                                    @F("Localidad", Str(_cliente.Localidad))
+                                    @F("Provincia", Str(_cliente.Provincia))
+                                    @F("C. Postal", Str(_cliente.CPostal))
+                                </div>
+                                <div class="zoom-row">
+                                    @F("Teléfono", Str(_cliente.Telefono))
+                                    @F("Celular", Str(_cliente.Celular))
+                                    @F("Email", Str(_cliente.Email), ancho: 2)
+                                    @F("Resp. IVA", Str(_cliente.TipoResp))
+                                </div>
+                            </div>
+                            <div class="zoom-box zoom-box--sec">
+                                <span class="zoom-box__label">Esquema de facturación</span>
+                                <div class="zoom-row">
+                                    @F("Empresa Fc.", Str(_cliente.EmpresaFc))
+                                    @F("Obtiene precio", Str(_cliente.ObPrecio))
+                                    @F("Lista de precio", Str(_cliente.ListaPrecio), ancho: 2)
+                                    @F("Factura por", _cliente.FcPrefere == "C" ? "CABECERA" : _cliente.FcPrefere == "S" ? "SERVICIO" : "—")
+                                </div>
+                                <div class="zoom-row">
+                                    @F("% Descuento", Money(_cliente.Descuento))
+                                    @F("% Incremento", Money(_cliente.Incremento))
+                                    @F("Comentario", Str(_cliente.Comentario), ancho: 3)
+                                </div>
+                            </div>
+                            @* Réplica de la grilla "Rubro de adicionales excluidos" del FoxPro
+                               (cliente_adicional_excluido — datos reales). *@
+                            <div class="zoom-box zoom-box--sec" style="max-width:360px;">
+                                <span class="zoom-box__label">Rubro de adicionales excluidos</span>
+                                @if (_cliente.RubrosExcluidos.Count == 0)
+                                {
+                                    <MudText Typo="Typo.body2" Class="pa-2" Style="color:#7A90AD;">
+                                        El cliente no tiene rubros excluidos (paga todos los adicionales).
+                                    </MudText>
+                                }
+                                else
+                                {
+                                    <table class="fcn-mini-grid">
+                                        <thead><tr><th>Rubro</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var r in _cliente.RubrosExcluidos)
+                                            {
+                                                <tr><td>@r</td></tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+                            </div>
+                        }
+                    </MudTabPanel>
+
+                    @* ───────── Solapa 4: Liquidacion (valorizada en vivo — arma_liquidacion) ───────── *@
+                    <MudTabPanel Text="Liquidacion" Icon="@Icons.Material.Filled.RequestQuote">
+                        @*<MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Icon="@Icons.Material.Filled.Calculate">
+                            Totales <b>calculados en vivo</b> por el motor de tarifas (réplica de
+                            <i>arma_liquidacion</i>), igual que el FoxPro. Validado al peso contra
+                            liquidaciones reales. <b>Vista de solo lectura</b>: la grabación de la
+                            liquidación sigue en el FoxPro (estrategia strangler).
+                            @if (_totales is not null && _totales.HayErroresTarifa)
+                            {
+                                <br />
+                                <span><b style="color:#b00020;">⚠ Hay viajes/adicionales sin tarifa vigente</b>
+                                    — en el FoxPro eso bloquea el grabado. El total mostrado excluye esas filas.</span>
+                            }
+                        </MudAlert>*@
+
+                        @if (_totales is null)
+                        {
+                            <MudText Typo="Typo.body2" Class="pa-3">Seleccioná un grupo para ver los totales.</MudText>
+                        }
+                        else
+                        {
+                            @* Bloque superior: "Totales por servicios de Transportación" (imagen FoxPro) *@
+                            <div class="zoom-box zoom-box--sec">
+                                <span class="zoom-box__label">Totales por servicios de Transportación</span>
+                                <div class="fcn-tot-row">
+                                    @TB("Subtotal del Servicio", Money(_totales.Subtotal))
+                                    @TB("Total de Extras", Money(_totales.Extra))
+                                    @TB("Total del Descuento", Money(_totales.Descuento))
+                                    @TB("Total del Incremento", Money(_totales.Incremento))
+                                    @TB("Total del Servicio", Money(_totales.Total), acento: true)
+                                </div>
+                            </div>
+
+                            @* Bloque inferior: moneda / cambio / IVA / totales finales *@
+                            <div class="zoom-box zoom-box--sec">
+                                <span class="zoom-box__label">Liquidación</span>
+                                <div class="fcn-tot-row">
+                                    @TB("Subtotal", Money(_totales.Subtotal))
+                                    @TB("Extras", Money(_totales.Extra))
+                                    @TB("Total", Money(_totales.Total))
+                                    @TB("Moneda", _totales.Moneda.Length > 0 ? _totales.Moneda : "PESOS")
+                                    @TB("T. Cambio", Money(_totales.TipoCambio))
+                                </div>
+                                <div class="fcn-tot-row">
+                                    @TB("Total a Facturar", Money(_totales.TotalFinal))
+                                    @TB("Tasa IVA", Money(_totales.Piva))
+                                    @TB("IVA", Money(_totales.Iva))
+                                    @TB("Total General", Money(_totales.TotalConIva), acento: true)
+                                </div>
+                            </div>
+
+                            @* Cajas grandes de la derecha del FoxPro: Exento + Total Liquidación *@
+                            <div class="d-flex flex-wrap mt-2" style="gap:16px;">
+                                @TB("Totales Exento (adicionales)", Money(_totales.Adicionales), ancho2: true)
+                                @TB("Total Liquidación", Money(_totales.TotalLiquidacion), acento: true, ancho2: true)
+                            </div>
+
+                            @if (_totales.Moneda is "USS" or "USD" or "EURO" && _totales.TipoCambio == 1m)
+                            {
+                                @*<MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2" Icon="@Icons.Material.Filled.CurrencyExchange">
+                                    La moneda es <b>@_totales.Moneda</b> y el tipo de cambio está en <b>1</b>.
+                                    En el FoxPro el operador carga la cotización a mano antes de grabar
+                                    (los importes de arriba están en @_totales.Moneda, sin pesificar).
+                                </MudAlert>*@
+                            }
+                        }
+
+                        <div class="fcn-sep"></div>
+
+                        <div class="d-flex flex-wrap" style="gap:16px; align-items:flex-end;">
+                            <span style="flex:1;"></span>
+                            @* Botonera del FoxPro. "Genera Resumen", PDF y Excel son de SOLO LECTURA
+                               (arman/exportan el reporte RESUMEN, no graban) → habilitados.
+                               "Graba" es el único que escribe → sigue deshabilitado (strangler). *@
+                            <div class="fcn-btns">
+                                <MudSelect T="string" Value="@("RESUMEN")" Label="Tipo de reporte salida" Disabled="true"
+                                           Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:150px;">
+                                    <MudSelectItem T="string" Value="@("RESUMEN")">RESUMEN</MudSelectItem>
+                                </MudSelect>
+                                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Summarize"
+                                           OnClick="GenerarResumen" Disabled="@(_totales is null)">Genera Resumen</MudButton>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PictureAsPdf"
+                                           OnClick="GenerarResumen" Disabled="@(_totales is null)">PDF</MudButton>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.TableView"
+                                           OnClick="DescargarExcelResumen" Disabled="@(_totales is null)">Excel</MudButton>
+                                <MudButton Disabled="true" Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Save"
+                                           title="La grabación de la liquidación se hace en Metrocar (FoxPro)">Graba</MudButton>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.GridOn"
+                                           OnClick="DescargarExcelResumen" Disabled="@(_totales is null)">Liq Excel</MudButton>
+                                <MudButton Disabled="true" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Groups"
+                                           title="Próximamente">Informe Resumen Pax</MudButton>
+                                <MudButton Disabled="true" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.NoteAdd">Nueva</MudButton>
+                            </div>
+                        </div>
+                    </MudTabPanel>
+                </MudTabs>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    // Nodo cliente del árbol; agrupa sus grupos pendientes.
+    public record ClienteNodo(string IdCliente, string Cliente, int TotalViajes, List<GrupoNodo> Grupos);
+    // Nodo grupo; lleva sus viajes pendientes + la fecha de fin del grupo.
+    public record GrupoNodo(string Grupo, DateTime? FinGrupo, List<ViajePendienteRow> Viajes);
+
+    // Filtros toolbar.
+    private string _modo = "POR ESTADO";
+    private DateTime? _desde = new DateTime(DateTime.Today.Year, 1, 1);
+    private DateTime? _hasta = DateTime.Today;
+
+    private bool _cargando = true;
+    private int _tab = 0;   // arranca en Servicios
+
+    private List<ViajePendienteRow> _viajes = new();
+    private List<ClienteNodo> _arbol = new();
+    private readonly HashSet<string> _abiertos = new();
+
+    private GrupoNodo? _sel;
+    private ClienteDetalleDto? _cliente;
+    private List<ViajeAdicionalRow> _adicionales = new();
+    private List<ViajeValorizadoRow> _valorizados = new();   // motor de tarifas (arma_servicio)
+    private LiquidacionTotalesRow? _totales;                 // totales solapa Liquidación (arma_liquidacion)
+
+    // Importe valorizado por viaje, indexado por id (para pintarlo en la grilla de Servicios).
+    private Dictionary<long, ViajeValorizadoRow> _valPorViaje = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync()) { Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", false); return; }
+        if (!Permisos.Tiene('F')) { Nav.NavigateTo("/", false); return; }   // módulo Facturación
+        await Cargar();
+    }
+
+    private void OnModoChanged(string modo)
+    {
+        _modo = modo;
+        // No recargamos solo: el usuario toca "...." (bBusca), igual que en el FoxPro.
+    }
+
+    // ── "...." (bBusca): arma el árbol cliente → grupo del universo elegido ──
+    private async Task Cargar()
+    {
+        _cargando = true;
+        _sel = null; _cliente = null;
+        StateHasChanged();
+
+        bool porFecha = _modo == "POR FECHA";
+        var d = DateOnly.FromDateTime(_desde ?? new DateTime(DateTime.Today.Year, 1, 1));
+        var h = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
+
+        _viajes = await Reports.GetViajesPendientesLiquidarAsync(porFecha, d, h);
+
+        _arbol = _viajes
+            .GroupBy(v => new { v.IdCliente, v.Cliente })
+            .Select(gc => new ClienteNodo(
+                gc.Key.IdCliente,
+                gc.Key.Cliente,
+                gc.Count(),
+                gc.GroupBy(v => v.Grupo)
+                  .Select(gg => new GrupoNodo(
+                      gg.Key,
+                      gg.Max(v => v.FinGrupo),
+                      gg.OrderBy(v => v.HsInicio).ToList()))
+                  .OrderBy(g => g.Grupo)
+                  .ToList()))
+            .OrderBy(c => c.Cliente)
+            .ToList();
+        _abiertos.Clear();
+
+        _cargando = false;
+    }
+
+    private bool EsClienteAbierto(string cod) => _abiertos.Contains(cod);
+    private void ToggleCliente(string cod)
+    {
+        if (!_abiertos.Remove(cod)) _abiertos.Add(cod);
+    }
+
+    private async Task Seleccionar(GrupoNodo grp)
+    {
+        _sel = grp;
+        _adicionales = new();
+        _valorizados = new();
+        _valPorViaje = new();
+        _totales = null;
+        var idCliente = grp.Viajes.Count > 0 ? grp.Viajes[0].IdCliente : "";
+
+        _cliente = string.IsNullOrWhiteSpace(idCliente)
+            ? null
+            : await Reports.GetClienteDetalleAsync(idCliente);
+
+        // Adicionales + valorización de servicios del grupo (mismo universo que el
+        // árbol: POR ESTADO / POR FECHA). El motor de tarifas (arma_servicio) calcula
+        // en vivo, igual que el FoxPro — solo lectura, no graba.
+        if (!string.IsNullOrWhiteSpace(idCliente))
+        {
+            bool porFecha = _modo == "POR FECHA";
+            var d = DateOnly.FromDateTime(_desde ?? new DateTime(DateTime.Today.Year, 1, 1));
+            var h = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
+            _adicionales = await Reports.GetAdicionalesGrupoAsync(idCliente, grp.Grupo, porFecha, d, h);
+            _valorizados = await Reports.ValorizarGrupoAsync(idCliente, grp.Grupo, porFecha, d, h);
+            _valPorViaje = _valorizados
+                .GroupBy(v => v.IdViaje)
+                .ToDictionary(g => g.Key, g => g.First());
+            _totales = await Reports.CalcularTotalesLiquidacionAsync(idCliente, grp.Grupo, porFecha, d, h);
+        }
+    }
+
+    // Click en una fila de servicios → abre el modal "Zoom del Viaje" (solo lectura),
+    // el mismo componente que usa la Planilla de Tráfico (réplica de trafico_zoom.scx).
+    private async Task AbrirZoom(ViajePendienteRow v)
+    {
+        if (v.IdViaje <= 0) return;
+        var fecha = v.FReserva is null ? default : DateOnly.FromDateTime(v.FReserva.Value);
+        var parametros = new DialogParameters<ZoomViajeDialog>
+        {
+            { x => x.IdViaje, (int)v.IdViaje },
+            // La fecha permite el SEEK por f_reserva en vez de scanear toda la tabla viaje.
+            { x => x.FReserva, fecha }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<ZoomViajeDialog>("Zoom del Viaje", parametros, opciones);
+    }
+
+    // ── "Genera Resumen" / "PDF" (FoxPro bGenera): abre el comprobante de
+    // liquidación formato RESUMEN en solo lectura. NO graba — es la misma vista
+    // previa del reporte que muestra el FoxPro, con los datos ya valorizados en vivo.
+    private async Task GenerarResumen()
+    {
+        if (_sel is null || _totales is null) return;
+
+        var parametros = new DialogParameters<LiquidacionResumenDialog>
+        {
+            { x => x.Grupo, _sel.Grupo },
+            { x => x.Cliente, _cliente },
+            { x => x.Viajes, _valorizados },
+            { x => x.Adicionales, _adicionales },
+            { x => x.Totales, _totales }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<LiquidacionResumenDialog>("Liquidación — Resumen", parametros, opciones);
+    }
+
+    // ── "Excel" / "Liq Excel" (FoxPro bExcel/bExcelResumen): exporta el resumen
+    // (servicios valorizados + adicionales + totales) sin abrir el comprobante.
+    private async Task DescargarExcelResumen()
+    {
+        if (_sel is null || _totales is null) return;
+
+        var nombreCli = _cliente?.RazonSocial is { Length: > 0 } rs ? rs : _sel.Grupo;
+        var bytes = Excel.LiquidacionResumen(_sel.Grupo, nombreCli, _valorizados, _adicionales, _totales);
+        var limpio = new string(_sel.Grupo.Where(char.IsLetterOrDigit).ToArray());
+        var nombre = $"Liquidacion_Resumen_{limpio}_{DateTime.Today:yyyyMMdd}.xlsx";
+
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    // Importe valorizado de un viaje (null si el motor no lo devolvió, p.ej. viaje suelto).
+    private ViajeValorizadoRow? ValDe(long idViaje) =>
+        _valPorViaje.TryGetValue(idViaje, out var v) ? v : null;
+
+    // Tooltip con el desglose del importe (base + horas extra ± descuento/incremento).
+    private string TituloDesglose(ViajeValorizadoRow v)
+    {
+        var p = new List<string> { $"Servicio: {Money(v.ImpServicio)}" };
+        if (v.ImpExtra > 0) p.Add($"Horas extra: {Money(v.ImpExtra)}");
+        if (v.ImpDescuento > 0) p.Add($"Descuento: -{Money(v.ImpDescuento)}");
+        if (v.ImpIncremento > 0) p.Add($"Incremento: +{Money(v.ImpIncremento)}");
+        return string.Join("  ·  ", p);
+    }
+
+    // ── Helpers de formato ──
+    private string Fecha(DateTime? f) => f is null ? "" : f.Value.ToString("dd/MM/yyyy", _ar);
+    private string Hora(DateTime? f) => f is null ? "" : f.Value.ToString("dd/MM HH:mm", _ar);
+    private string Money(decimal v) => v.ToString("N2", _ar);
+    private string Str(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+
+    // Caja read-only estilo FoxPro (etiqueta arriba + valor en caja gris)
+    private RenderFragment TB(string label, string valor, bool acento = false, bool chico = false, bool ancho2 = false) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", "fcn-tb" + (chico ? " fcn-tb--chico" : "") + (ancho2 ? " fcn-tb--ancho2" : ""));
+        b.OpenElement(2, "div"); b.AddAttribute(3, "class", "fcn-tb__lbl"); b.AddContent(4, label); b.CloseElement();
+        b.OpenElement(5, "div");
+        b.AddAttribute(6, "class", acento ? "fcn-tb__val fcn-tb__val--acento" : "fcn-tb__val");
+        b.AddContent(7, valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+
+    // Campo etiqueta+valor para la solapa Cliente (reusa estilos zoom-*)
+    private RenderFragment F(string label, string valor, int ancho = 1) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", $"zoom-field zoom-field--{ancho}");
+        b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label"); b.AddContent(4, label); b.CloseElement();
+        b.OpenElement(5, "div"); b.AddAttribute(6, "class", "zoom-field__value");
+        b.AddContent(7, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+}

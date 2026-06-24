@@ -334,6 +334,46 @@ Mismo patrón y estilos CSS (`cli-*`, `zoom-*`) — calcar uno para hacer el sig
   `GetVehiculosAsync` / `GetVehiculoDetalleAsync`. Trampas: orden visual de tabs ≠ nº de page,
   `tacografo_`=marca / `tacografo2`=nro, `gps_activo` nvarchar(1).
 
+### ✅ Módulo Facturación — vistas de solo lectura (18/06/2026)
+
+Migrado el submenú **Facturación → Resumen de Liquidaciones**, **Liquidación a Clientes** y
+**Liquidaciones estimadas** (skill `modulo-facturacion-liquidacion`). Permiso `'F'`.
+Tablas con dueño FoxPro → solo lectura.
+
+| Vista | Página (ruta) | Qué hace |
+| --- | --- | --- |
+| **Resumen de Liquidaciones** | `ResumenLiquidaciones.razor` (`/resumen-liquidaciones`) | Réplica fiel de `liquidacion_cliente.scx`: maestro-detalle. Filtros Nº/Tipo (CLIENTE/PROVEEDOR)/rango fecha/cliente. Grilla cabeceras (`liquidacion` ⨝ `cliente`\|`fletero`) con columnas calculadas (Subtotal=ROUND((subtotal+extra)·t_cambio), Exento=adicional, TotalGral=+iva+adicional, Factura=tcp-lcp-ncp) + grilla detalle (`liquidacion_detalle`) al seleccionar. Revertir deshabilitado; **Factura abre comprobante en solo lectura** (`LiquidacionComprobanteDialog.razor`); Excel = cabeceras+detalle. |
+| **Liquidación a Clientes** | `LiquidacionClientes.razor` (`/liquidacion-clientes`) | Réplica read-only de `facturacion_cliente_nueva.scx` (el form núcleo). Toolbar "Estado de las reservas" (combo + 2 fechas + botón `....`) y **árbol cliente→grupo** con las 2 cajas azules. **Rehecho 20/06/2026:** el árbol sale de **viajes pendientes de liquidar** (no de liquidaciones grabadas) — `GetViajesPendientesLiquidarAsync`. **POR ESTADO** (default, el más usado): `estado_via='FINALIZADO' AND f_grupo_fi < HOY`, ignora fechas → cajas Desde/Hasta **deshabilitadas**; **POR FECHA**: `f_grupo_fi BETWEEN`. Excluye el cliente de prueba `parametro.id_cliente` (=**NORTUR**). **4 solapas:** **Servicios** (viajes del grupo **valorizados en vivo** por el motor de tarifas — columna Importe por viaje + subtotal, badge S/TARIFA si falta precio; **click en una fila abre el Zoom del Viaje** reusando `ZoomViajeDialog`); **Adicionales** (`GetAdicionalesGrupoAsync` — **valorizados** contra `adicional_lista_precio` por adicional×tipo vehículo×vigencia, idéntico al FoxPro; estado ABONA/EXCLUIDO por `cliente_adicional_excluido`; badge S/TARIFA si falta precio); **Cliente** (ficha + grilla "Rubro de adicionales excluidos"); **Liquidacion** (**totales calculados en vivo** — cajas idénticas al FoxPro: Subtotal/Extras/Desc/Incr/Total/Cambio/IVA/Exento/Total Liquidación). Botonera de escritura (Graba) deshabilitada — solo lectura. |
+| **Liquidaciones estimadas** | `FacturacionEstimada.razor` (`/facturacion-estimada`) | Proyección de venta por mes/cliente agregando `liquidacion_detalle` ya grabado (no re-valoriza viaje por viaje; el motor de tarifas ya existe —`ValorizarGrupoAsync`— pero esta vista usa lo liquidado por ser más rápido para visualizar tendencias). KPIs + gráfico mensual ApexCharts + tabla mes / tabla cliente + Excel. |
+
+Métodos `ReportService`: `GetViajesPendientesLiquidarAsync` (árbol de Liquidación a
+Clientes POR ESTADO/FECHA), `GetAdicionalesGrupoAsync` (solapa Adicionales valorizada),
+`ValorizarGrupoAsync` (**motor de servicios `arma_servicio`** — precio por viaje) y
+`CalcularTotalesLiquidacionAsync` (**totales solapa Liquidación `arma_liquidacion`**),
+`GetLiquidacionesAsync`, `GetLiquidacionDetalleAsync`,
+`GetLiquidacionCabeceraAsync` (cabecera cruda), `GetFacturacionEstimadaPorMesAsync`,
+`GetFacturacionEstimadaPorClienteAsync`. Export:
+`ExcelExportService.ResumenLiquidaciones` / `FacturacionEstimada`. CSS propio de
+Liquidación a Clientes: clases `fcn-*` en `app.css`. **Valorización de adicionales
+(20/06/2026):** la solapa Adicionales SÍ muestra precio/total reales — el tarifario
+`adicional_lista_precio` está completo y vigente; se busca por adicional × `viaje.id_vehicul`
+(=TIPO de vehículo: BUS/MINI) × fecha del viaje (`OUTER APPLY ... TOP 1 ORDER BY fdesdevg DESC`).
+Verificado idéntico al FoxPro (GATE1/SAM-02: total 242.400). **Motor de SERVICIOS migrado
+en vivo (22/06/2026):** `ValorizarGrupoAsync` + `CalcularTotalesLiquidacionAsync` replican
+la cascada `arma_servicio`/`arma_liquidacion` (convenido→sin cargo→cabecera→servicio modo
+S/H/K + horas extra + desc/incr) — **cálculo en vivo de solo lectura, NO graba** (strangler).
+Validado al peso: 99,4% de 8.656 viajes históricos + grupo #2890197 (142807.34 / 38057.59 /
+180864.93 exactos). Trampas finas en `docs/logica-foxpro/FACTURACION_LIQUIDACION.md` §3.2 y
+skill `modulo-facturacion-liquidacion` (bug minutos modo H, fracción 25, precio propio de
+adicional que pisa la tarifa, tarifa retroactiva). Falta solo el **Graba** (escritura
+transaccional + puente inverso). **Trampas resueltas:**
+`cliente` NO tiene columna `nombre` (solo `razon_soci`); retenciones `retencion_`=IVA,
+`retencion2`=IIBB, `retencion3`=SUSS (verificado contra el form); `total` viene NULL → se
+recalcula siempre; mes con `CONVERT(char(7), fecha, 120)` (SQL 2012-friendly);
+**`bGraba` guarda `liquidacion.subtotal`=total NETO de servicios y `liquidacion.extra`=ajuste
+global manual** (no el desglose); **`viaje.id_viaje` y `viaje.pax` son `int` (no `bigint`)** →
+`GetInt64` tira `InvalidCastException`, usar `CAST(... AS bigint)` en el SELECT.
+
 ### Drawer: arranca todo colapsado (15/06/2026)
 
 Todas las secciones del menú lateral inician **colapsadas** para cualquier usuario
@@ -342,9 +382,9 @@ abrirla" (`.nav-hint`) al inicio del `<nav>`. El usuario abre la sección que ne
 
 ### Pendiente / próximos
 
-- **Informe 2:** Reservas por fecha y banda horaria (lógica de `trafico_resumen_horario.scx`) — usar ApexCharts.
 - **Informe 3:** Tráfico / Operación (cliente / chofer / vehículo).
-- **Cuenta Corriente**, **Liquidación choferes**, etc.
+- **Liquidación choferes** (nómina por hora), **Control pre-liquidación**.
+- **Cuenta Corriente** (`ctacte`): programada en FoxPro pero sin uso en producción.
 - Migrar gráficos del Informe 1 de MudChart a ApexCharts.
 
 ---
