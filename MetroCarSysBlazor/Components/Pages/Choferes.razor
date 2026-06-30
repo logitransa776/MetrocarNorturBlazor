@@ -39,6 +39,10 @@
         <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">
             Total de conductores: @Filtrados.Count()
         </MudChip>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">
+            Actualizar
+        </MudButton>
     </div>
 </MudPaper>
 
@@ -140,6 +144,13 @@ else
             Nav.NavigateTo("/", forceLoad: false);
             return;
         }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
         _choferes = await Reports.GetChoferesAsync();
         _fleteros = _choferes
             .Select(c => c.Fletero)
@@ -148,6 +159,13 @@ else
             .OrderBy(f => f)
             .ToList();
         _cargando = false;
+    }
+
+    @* Botón "Actualizar": invalida el caché de la grilla y vuelve a pegarle a SQL en vivo. *@
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
     }
 
     private string RowClass(ChoferListaRow c, int _) =>

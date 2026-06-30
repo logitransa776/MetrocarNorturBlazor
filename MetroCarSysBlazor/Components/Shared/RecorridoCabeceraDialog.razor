@@ -1,0 +1,110 @@
+@inject ReportService Reports
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   "Ver Recorrido" — réplica de solo lectura del form FoxPro cabecera_recorrido_abm_zoom
+   (modo "consulta"), que abre el submenú "Ver Datos Extras → Ver Recorrido" de
+   trafico2.scx. Busca la cabecera de recorrido por codigo = viaje.gps_cod y muestra el
+   texto largo del circuito (cabecera.recorrido). Se agrega el código + nombres de la
+   cabecera como encabezado (el FoxPro solo mostraba el texto en un editbox rojo). Solo lectura.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog hist-zoon-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.Route" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Recorrido de la Cabecera</span>
+            @if (_d is not null)
+            {
+                <span class="zoom-title-bar__nro">@_d.Codigo</span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:160px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_d is null)
+        {
+            @* Réplica del MessageBox del FoxPro cuando el viaje no tiene cabecera de recorrido. *@
+            <MudAlert Severity="Severity.Warning" Class="my-2">
+                No hay ningún código de cabecera de recorrido en este viaje.
+            </MudAlert>
+        }
+        else
+        {
+            @* ── Encabezado: código + los 3 nombres de la cabecera ── *@
+            <div class="zoom-box zoom-box--sec">
+                <div class="zoom-row">
+                    @F("Código", Str(_d.Codigo), acento: true)
+                    @F("Nombre", Str(_d.Nombre), ancho: 3)
+                    @if (!string.IsNullOrWhiteSpace(_d.Nombre1)) { @F("Nombre (2)", Str(_d.Nombre1), ancho: 2) }
+                    @if (!string.IsNullOrWhiteSpace(_d.Nombre2)) { @F("Nombre (3)", Str(_d.Nombre2), ancho: 2) }
+                </div>
+            </div>
+
+            @* ── Texto del recorrido (la descripción larga del circuito) ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Recorrido</span>
+                @if (string.IsNullOrWhiteSpace(_d.Recorrido))
+                {
+                    <div class="hist-zoon__vacio">— sin descripción de recorrido —</div>
+                }
+                else
+                {
+                    <div class="hist-zoon__texto">@_d.Recorrido</div>
+                }
+            </div>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Código de cabecera de recorrido del viaje (viaje.gps_cod).</summary>
+    [Parameter] public string GpsCod { get; set; } = "";
+
+    private RecorridoCabeceraDto? _d;
+    private bool _cargando = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _d = await Reports.GetRecorridoCabeceraAsync(GpsCod);
+        _cargando = false;
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private string Str(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+
+    private RenderFragment F(string label, string valor, bool acento = false, int ancho = 1) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", $"zoom-field zoom-field--{ancho}");
+        if (!string.IsNullOrEmpty(label))
+        {
+            b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label");
+            b.AddContent(4, label); b.CloseElement();
+        }
+        b.OpenElement(5, "div");
+        b.AddAttribute(6, "class", acento ? "zoom-field__value zoom-field__value--acento" : "zoom-field__value");
+        b.AddContent(7, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+}

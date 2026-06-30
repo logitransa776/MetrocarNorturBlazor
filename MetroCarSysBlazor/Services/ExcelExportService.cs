@@ -574,6 +574,94 @@ public class ExcelExportService
         return ms.ToArray();
     }
 
+    /// <summary>
+    /// Exporta el "Historial del viaje" (form FoxPro trafico_historial.scx): un bloque de
+    /// cabecera con la auditoría (Creó/Eliminó/Modificó) + la grilla de movimientos de
+    /// viaje_log. El color por motivo replica el del diálogo (valor agregado, no FoxPro).
+    /// </summary>
+    public byte[] HistorialViaje(HistorialViajeDto h)
+    {
+        using var wb = new XLWorkbook();
+        var ws = wb.Worksheets.Add("Historial");
+
+        // ── Cabecera de auditoría ──
+        ws.Cell(1, 1).Value = $"Historial sobre la reserva Nº {h.IdViaje}";
+        ws.Range(1, 1, 1, 4).Merge();
+        ws.Cell(1, 1).Style.Font.Bold = true;
+        ws.Cell(1, 1).Style.Font.FontSize = 13;
+
+        ws.Cell(2, 1).Value = "Creador";
+        ws.Cell(2, 2).Value = h.UsuarioCreo;
+        ws.Cell(2, 3).Value = h.FechaCreo?.ToString("dd/MM/yyyy") ?? "";
+        ws.Cell(3, 1).Value = "Eliminó";
+        ws.Cell(3, 2).Value = h.UsuarioElimino;
+        ws.Cell(3, 3).Value = h.FechaElimino?.ToString("dd/MM/yyyy") ?? "";
+        ws.Cell(4, 1).Value = "Últ. Modificó";
+        ws.Cell(4, 2).Value = h.UsuarioModifico;
+        ws.Cell(4, 3).Value = h.FechaModifico?.ToString("dd/MM/yyyy") ?? "";
+        ws.Range(2, 1, 4, 1).Style.Font.Bold = true;
+
+        // ── Grilla de movimientos (mismas 9 columnas del FoxPro) ──
+        const int hr = 6;   // fila del header de la grilla
+        string[] headers =
+        {
+            "Hora","Usuario","Motivo","Chofer","Cronograma",
+            "Cron. Nuevo","Int. Orig","Int. Nuevo","Comentario"
+        };
+        for (var c = 0; c < headers.Length; c++)
+            ws.Cell(hr, c + 1).Value = headers[c];
+
+        var r = hr + 1;
+        foreach (var m in h.Movimientos)
+        {
+            ws.Cell(r, 1).Value = m.Hora;
+            ws.Cell(r, 1).Style.DateFormat.Format = "dd/mm/yyyy hh:mm";
+            ws.Cell(r, 2).Value = m.Usuario;
+            ws.Cell(r, 3).Value = m.Motivo;
+            ws.Cell(r, 4).Value = m.Chofer;
+            ws.Cell(r, 5).Value = m.Cronograma;
+            ws.Cell(r, 6).Value = m.CronogramaNuevo;
+            if (m.InternoOrig is not null)  ws.Cell(r, 7).Value = m.InternoOrig.Value;
+            if (m.InternoNuevo is not null) ws.Cell(r, 8).Value = m.InternoNuevo.Value;
+            ws.Cell(r, 9).Value = m.Comentario;
+
+            var hex = ColorMotivo(m.Motivo);
+            if (hex is not null)
+                ws.Cell(r, 3).Style.Fill.BackgroundColor = XLColor.FromHtml(hex);
+
+            r++;
+        }
+
+        ws.Row(hr).Style.Font.Bold = true;
+        ws.Row(hr).Style.Fill.BackgroundColor = XLColor.FromHtml("#112F5B");
+        ws.Row(hr).Style.Font.FontColor = XLColor.White;
+        ws.SheetView.FreezeRows(hr);
+        ws.Columns().AdjustToContents();
+        ws.Column(9).Width = 45;   // comentario: no estirar de más
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
+    }
+
+    /// <summary>Color de fondo del motivo en el Excel del Historial (espeja MotivoStyle del
+    /// diálogo: solo el fondo, el texto va negro para legibilidad en Excel).</summary>
+    private static string? ColorMotivo(string motivo)
+    {
+        var m = (motivo ?? "").Trim().ToUpperInvariant();
+        return m switch
+        {
+            "ALTA"                              => "#EAF7F3",
+            "ASIGNO"                            => "#FFFBDD",
+            "FINALIZO"                          => "#F2F2F2",
+            "CHEQUEO"                           => "#E8F6FF",
+            "CANCELO" or "CANCELADO" or "ANULO" => "#FFF0F0",
+            _ when m.Contains("CBIO") || m.Contains("CAMBIO") || m.Contains("REASIGN") => "#FDF0FF",
+            _ when m.Contains("LIBER")          => "#FFF4E6",
+            _                                   => null
+        };
+    }
+
     /// <summary>Paleta de colores por estado, idéntica a grid_color_viaje (funcion.prg).</summary>
     private static string? ColorEstado(string estado) => estado switch
     {

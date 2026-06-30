@@ -1,0 +1,132 @@
+@inject ReportService Reports
+
+@* Diálogo "Buscar reservas por Fletero" del menú Aplicar Filtros de Tráfico.
+   Réplica de la captura del FoxPro: rango de fecha de trabajo (Desde/Hasta + botones Hoy/Todo)
+   y combo de Fletero. Filtra viaje por Between(f_reserva, x1, x2) AND fletero = X.
+   Devuelve TraficoFiltro(Fletero, desde, hasta, Texto: fletero) al aceptar. *@
+
+<MudDialog>
+    <DialogContent>
+        <div style="min-width:360px;">
+            <MudText Typo="Typo.subtitle2" Class="mb-2" Style="color:#003AA0; font-weight:600;">
+                Rango de Fecha de Trabajo
+            </MudText>
+
+            <div class="d-flex align-center" style="gap:8px;">
+                <MudDatePicker @bind-Date="_desde" Label="Desde" DateFormat="dd/MM/yyyy" Editable="true"
+                               Culture="@_ar" MinDate="_min" MaxDate="_max"
+                               PickerVariant="PickerVariant.Dialog" Style="flex:1;" />
+                <MudDatePicker @bind-Date="_hasta" Label="Hasta" DateFormat="dd/MM/yyyy" Editable="true"
+                               Culture="@_ar" MinDate="_min" MaxDate="_max"
+                               PickerVariant="PickerVariant.Dialog" Style="flex:1;" />
+            </div>
+
+            <div class="d-flex mt-1" style="gap:8px;">
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="SetHoy">Hoy</MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="SetTodo">Todo</MudButton>
+            </div>
+
+            <MudSelect T="string" @bind-Value="_fletero" Label="Fletero" Variant="Variant.Outlined"
+                       Dense="true" Class="mt-3">
+                @foreach (var f in _fleteros)
+                {
+                    <MudSelectItem Value="@f">@f</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">@_error</MudAlert>
+            }
+            else if (_dias > 31)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+                    Rango de @_dias días: la consulta puede tardar y traer muchos servicios.
+                </MudAlert>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancelar">Cancelar</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar">Aceptar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Día actualmente mostrado en la planilla; valor inicial de ambas fechas.</summary>
+    [Parameter] public DateOnly DiaActual { get; set; }
+
+    /// <summary>Si se abre en modo "editar filtro", trae el filtro vigente para precargar los campos.</summary>
+    [Parameter] public TraficoFiltro? FiltroInicial { get; set; }
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+
+    private DateTime? _desde;
+    private DateTime? _hasta;
+    private string? _fletero;
+    private List<string> _fleteros = new();
+    private string? _error;
+
+    private int _dias =>
+        _desde is not null && _hasta is not null && _hasta >= _desde
+            ? (int)(_hasta.Value.Date - _desde.Value.Date).TotalDays + 1
+            : 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _fleteros = await Reports.GetFleterosAsync();
+
+        if (FiltroInicial is { Tipo: TraficoFiltroTipo.Fletero } f)
+        {
+            // Modo editar: precargar rango + fletero vigente (si sigue en la lista).
+            _desde = f.Desde.ToDateTime(TimeOnly.MinValue);
+            _hasta = f.Hasta.ToDateTime(TimeOnly.MinValue);
+            _fletero = (f.Texto is not null && _fleteros.Contains(f.Texto)) ? f.Texto : null;
+            return;
+        }
+
+        var d = DiaActual.ToDateTime(TimeOnly.MinValue);
+        _desde = d;
+        _hasta = d;
+        // Preseleccionar NORTUR (como el FoxPro) si está en la lista; si no, el primero.
+        _fletero = _fleteros.Contains("NORTUR") ? "NORTUR" : _fleteros.FirstOrDefault();
+    }
+
+    // "Hoy": ambas fechas = hoy (un solo día).
+    private void SetHoy()
+    {
+        var hoy = DateTime.Today;
+        _desde = hoy;
+        _hasta = hoy;
+    }
+
+    // "Todo": todo el rango usable de la réplica (réplica del botón Todo del FoxPro).
+    private void SetTodo()
+    {
+        _desde = _min;
+        _hasta = _max;
+    }
+
+    private void Aplicar()
+    {
+        if (_desde is null || _hasta is null) { _error = "Elegí ambas fechas."; return; }
+        if (_hasta < _desde) { _error = "La fecha Hasta no puede ser anterior a Desde."; return; }
+        if (string.IsNullOrWhiteSpace(_fletero)) { _error = "Elegí un fletero."; return; }
+
+        var filtro = new TraficoFiltro(
+            TraficoFiltroTipo.Fletero,
+            DateOnly.FromDateTime(_desde.Value),
+            DateOnly.FromDateTime(_hasta.Value),
+            Texto: _fletero);
+
+        MudDialog.Close(DialogResult.Ok(filtro));
+    }
+
+    private void Cancelar() => MudDialog.Cancel();
+}

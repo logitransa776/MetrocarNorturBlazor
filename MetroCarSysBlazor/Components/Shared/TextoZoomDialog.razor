@@ -1,0 +1,46 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   "Zoon" — muestra un texto largo en grande, solo lectura. Réplica del form FoxPro
+   `form_error` que el sistema reusa para ampliar comentarios/motivos (lo abre, por
+   ejemplo, el botón "Zoon Motivo" del Historial del viaje). Genérico: cualquier
+   pantalla que quiera ampliar un texto puede reusarlo.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog hist-zoon-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.Subject" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@Titulo</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (string.IsNullOrWhiteSpace(Texto))
+        {
+            <div class="hist-zoon__vacio">— sin texto —</div>
+        }
+        else
+        {
+            <div class="hist-zoon__texto">@Texto</div>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Titulo { get; set; } = "Zoon";
+    [Parameter] public string Texto { get; set; } = "";
+
+    private void Cerrar() => MudDialog.Close();
+}

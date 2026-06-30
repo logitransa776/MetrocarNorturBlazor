@@ -74,6 +74,9 @@ Detalles que no son negociables (los datos históricos y FoxPro dependen de esto
 4. Permisos por usuario (niveles 2/3/4).
 5. Bloquear el ABM en FoxPro (permisos o menú) y apagar la sync DBF→SQL de esa tabla.
 6. Prueba end-to-end en Blazor: alta → aparece en lista → modifica → baja lógica visible.
+   **Seguir el protocolo de la skill `testing-nortur`**: validación con DOS señales (UI +
+   `SELECT`), datos de prueba `ZZTEST` reversibles sobre el servidor **local**, y limpieza al
+   final. No ensuciar `replicaVPF` con datos de prueba.
 
 ## Estado
 

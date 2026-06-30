@@ -1,0 +1,121 @@
+@inject ReportService Reports
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   "Ver Datos Operador" — réplica de solo lectura del form FoxPro cliente_operador_abm
+   (modo "consulta"), que abre el submenú "Ver Datos Extras → Ver Datos Operador" de
+   trafico2.scx. Muestra la ficha del operador (un contacto/persona de un cliente)
+   buscando cliente_operador por id_operador = viaje.id_operado. Solo lectura.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.SupportAgent" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Datos del Operador</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">Solo lectura</span>
+            @if (_d is not null)
+            {
+                <span class="zoom-title-bar__nro">@_d.IdOperador</span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:160px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_d is null)
+        {
+            @* Réplica del MessageBox del FoxPro cuando el viaje no tiene operador asignado. *@
+            <MudAlert Severity="Severity.Warning" Class="my-2">
+                No hay asignado ningún operador a este viaje.
+            </MudAlert>
+        }
+        else
+        {
+            <div class="cli-head">
+                <div class="zoom-field zoom-field--1">
+                    <div class="zoom-field__label">Cód. Operador</div>
+                    <div class="zoom-field__value zoom-field__value--acento">@_d.IdOperador</div>
+                </div>
+                <div class="zoom-field zoom-field--3">
+                    <div class="zoom-field__label">Nombre</div>
+                    <div class="zoom-field__value">@Str(_d.Nombre)</div>
+                </div>
+                <div class="zoom-field zoom-field--1">
+                    <div class="zoom-field__label">Cliente</div>
+                    <div class="zoom-field__value">@Str(_d.IdCliente)</div>
+                </div>
+            </div>
+
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Contacto</span>
+                <div class="zoom-row">
+                    @F("Teléfono", Str(_d.Telefono))
+                    @F("Celular", Str(_d.Celular))
+                    @F("Nextel", Str(_d.Nextel))
+                    @F("Interno", Str(_d.Interno))
+                    @F("E-Mail", Str(_d.Email), ancho: 2)
+                    @F("Comentario", Str(_d.Comentario), ancho: 4)
+                </div>
+            </div>
+
+            @* ── Botonera réplica FoxPro (deshabilitada — solo lectura) ── *@
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                    Vista de solo lectura — la edición se hace en Metrocar (FoxPro).
+                </div>
+                <div class="cli-footer__btns">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               OnClick="Cerrar">Cerrar</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Código del operador del viaje (viaje.id_operado).</summary>
+    [Parameter] public string IdOperador { get; set; } = "";
+
+    private OperadorDetalleDto? _d;
+    private bool _cargando = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _d = await Reports.GetOperadorDetalleAsync(IdOperador);
+        _cargando = false;
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private string Str(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+
+    private RenderFragment F(string label, string valor, int ancho = 1) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", $"zoom-field zoom-field--{ancho}");
+        if (!string.IsNullOrEmpty(label))
+        {
+            b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label");
+            b.AddContent(4, label); b.CloseElement();
+        }
+        b.OpenElement(5, "div");
+        b.AddAttribute(6, "class", "zoom-field__value");
+        b.AddContent(7, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+}

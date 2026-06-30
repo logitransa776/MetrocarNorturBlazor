@@ -17,6 +17,7 @@
     ".claude/skills/modulo-facturacion-liquidacion",
     ".claude/skills/modulo-combustible",
     ".claude/skills/modulo-vehiculos-choferes",
-    ".claude/skills/blazor-performance"
+    ".claude/skills/blazor-performance",
+    ".claude/skills/testing-nortur"
   ]
 }

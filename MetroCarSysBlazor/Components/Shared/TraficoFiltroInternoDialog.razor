@@ -1,0 +1,165 @@
+@inject ReportService Reports
+
+@* Diálogo "Nº de Interno" del menú Aplicar Filtros de Tráfico.
+   Réplica de trafico_filtro_interno.scx (caption FoxPro: "Filtro por Nº de Interno"):
+   rango de fecha de trabajo (Desde/Hasta + Hoy/Todo) + unidad.
+   El FoxPro filtraba por el número suelto viaje.interno, pero ese número se repite entre
+   vehículos y no coincide con la grilla. Acá se filtra por el CÓDIGO de unidad (NT0044,
+   AG0001…) que la operadora ve en pantalla — un autocomplete con la nómina activa de la
+   flota (vehiculo.cronograma). Filtra viaje por Between(f_reserva, x1, x2) AND id_interno = X.
+   Devuelve TraficoFiltro(Interno, desde, hasta, Texto: código de unidad) al aceptar. *@
+
+<MudDialog>
+    <DialogContent>
+        <div style="min-width:380px;">
+            <MudText Typo="Typo.subtitle2" Class="mb-2" Style="color:#003AA0; font-weight:600;">
+                Rango de Fecha de Trabajo
+            </MudText>
+
+            <div class="d-flex align-center" style="gap:8px;">
+                <MudDatePicker @bind-Date="_desde" Label="Desde" DateFormat="dd/MM/yyyy" Editable="true"
+                               Culture="@_ar" MinDate="_min" MaxDate="_max"
+                               PickerVariant="PickerVariant.Dialog" Style="flex:1;" />
+                <MudDatePicker @bind-Date="_hasta" Label="Hasta" DateFormat="dd/MM/yyyy" Editable="true"
+                               Culture="@_ar" MinDate="_min" MaxDate="_max"
+                               PickerVariant="PickerVariant.Dialog" Style="flex:1;" />
+            </div>
+
+            <div class="d-flex mt-1" style="gap:8px;">
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="SetHoy">Hoy</MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="SetTodo">Todo</MudButton>
+            </div>
+
+            <MudText Typo="Typo.subtitle2" Class="mt-4 mb-1" Style="color:#003AA0; font-weight:600;">
+                Unidad (Nº de Interno)
+            </MudText>
+
+            @* Autocomplete sobre la nómina activa de la flota (vehiculo.cronograma). Se filtra por
+               el CÓDIGO de unidad (NT0044…); el número de interno y el dominio se muestran solo como
+               referencia. La búsqueda matchea código, número o dominio. *@
+            <MudAutocomplete T="InternoOpcion" @bind-Value="_interno" Label="Unidad"
+                             SearchFunc="BuscarInterno" ToStringFunc="@MostrarUnidad"
+                             Variant="Variant.Outlined" Dense="true" Clearable="true"
+                             ResetValueOnEmptyText="true" CoerceText="true"
+                             AdornmentIcon="@Icons.Material.Filled.DirectionsBus" Adornment="Adornment.Start"
+                             MaxItems="50" />
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">@_error</MudAlert>
+            }
+            else if (_dias > 31)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+                    Rango de @_dias días: la consulta puede tardar y traer muchos servicios.
+                </MudAlert>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancelar">Cancelar</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar">Aceptar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Día actualmente mostrado en la planilla; valor inicial de ambas fechas.</summary>
+    [Parameter] public DateOnly DiaActual { get; set; }
+
+    /// <summary>Si se abre en modo "editar filtro", trae el filtro vigente para precargar los campos.</summary>
+    [Parameter] public TraficoFiltro? FiltroInicial { get; set; }
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+
+    private DateTime? _desde;
+    private DateTime? _hasta;
+    private InternoOpcion? _interno;
+    private List<InternoOpcion> _internos = new();
+    private string? _error;
+
+    private int _dias =>
+        _desde is not null && _hasta is not null && _hasta >= _desde
+            ? (int)(_hasta.Value.Date - _desde.Value.Date).TotalDays + 1
+            : 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _internos = await Reports.GetInternosParaFiltroAsync();
+
+        if (FiltroInicial is { Tipo: TraficoFiltroTipo.Interno } f)
+        {
+            // Modo editar: precargar rango + unidad vigente (match por código en la nómina).
+            _desde = f.Desde.ToDateTime(TimeOnly.MinValue);
+            _hasta = f.Hasta.ToDateTime(TimeOnly.MinValue);
+            _interno = _internos.FirstOrDefault(i => i.Codigo == f.Texto);
+            return;
+        }
+
+        var d = DiaActual.ToDateTime(TimeOnly.MinValue);
+        _desde = d;
+        _hasta = d;
+    }
+
+    // Texto que se muestra en el combo: "NT0044 — int 44 — AB272VJ" (código primero).
+    private string MostrarUnidad(InternoOpcion? i)
+    {
+        if (i is null) return "";
+        var partes = new List<string> { i.Codigo };
+        if (i.Interno > 0) partes.Add($"int {i.Interno}");
+        if (!string.IsNullOrEmpty(i.Dominio)) partes.Add(i.Dominio);
+        return string.Join(" — ", partes);
+    }
+
+    // Búsqueda incremental del autocomplete: matchea por código de unidad, número de interno o
+    // dominio. El código es lo principal (es por lo que se filtra y lo que se ve en la grilla).
+    private Task<IEnumerable<InternoOpcion>> BuscarInterno(string value, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return Task.FromResult<IEnumerable<InternoOpcion>>(_internos);
+        var t = value.Trim().ToUpperInvariant();
+        return Task.FromResult<IEnumerable<InternoOpcion>>(
+            _internos.Where(i =>
+                i.Codigo.ToUpperInvariant().Contains(t) ||
+                i.Interno.ToString().Contains(t) ||
+                i.Dominio.ToUpperInvariant().Contains(t)));
+    }
+
+    // "Hoy": ambas fechas = hoy (réplica de Command1.Click).
+    private void SetHoy()
+    {
+        var hoy = DateTime.Today;
+        _desde = hoy;
+        _hasta = hoy;
+    }
+
+    // "Todo": todo el rango usable de la réplica (réplica de Command2.Click, acotado al rango válido).
+    private void SetTodo()
+    {
+        _desde = _min;
+        _hasta = _max;
+    }
+
+    private void Aplicar()
+    {
+        // Validaciones del bAceptar.Click del FoxPro (rango + unidad cargada).
+        if (_desde is null || _hasta is null) { _error = "Elegí ambas fechas."; return; }
+        if (_hasta < _desde) { _error = "La fecha Hasta no puede ser anterior a Desde."; return; }
+        if (_interno is null) { _error = "Elegí una unidad de la flota."; return; }
+
+        var filtro = new TraficoFiltro(
+            TraficoFiltroTipo.Interno,
+            DateOnly.FromDateTime(_desde.Value),
+            DateOnly.FromDateTime(_hasta.Value),
+            Texto: _interno.Codigo);   // se filtra por el código de unidad (viaje.id_interno)
+
+        MudDialog.Close(DialogResult.Ok(filtro));
+    }
+
+    private void Cancelar() => MudDialog.Cancel();
+}

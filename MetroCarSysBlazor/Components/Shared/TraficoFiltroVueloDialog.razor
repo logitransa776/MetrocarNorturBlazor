@@ -1,0 +1,227 @@
+@inject ReportService Reports
+
+@* Diálogo "Números de Vuelos" del menú Aplicar Filtros de Tráfico.
+   Réplica de trafico_filtro_vuelo.scx (caption FoxPro: "Buscar reservas por Nº de Vuelo"):
+   rango de fecha de trabajo (Desde/Hasta + Hoy/Todo) + OptionGroup de 3 modos:
+     · Sin Vuelo   → vuelo = "SIN VUELO"   (default; textbox deshabilitado en el FoxPro)
+     · Con Vuelo   → vuelo = <nº elegido>  (textbox libre en el FoxPro; acá combo de vuelos reales del rango)
+     · A confirmar → vuelo = "A CONFIRMAR" (textbox deshabilitado en el FoxPro)
+   Filtra viaje por Between(f_reserva, x1, x2) AND vuelo = X.
+   Devuelve TraficoFiltro(Vuelo, desde, hasta, Texto: vuelo) al aceptar. *@
+
+<MudDialog>
+    <DialogContent>
+        <div style="min-width:400px;">
+            <MudText Typo="Typo.subtitle2" Class="mb-2" Style="color:#003AA0; font-weight:600;">
+                Rango de Fecha de Trabajo
+            </MudText>
+
+            <div class="d-flex align-center" style="gap:8px;">
+                <MudDatePicker Date="_desde" DateChanged="OnDesdeChanged" Label="Desde" DateFormat="dd/MM/yyyy"
+                               Editable="true" Culture="@_ar" MinDate="_min" MaxDate="_max"
+                               PickerVariant="PickerVariant.Dialog" Style="flex:1;" />
+                <MudDatePicker Date="_hasta" DateChanged="OnHastaChanged" Label="Hasta" DateFormat="dd/MM/yyyy"
+                               Editable="true" Culture="@_ar" MinDate="_min" MaxDate="_max"
+                               PickerVariant="PickerVariant.Dialog" Style="flex:1;" />
+            </div>
+
+            <div class="d-flex mt-1" style="gap:8px;">
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="SetHoy">Hoy</MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="SetTodo">Todo</MudButton>
+            </div>
+
+            <MudText Typo="Typo.subtitle2" Class="mt-4 mb-1" Style="color:#003AA0; font-weight:600;">
+                Vuelo
+            </MudText>
+
+            @* OptionGroup de 3 modos del FoxPro (réplica de Optiongroup1). *@
+            <MudRadioGroup T="ModoVuelo" Value="_modo" ValueChanged="OnModoChanged">
+                <MudRadio T="ModoVuelo" Value="ModoVuelo.SinVuelo" Color="Color.Primary" Dense="true" Size="Size.Small">Sin Vuelo</MudRadio>
+                <MudRadio T="ModoVuelo" Value="ModoVuelo.ConVuelo" Color="Color.Primary" Dense="true" Size="Size.Small">Con Vuelo</MudRadio>
+                <MudRadio T="ModoVuelo" Value="ModoVuelo.AConfirmar" Color="Color.Primary" Dense="true" Size="Size.Small">A confirmar</MudRadio>
+            </MudRadioGroup>
+
+            @* Modo "Con Vuelo": combo con los vuelos reales del rango (en el FoxPro era textbox libre).
+               Solo se habilita en este modo, igual que el textbox del form original. *@
+            @if (_modo == ModoVuelo.ConVuelo)
+            {
+                <MudSelect T="string" @bind-Value="_vuelo" Label="Nº de Vuelo" Variant="Variant.Outlined"
+                           Dense="true" Class="mt-2" Disabled="_cargandoVuelos"
+                           AdornmentIcon="@Icons.Material.Filled.Flight" Adornment="Adornment.Start">
+                    @foreach (var v in _vuelos)
+                    {
+                        <MudSelectItem Value="@v">@v</MudSelectItem>
+                    }
+                </MudSelect>
+                @if (_cargandoVuelos)
+                {
+                    <MudText Typo="Typo.caption" Class="mt-1" Style="color:#7A90AD;">Cargando vuelos del rango…</MudText>
+                }
+                else if (_vuelos.Count == 0)
+                {
+                    <MudText Typo="Typo.caption" Class="mt-1" Style="color:#B45309;">
+                        No hay vuelos cargados en el rango elegido. Ampliá las fechas o usá "Todo".
+                    </MudText>
+                }
+            }
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">@_error</MudAlert>
+            }
+            else if (_dias > 31)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+                    Rango de @_dias días: la consulta puede tardar y traer muchos servicios.
+                </MudAlert>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancelar">Cancelar</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar">Aceptar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Día actualmente mostrado en la planilla; valor inicial de ambas fechas.</summary>
+    [Parameter] public DateOnly DiaActual { get; set; }
+
+    /// <summary>Si se abre en modo "editar filtro", trae el filtro vigente para precargar los campos.</summary>
+    [Parameter] public TraficoFiltro? FiltroInicial { get; set; }
+
+    // Los 3 modos del OptionGroup del FoxPro.
+    private enum ModoVuelo { SinVuelo, ConVuelo, AConfirmar }
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+
+    private DateTime? _desde;
+    private DateTime? _hasta;
+    private ModoVuelo _modo = ModoVuelo.SinVuelo;   // default del FoxPro (Option1.Value = 1)
+    private string? _vuelo;                          // nº de vuelo elegido en modo Con Vuelo
+    private List<string> _vuelos = new();
+    private bool _cargandoVuelos;
+    private string? _error;
+
+    private int _dias =>
+        _desde is not null && _hasta is not null && _hasta >= _desde
+            ? (int)(_hasta.Value.Date - _desde.Value.Date).TotalDays + 1
+            : 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (FiltroInicial is { Tipo: TraficoFiltroTipo.Vuelo } f)
+        {
+            // Modo editar: precargar rango + modo + nº de vuelo. Texto = "SIN VUELO" | "A CONFIRMAR"
+            // | un nº concreto (modo Con Vuelo). Si es Con Vuelo hay que cargar la lista del rango.
+            _desde = f.Desde.ToDateTime(TimeOnly.MinValue);
+            _hasta = f.Hasta.ToDateTime(TimeOnly.MinValue);
+            switch (f.Texto)
+            {
+                case "SIN VUELO" or null: _modo = ModoVuelo.SinVuelo; break;
+                case "A CONFIRMAR": _modo = ModoVuelo.AConfirmar; break;
+                default:
+                    _modo = ModoVuelo.ConVuelo;
+                    _vuelo = f.Texto;
+                    await CargarVuelos();
+                    // Si el vuelo guardado ya no está en el rango, igual lo dejamos seleccionable.
+                    if (_vuelo is not null && !_vuelos.Contains(_vuelo)) _vuelos.Insert(0, _vuelo);
+                    break;
+            }
+            return;
+        }
+        var d = DiaActual.ToDateTime(TimeOnly.MinValue);
+        _desde = d;
+        _hasta = d;
+    }
+
+    private async Task OnDesdeChanged(DateTime? d)
+    {
+        _desde = d;
+        if (_modo == ModoVuelo.ConVuelo) await CargarVuelos();
+    }
+
+    private async Task OnHastaChanged(DateTime? d)
+    {
+        _hasta = d;
+        if (_modo == ModoVuelo.ConVuelo) await CargarVuelos();
+    }
+
+    // Cambio de modo (réplica de Option1/2/3.Click): solo "Con Vuelo" habilita la selección y
+    // requiere cargar la lista de vuelos del rango. Los otros dos modos fijan un literal.
+    private async Task OnModoChanged(ModoVuelo modo)
+    {
+        _modo = modo;
+        _error = null;
+        if (modo == ModoVuelo.ConVuelo)
+            await CargarVuelos();
+        else
+            _vuelo = null;
+    }
+
+    // Carga los vuelos reales que existen en el rango elegido (para el combo del modo Con Vuelo).
+    private async Task CargarVuelos()
+    {
+        if (_desde is null || _hasta is null) return;
+        _cargandoVuelos = true;
+        _vuelos = await Reports.GetVuelosEnRangoAsync(
+            DateOnly.FromDateTime(_desde.Value), DateOnly.FromDateTime(_hasta.Value));
+        // Mantener la selección si el vuelo elegido sigue en la nueva lista.
+        if (_vuelo is not null && !_vuelos.Contains(_vuelo)) _vuelo = null;
+        _cargandoVuelos = false;
+    }
+
+    // "Hoy": ambas fechas = hoy (réplica de Command1.Click).
+    private async Task SetHoy()
+    {
+        var hoy = DateTime.Today;
+        _desde = hoy;
+        _hasta = hoy;
+        if (_modo == ModoVuelo.ConVuelo) await CargarVuelos();
+    }
+
+    // "Todo": todo el rango usable de la réplica (réplica de Command2.Click, acotado al rango válido).
+    private async Task SetTodo()
+    {
+        _desde = _min;
+        _hasta = _max;
+        if (_modo == ModoVuelo.ConVuelo) await CargarVuelos();
+    }
+
+    private void Aplicar()
+    {
+        // Validaciones del bAceptar.Click del FoxPro (rango + en modo Con Vuelo, vuelo no vacío).
+        if (_desde is null || _hasta is null) { _error = "Elegí ambas fechas."; return; }
+        if (_hasta < _desde) { _error = "La fecha Hasta no puede ser anterior a Desde."; return; }
+
+        // El valor de vuelo según el modo (réplica de los Option*.Click que fijan vuelo.value).
+        var vuelo = _modo switch
+        {
+            ModoVuelo.SinVuelo => "SIN VUELO",
+            ModoVuelo.AConfirmar => "A CONFIRMAR",
+            _ => _vuelo
+        };
+
+        if (_modo == ModoVuelo.ConVuelo && string.IsNullOrWhiteSpace(vuelo))
+        {
+            _error = "Elegí un número de vuelo del rango (o cambiá de modo).";
+            return;
+        }
+
+        var filtro = new TraficoFiltro(
+            TraficoFiltroTipo.Vuelo,
+            DateOnly.FromDateTime(_desde.Value),
+            DateOnly.FromDateTime(_hasta.Value),
+            Texto: vuelo);
+
+        MudDialog.Close(DialogResult.Ok(filtro));
+    }
+
+    private void Cancelar() => MudDialog.Cancel();
+}

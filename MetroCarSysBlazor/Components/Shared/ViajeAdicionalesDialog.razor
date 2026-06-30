@@ -1,0 +1,113 @@
+@inject ReportService Reports
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   "Ver Adicionales" — réplica de solo lectura del form FoxPro trafico_zoom_adicional
+   (modo consulta: el menú lo abre con WITH id_viaje, .t.), que abre el submenú
+   "Ver Datos Extras → Ver Adicionales" de trafico2.scx. Grilla de viaje_adicional
+   WHERE id_viaje = N ORDER BY nombre, con las 6 columnas del Fox: Id (omitido, interno),
+   Código, Nombre, Cantidad, Precio, Importe (= cantidad × precio). Solo lectura: la
+   botonera de Agregar/Modificar/Eliminar del Fox queda deshabilitada.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.AddShoppingCart" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Adicionales del Viaje</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">Solo lectura</span>
+            <span class="zoom-title-bar__nro">N° @IdViaje</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:160px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_items.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Class="my-2">
+                Este viaje no tiene adicionales cargados.
+            </MudAlert>
+        }
+        else
+        {
+            <MudSimpleTable Dense="true" Hover="true" Striped="true" Class="cli-mails">
+                <thead>
+                    <tr>
+                        <th style="width:110px;">Código</th>
+                        <th>Nombre</th>
+                        <th class="r" style="width:90px;">Cantidad</th>
+                        <th class="r" style="width:110px;">Precio</th>
+                        <th class="r" style="width:120px;">Importe</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var a in _items)
+                    {
+                        <tr>
+                            <td>@Str(a.Codigo)</td>
+                            <td>@Str(a.Nombre)</td>
+                            <td class="r">@a.Cantidad</td>
+                            <td class="r">@a.Precio.ToString("N2", _ar)</td>
+                            <td class="r">@((a.Cantidad * a.Precio).ToString("N2", _ar))</td>
+                        </tr>
+                    }
+                </tbody>
+                <tfoot>
+                    <tr class="adic-total">
+                        <td colspan="4" class="r"><strong>Total</strong></td>
+                        <td class="r"><strong>@_total.ToString("N2", _ar)</strong></td>
+                    </tr>
+                </tfoot>
+            </MudSimpleTable>
+        }
+
+        @* ── Botonera réplica FoxPro (deshabilitada — solo lectura) ── *@
+        <div class="cli-footer">
+            <div class="cli-footer__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                Vista de solo lectura — la edición se hace en Metrocar (FoxPro).
+            </div>
+            <div class="cli-footer__btns">
+                <MudButton Disabled="true" Variant="Variant.Outlined" Size="Size.Small">Agregar</MudButton>
+                <MudButton Disabled="true" Variant="Variant.Outlined" Size="Size.Small">Modificar</MudButton>
+                <MudButton Disabled="true" Variant="Variant.Outlined" Size="Size.Small">Eliminar</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           OnClick="Cerrar">Cerrar</MudButton>
+            </div>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Número de viaje (viaje.id_viaje) cuyos adicionales se listan.</summary>
+    [Parameter] public int IdViaje { get; set; }
+
+    private List<AdicionalViajeRow> _items = new();
+    private decimal _total;
+    private bool _cargando = true;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override async Task OnInitializedAsync()
+    {
+        _items = await Reports.GetAdicionalesViajeAsync(IdViaje);
+        _total = _items.Sum(a => a.Cantidad * a.Precio);
+        _cargando = false;
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private string Str(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+}

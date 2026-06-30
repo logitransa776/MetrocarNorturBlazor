@@ -46,6 +46,8 @@ builder.Services.AddHostedService<DbWarmupService>();
 builder.Services.AddScoped<ReportService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<ExcelExportService>();
+// Adjuntos de viajes (Tráfico → Ver Datos Extras → Ver Adjunto). Singleton: solo lee config.
+builder.Services.AddSingleton<AdjuntoService>();
 
 // Autenticación por COOKIE — el navegador la manda en cada petición HTTP (pestaña
 // nueva / F5 incluidas), así el servidor reconoce al usuario antes de renderizar.
@@ -126,6 +128,31 @@ app.MapPost("/auth/logout", async (HttpContext http) =>
 {
     await http.SignOutAsync(NorturIdentityFactory.AuthScheme);
     return Results.Redirect("/login");
+});
+
+// ── Adjunto de un viaje (Tráfico → Ver Datos Extras → Ver Adjunto) ──────────
+// Sirve el archivo de viaje.file mapeado a la carpeta accesible por el servidor.
+// Requiere sesión iniciada (la cookie Nortur.Auth la manda el navegador). Devuelve el
+// archivo inline (PDF/imagen se ven en el navegador; lo demás lo descarga). El front abre
+// /adjunto/{idViaje}?f=yyyy-MM-dd en una pestaña nueva; si algo falla, devuelve el motivo
+// en texto plano (réplica del MessageBox "No se encontró el archivo adjunto" del FoxPro).
+app.MapGet("/adjunto/{idViaje:int}", async (
+    int idViaje, string? f, HttpContext http, ReportService reports, AdjuntoService adjuntos) =>
+{
+    if (http.User?.Identity?.IsAuthenticated != true)
+        return Results.Unauthorized();
+
+    DateOnly? fReserva = DateOnly.TryParse(f, out var d) ? d : null;
+    var rutaFox = await reports.GetRutaAdjuntoViajeAsync(idViaje, fReserva);
+    var res = adjuntos.Resolver(rutaFox);
+    if (!res.Ok)
+        return Results.Text(res.Error ?? "No se pudo abrir el adjunto.", "text/plain; charset=utf-8",
+            statusCode: StatusCodes.Status404NotFound);
+
+    var stream = new FileStream(res.RutaFisica!, FileMode.Open, FileAccess.Read, FileShare.Read);
+    return Results.File(stream, AdjuntoService.ContentType(res.NombreArchivo!),
+        fileDownloadName: null,            // null = inline (no fuerza descarga)
+        enableRangeProcessing: true);
 });
 
 app.MapStaticAssets();

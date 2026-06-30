@@ -1,0 +1,105 @@
+@* Diálogo "Rango de Fechas" del menú Aplicar Filtros de Tráfico.
+   Réplica de trafico_cambia_rango_trabajo.scx: el usuario elige Desde/Hasta y la grilla
+   pasa a modo filtro server-side (arma_grid_viaje caso FECHA → Between(f_reserva, x1, x2)).
+   Devuelve un TraficoFiltro(Fecha, desde, hasta) al aceptar. *@
+
+<MudDialog>
+    <DialogContent>
+        <div style="min-width:340px;">
+            <MudText Typo="Typo.body2" Class="mb-3" Style="color:#5B6B82;">
+                Mostrá los servicios de un <b>rango de fechas</b> en vez de un solo día.
+                Mientras el filtro esté activo, la navegación de día queda deshabilitada.
+            </MudText>
+
+            <div class="d-flex" style="gap:12px;">
+                <MudDatePicker @bind-Date="_desde" Label="Desde" DateFormat="dd/MM/yyyy"
+                               Editable="true" Culture="@_ar"
+                               MinDate="_min" MaxDate="_max"
+                               PickerVariant="PickerVariant.Dialog" Style="flex:1;" />
+                <MudDatePicker @bind-Date="_hasta" Label="Hasta" DateFormat="dd/MM/yyyy"
+                               Editable="true" Culture="@_ar"
+                               MinDate="_min" MaxDate="_max"
+                               PickerVariant="PickerVariant.Dialog" Style="flex:1;" />
+            </div>
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">@_error</MudAlert>
+            }
+            else if (_dias > 31)
+            {
+                @* Mismo aviso que el FoxPro: rangos grandes pueden tardar (SQL 2012). *@
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+                    Rango de @_dias días: la consulta puede tardar y traer muchos servicios.
+                </MudAlert>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancelar">Cancelar</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar">
+            Aplicar filtro
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Día actualmente mostrado en la planilla; se usa como valor inicial de ambas fechas.</summary>
+    [Parameter] public DateOnly DiaActual { get; set; }
+
+    /// <summary>Si se abre en modo "editar filtro", trae el filtro vigente para precargar las fechas.</summary>
+    [Parameter] public TraficoFiltro? FiltroInicial { get; set; }
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+
+    private DateTime? _desde;
+    private DateTime? _hasta;
+    private string? _error;
+
+    private int _dias =>
+        _desde is not null && _hasta is not null && _hasta >= _desde
+            ? (int)(_hasta.Value.Date - _desde.Value.Date).TotalDays + 1
+            : 0;
+
+    protected override void OnInitialized()
+    {
+        if (FiltroInicial is { Tipo: TraficoFiltroTipo.Fecha } f)
+        {
+            _desde = f.Desde.ToDateTime(TimeOnly.MinValue);
+            _hasta = f.Hasta.ToDateTime(TimeOnly.MinValue);
+            return;
+        }
+        var d = DiaActual.ToDateTime(TimeOnly.MinValue);
+        _desde = d;
+        _hasta = d;
+    }
+
+    private void Aplicar()
+    {
+        if (_desde is null || _hasta is null)
+        {
+            _error = "Elegí ambas fechas.";
+            return;
+        }
+        if (_hasta < _desde)
+        {
+            _error = "La fecha Hasta no puede ser anterior a Desde.";
+            return;
+        }
+
+        var filtro = new TraficoFiltro(
+            TraficoFiltroTipo.Fecha,
+            DateOnly.FromDateTime(_desde.Value),
+            DateOnly.FromDateTime(_hasta.Value));
+
+        MudDialog.Close(DialogResult.Ok(filtro));
+    }
+
+    private void Cancelar() => MudDialog.Cancel();
+}

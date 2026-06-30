@@ -1,0 +1,142 @@
+@inject ReportService Reports
+
+@* Diálogo "Estados de la Reserva" del menú Aplicar Filtros de Tráfico.
+   Réplica de trafico_filtro_tipo_estado.scx (caption FoxPro: "Buscar reservas por Tipo de
+   Estado"): rango de fecha de trabajo (Desde/Hasta + Hoy/Todo) + combo de estado.
+   El combo del FoxPro listaba solo 4 estados (SIN ASIGNAR / ASIGNADO / FINALIZADO /
+   CANCELADO); acá se agrega FACTURADO porque es el 93% de los viajes de la base y sin él el
+   filtro es casi inútil para fechas pasadas. Default = SIN ASIGNAR (como el original).
+   Filtra viaje por Between(f_reserva, x1, x2) AND estado_via = X (esta rama SÍ puede traer
+   CANCELADO; el descarte de cancelados no se aplica cuando se elige justamente ese estado).
+   Devuelve TraficoFiltro(Estado, desde, hasta, Texto: estado) al aceptar. *@
+
+<MudDialog>
+    <DialogContent>
+        <div style="min-width:380px;">
+            <MudText Typo="Typo.subtitle2" Class="mb-2" Style="color:#003AA0; font-weight:600;">
+                Rango de Fecha de Trabajo
+            </MudText>
+
+            <div class="d-flex align-center" style="gap:8px;">
+                <MudDatePicker @bind-Date="_desde" Label="Desde" DateFormat="dd/MM/yyyy" Editable="true"
+                               Culture="@_ar" MinDate="_min" MaxDate="_max"
+                               PickerVariant="PickerVariant.Dialog" Style="flex:1;" />
+                <MudDatePicker @bind-Date="_hasta" Label="Hasta" DateFormat="dd/MM/yyyy" Editable="true"
+                               Culture="@_ar" MinDate="_min" MaxDate="_max"
+                               PickerVariant="PickerVariant.Dialog" Style="flex:1;" />
+            </div>
+
+            <div class="d-flex mt-1" style="gap:8px;">
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="SetHoy">Hoy</MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="SetTodo">Todo</MudButton>
+            </div>
+
+            <MudText Typo="Typo.subtitle2" Class="mt-4 mb-1" Style="color:#003AA0; font-weight:600;">
+                Tipo de Estado
+            </MudText>
+
+            <MudSelect T="string" @bind-Value="_estado" Label="Estado" Variant="Variant.Outlined"
+                       Dense="true" AdornmentIcon="@Icons.Material.Filled.Flag" Adornment="Adornment.Start">
+                @foreach (var e in _estados)
+                {
+                    <MudSelectItem Value="@e">@e</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">@_error</MudAlert>
+            }
+            else if (_dias > 31)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+                    Rango de @_dias días: la consulta puede tardar y traer muchos servicios.
+                </MudAlert>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancelar">Cancelar</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar">Aceptar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Día actualmente mostrado en la planilla; valor inicial de ambas fechas.</summary>
+    [Parameter] public DateOnly DiaActual { get; set; }
+
+    /// <summary>Si se abre en modo "editar filtro", trae el filtro vigente para precargar los campos.</summary>
+    [Parameter] public TraficoFiltro? FiltroInicial { get; set; }
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+
+    // Los 4 estados del combo FoxPro + FACTURADO (el más común en la base). En el mismo orden
+    // del form original, con FACTURADO agregado al frente porque es el más usado.
+    private readonly List<string> _estados = new()
+    {
+        "SIN ASIGNAR", "ASIGNADO", "FINALIZADO", "FACTURADO", "CANCELADO"
+    };
+
+    private DateTime? _desde;
+    private DateTime? _hasta;
+    private string _estado = "SIN ASIGNAR";   // default del FoxPro (tipo_estado.Value = "SIN ASIGNAR")
+    private string? _error;
+
+    private int _dias =>
+        _desde is not null && _hasta is not null && _hasta >= _desde
+            ? (int)(_hasta.Value.Date - _desde.Value.Date).TotalDays + 1
+            : 0;
+
+    protected override void OnInitialized()
+    {
+        if (FiltroInicial is { Tipo: TraficoFiltroTipo.Estado } f)
+        {
+            _desde = f.Desde.ToDateTime(TimeOnly.MinValue);
+            _hasta = f.Hasta.ToDateTime(TimeOnly.MinValue);
+            if (f.Texto is not null && _estados.Contains(f.Texto)) _estado = f.Texto;
+            return;
+        }
+        var d = DiaActual.ToDateTime(TimeOnly.MinValue);
+        _desde = d;
+        _hasta = d;
+    }
+
+    // "Hoy": ambas fechas = hoy (réplica de Command1.Click).
+    private void SetHoy()
+    {
+        var hoy = DateTime.Today;
+        _desde = hoy;
+        _hasta = hoy;
+    }
+
+    // "Todo": todo el rango usable de la réplica (réplica de Command2.Click, acotado al rango válido).
+    private void SetTodo()
+    {
+        _desde = _min;
+        _hasta = _max;
+    }
+
+    private void Aplicar()
+    {
+        // Validaciones del bAceptar.Click del FoxPro (rango + estado cargado).
+        if (_desde is null || _hasta is null) { _error = "Elegí ambas fechas."; return; }
+        if (_hasta < _desde) { _error = "La fecha Hasta no puede ser anterior a Desde."; return; }
+        if (string.IsNullOrWhiteSpace(_estado)) { _error = "Elegí un tipo de estado."; return; }
+
+        var filtro = new TraficoFiltro(
+            TraficoFiltroTipo.Estado,
+            DateOnly.FromDateTime(_desde.Value),
+            DateOnly.FromDateTime(_hasta.Value),
+            Texto: _estado);
+
+        MudDialog.Close(DialogResult.Ok(filtro));
+    }
+
+    private void Cancelar() => MudDialog.Cancel();
+}

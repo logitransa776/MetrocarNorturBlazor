@@ -1,0 +1,83 @@
+@* Diálogo "Nº de Reserva" / "Nº de Reserva En Ruta" del menú Aplicar Filtros de Tráfico.
+   Réplica de trafico_nro_reserva.scx (caption FoxPro: "Buscar Reserva por Número"): un único
+   textbox que pide el número y busca el viaje.
+   A diferencia de los demás filtros, estos DOS NO usan rango de fechas (el FoxPro no aplica
+   Between en estas ramas): el número identifica el/los viaje(s) en toda la base.
+     • Nº Reserva       → viaje.id_viaje   = N  (nº de reserva único: devuelve 1 viaje)
+     • Nº Reserva En Ruta → viaje.id_viaje_i = N (correlativo de ruta: devuelve los N días de
+       una reserva "en ruta" — servicio multi-día del modo ruta de Reservas)
+   El mismo diálogo sirve para ambos: el parámetro Modo decide el tipo de filtro y los textos.
+   Devuelve TraficoFiltro(Reserva|ReservaRuta, Desde/Hasta = rango válido completo —ignorado por
+   el WHERE—, Numero: el número ingresado) al aceptar. *@
+
+<MudDialog>
+    <DialogContent>
+        <div style="min-width:360px;">
+            <MudText Typo="Typo.body2" Class="mb-3" Style="color:#555;">
+                @_ayuda
+            </MudText>
+
+            <MudNumericField T="long?" @bind-Value="_numero" Label="@_etiqueta"
+                             Variant="Variant.Outlined" Min="0" HideSpinButtons="true"
+                             AdornmentIcon="@Icons.Material.Filled.Numbers" Adornment="Adornment.Start"
+                             Immediate="true" />
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">@_error</MudAlert>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancelar">Cancelar</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar">Aceptar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Modo del diálogo: Reserva (id_viaje) o ReservaRuta (id_viaje_i).</summary>
+    [Parameter] public TraficoFiltroTipo Modo { get; set; } = TraficoFiltroTipo.Reserva;
+
+    /// <summary>Si se abre en modo "editar filtro", trae el filtro vigente para precargar el número.</summary>
+    [Parameter] public TraficoFiltro? FiltroInicial { get; set; }
+
+    private long? _numero;
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        // Modo editar: precargar el número vigente (el Modo lo decide el parámetro de apertura).
+        if (FiltroInicial is { } f && (f.Tipo is TraficoFiltroTipo.Reserva or TraficoFiltroTipo.ReservaRuta))
+            _numero = f.Numero;
+    }
+
+    // El número no usa rango: filtra sobre toda la base. Igual el record TraficoFiltro pide
+    // Desde/Hasta → se pasa el rango válido completo, que el WHERE de esta rama ignora.
+    private readonly DateOnly _desde = ReportService.FechaMinValida;
+    private readonly DateOnly _hasta = ReportService.FechaMaxValida;
+
+    private bool EsRuta => Modo == TraficoFiltroTipo.ReservaRuta;
+    private string _etiqueta => EsRuta ? "Nº de Reserva En Ruta" : "Nº de Reserva";
+    private string _ayuda => EsRuta
+        ? "Ingresá el Nº de Reserva En Ruta. Devuelve todos los viajes (días) de esa reserva multi-día. No usa rango de fechas."
+        : "Ingresá el Nº de Reserva. Busca el viaje en toda la base, sin importar la fecha.";
+
+    private void Aplicar()
+    {
+        // Validación del bAceptar.Click del FoxPro: el número tiene que estar cargado y ser > 0.
+        if (_numero is null || _numero <= 0) { _error = "Ingresá un número de reserva válido."; return; }
+
+        var filtro = new TraficoFiltro(
+            Modo,
+            _desde,
+            _hasta,
+            Numero: (int)_numero.Value);   // id_viaje es int; id_viaje_i (bigint) en la base no supera int en producción
+
+        MudDialog.Close(DialogResult.Ok(filtro));
+    }
+
+    private void Cancelar() => MudDialog.Cancel();
+}

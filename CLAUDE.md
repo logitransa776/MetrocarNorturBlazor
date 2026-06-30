@@ -403,6 +403,7 @@ docs/
 | Archivo | Form FoxPro | Descripción |
 | --- | --- | --- |
 | `docs/logica-foxpro/TRAFICO_ZOOM.md` | `trafico_zoom.scx` | Zoom del Viaje: máquina de estados, validaciones, tablas tocadas, reglas no obvias |
+| `docs/logica-foxpro/TRAFICO_HISTORIAL.md` | `trafico_historial.scx` | Historial del viaje ("Historia del viaje" del menú contextual): bitácora `viaje_log` (9 columnas, nombres truncados) + cabecera de auditoría de `viaje`, botón "Zoon Motivo". Migrado solo lectura 29/06/2026 |
 | `docs/logica-foxpro/TRAFICO2_FILTROS.md` | `trafico2.scx` | Toolbar de Tráfico: combos de unidades (U/Pr `cronogram2`, U/Cb `cronograma`), botón S/C, botón Cxl (cancelados con motivo), mapeo de columnas en la réplica |
 | `docs/logica-foxpro/RESERVA_TRANSPORTACION.md` | `reserva_transportacion_con_adicional.scx` + 4 subdialogs | Alta manual de reservas: validaciones, multiplicación días×servicios, modo ruta, grupos, valor especial (permiso "F"), adicionales, INSERT completo |
 | `docs/logica-foxpro/RESERVA_PLANTILLAS.md` | `reserva_plantilla_crear/_mantenimiento/_mantenimiento_abm/_nombre/_armar.scx` | Ciclo completo de plantillas: crear, mantener, armar (generación masiva por días+feriados), cabecera 16 posiciones, lotes |
@@ -468,6 +469,7 @@ de Anthropic: cada corrección aprendida se guarda en la skill correspondiente, 
 | `modulo-combustible` | vertical | conocimiento del módulo Combustible (12/06/2026) — cargas de la flota (tabla viva `vehiculo_sobre`, **NO replicada a SQL**), conciliación por lote, consumos l/100km, saldos de estaciones (sin uso desde 2017). Doc detallado: `docs/logica-foxpro/COMBUSTIBLE.md` |
 | `modulo-vehiculos-choferes` | vertical | conocimiento del módulo Vehículos y Choferes (15/06/2026) — flota (`vehiculo`) y personal de conducción (`chofer`, `fletero`), tipos de vehículo, odómetros, siniestros, apercibimientos, capacitaciones, agenda de vencimientos. Una referencia por pantalla en `references/`. Trampas: `vehiculo_chofer` vacía, `chofer_log` no replicada, columnas truncadas. Choferes y Vehículos-Flota ya migrados (solo lectura) |
 | `blazor-performance` | horizontal | optimización de rendimiento en Blazor (16/06/2026) — lentitud, re-renders, `MudDataGrid`/`MudTable`/`Virtualize<T>`, memory leaks, paginación, `StateHasChanged` excesivo. Referencias: `mudblazor-performance.md`, `apexcharts-blazor.md` |
+| `testing-nortur` | horizontal | cómo testear/validar la app (29/06/2026) — smoke tests Playwright, capturas a demanda (`captura()` en `tests/helpers.ts`), validación de escritura de ABMs con **dos señales** (UI + `SELECT`), **protocolo de datos de prueba `ZZTEST`** sobre el servidor local (no ensuciar `replicaVPF`), dónde viven los errores en Blazor Server (lógica→server log, no browser). Complementa `abm-metrocar` (construir↔validar). Decisión registrada: `browser-tools-mcp` y la skill `browser-automation` descartadas |
 
 **Skills de módulo futuras** (crear recién al arrancar cada módulo, no antes):
 `modulo-taller` (taller/service). La cuenta corriente quedó cubierta dentro de

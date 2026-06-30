@@ -40,6 +40,10 @@
         <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">
             Total de vehículos: @Filtrados.Count()
         </MudChip>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">
+            Actualizar
+        </MudButton>
     </div>
 </MudPaper>
 
@@ -144,6 +148,13 @@ else
             Nav.NavigateTo("/", forceLoad: false);
             return;
         }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
         _vehiculos = await Reports.GetVehiculosAsync();
         _fleteros = _vehiculos
             .Select(v => v.Fletero)
@@ -152,6 +163,13 @@ else
             .OrderBy(f => f)
             .ToList();
         _cargando = false;
+    }
+
+    @* Botón "Actualizar": invalida el caché de la grilla y vuelve a pegarle a SQL en vivo. *@
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
     }
 
     @* Egresado/baja = !activo O f_delete cargada → fila amarilla (igual que FoxPro) *@
