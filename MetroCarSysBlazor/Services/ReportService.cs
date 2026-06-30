@@ -21,6 +21,10 @@ public class ReportService
     // Tráfico es operación viva: TTL menor al timer de auto-refresh (60s) para que
     // cada tick del timer encuentre el caché vencido y traiga datos frescos.
     private static readonly TimeSpan CacheTtlTrafico = TimeSpan.FromSeconds(55);
+    // Grillas de ABM (Choferes/Clientes/Vehículos): la escritura sigue en FoxPro y se
+    // replica a SQL, así que el dato cambia "por fuera". TTL corto para que un F5 traiga
+    // datos casi-frescos; el botón "Actualizar" de cada grilla invalida el caché al instante.
+    private static readonly TimeSpan CacheTtlAbm = TimeSpan.FromSeconds(60);
 
     public ReportService(IDbContextFactory<NorturDbContext> dbFactory, IMemoryCache cache)
     {
@@ -119,6 +123,113 @@ public class ReportService
     ///   - incluye ambos orígenes ('P' plantilla y 'T' transportación)
     ///   - orden por hs_inicio
     /// </summary>
+    // Proyección SQL compartida de la planilla de Tráfico (réplica del SELECT de arma_grid_viaje).
+    // La usan TANTO la vista de día único (GetPlanillaTraficoAsync) COMO los filtros server-side
+    // de "Aplicar Filtros" (GetPlanillaTraficoFiltradaAsync). Cada llamador le agrega su WHERE +
+    // ORDER BY. Mantener en sync con MapPlanillaRow (lectura por nombre de columna).
+    private const string TraficoProjection = """
+        SELECT
+            v.id_viaje                                           AS IdViaje,
+            v.f_reserva                                          AS Fecha,
+            v.origen                                             AS Origen,
+            CONVERT(varchar(5), v.hs_present, 108)               AS HPre,
+            CONVERT(varchar(5), v.hs_inicio, 108)                AS HIni,
+            CONVERT(varchar(5), v.hs_fin, 108)                   AS HFin,
+            CONVERT(varchar(5), v.hs_aviso, 108)                 AS HAvi,
+            CONVERT(varchar(5), v.hs_fin_apr, 108)               AS HCie,
+            v.cronogram2                                         AS UPr,
+            v.cronograma                                         AS UCb,
+            v.id_interno                                         AS UAs,
+            v.chequeo                                            AS Chq,
+            v.chequeo_ag                                         AS Ag,
+            LTRIM(RTRIM(v.d_destino)) + ' a ' + LTRIM(RTRIM(v.h_destino)) AS Recorrido,
+            v.fletero                                            AS Fletero,
+            v.nombre_cho                                         AS Chofer,
+            LEFT(LTRIM(RTRIM(v.id_vehicu2)), 4)                  AS Veh,
+            v.id_cliente                                         AS Cliente,
+            v.pax                                                AS Pax,
+            v.agua                                               AS Agua,
+            CASE WHEN LTRIM(RTRIM(
+                COALESCE(v.adi_cod_1,'') + COALESCE(v.adi_cod_2,'') +
+                COALESCE(v.adi_cod_3,'') + COALESCE(v.adi_cod_4,'') +
+                COALESCE(v.adi_cod_5,''))) <> '' THEN 'A' ELSE '' END AS Adj,
+            v.comentario                                         AS Comentario,
+            v.grupo                                              AS Grupo,
+            v.vuelo                                              AS Vuelo,
+            v.nombre_gui                                         AS Guia,
+            v.estado_via                                         AS Estado,
+            v.id_chofer                                          AS IdChofer,
+            v.id_vehicu2                                         AS IdVehiculo,
+            v.interno                                            AS Interno,
+            v.hs_inicio                                          AS HsInicio,
+            v.hs_fin                                             AS HsFin,
+            -- Claves para el submenú "Ver Datos Extras" (réplica de verdatosex de trafico2.scx).
+            -- id_operado → cliente_operador (Ver Datos Operador); gps_cod → cabecera (Ver
+            -- Recorrido); [file] → ruta del adjunto (Ver Adjunto). El de Adicionales usa IdViaje.
+            v.id_operado                                         AS IdOperador,
+            v.gps_cod                                            AS GpsCod,
+            v.[file]                                             AS Adjunto
+        FROM viaje v
+        """;
+
+    // Mapea una fila del reader (proyección TraficoProjection) a PlanillaTraficoRow.
+    // Réplica de la lógica chkNortur de arma_grid_viaje: fila interna NORTUR si
+    // cronograma, cronogramacbio (réplica: cronogram2) o id_chofer == 'NORTUR'.
+    private static PlanillaTraficoRow MapPlanillaRow(System.Data.Common.DbDataReader reader)
+    {
+        string S(string c) { var i = reader.GetOrdinal(c); return reader.IsDBNull(i) ? "" : reader.GetValue(i).ToString()!.Trim(); }
+        int? N(string c) { var i = reader.GetOrdinal(c); return reader.IsDBNull(i) ? null : Convert.ToInt32(reader.GetValue(i)); }
+        DateTime? D(string c) { var i = reader.GetOrdinal(c); return reader.IsDBNull(i) ? null : reader.GetDateTime(i); }
+
+        const string idClientePrueba = "NORTUR";
+        var cronograma = S("UCb");
+        var cronogramaCbio = S("UPr");
+        var idChofer = S("IdChofer");
+        var cliente = S("Cliente");
+        bool esNortur = cronograma == idClientePrueba || cronogramaCbio == idClientePrueba || idChofer == idClientePrueba;
+
+        return new PlanillaTraficoRow(
+            IdViaje: Convert.ToInt32(reader.GetValue(reader.GetOrdinal("IdViaje"))),
+            Fecha: DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("Fecha"))),
+            Origen: S("Origen"),
+            EsNortur: esNortur,
+            HPre: S("HPre"),
+            HIni: S("HIni"),
+            HFin: S("HFin"),
+            HAvi: S("HAvi"),
+            HCie: S("HCie"),
+            UPr: S("UPr"),
+            UCb: cronograma,
+            UAs: S("UAs"),
+            Chq: N("Chq"),
+            Ag: N("Ag"),
+            Recorrido: S("Recorrido"),
+            Fletero: S("Fletero"),
+            Chofer: S("Chofer"),
+            Veh: S("Veh"),
+            Cliente: cliente,
+            Pax: N("Pax"),
+            Agua: N("Agua"),
+            Adj: S("Adj"),
+            Comentario: S("Comentario"),
+            Grupo: S("Grupo"),
+            Vuelo: S("Vuelo"),
+            Guia: S("Guia"),
+            Estado: S("Estado"),
+            Interno: N("Interno"),
+            HsInicio: D("HsInicio"),
+            HsFin: D("HsFin"),
+            IdChofer: idChofer,
+            IdVehiculo: S("IdVehiculo"),
+            IdOperador: S("IdOperador"),
+            GpsCod: S("GpsCod"),
+            Adjunto: S("Adjunto"));
+    }
+
+    /// <summary>Acota una fecha al rango usable de la réplica (evita fechas corruptas del FoxPro).</summary>
+    private static DateOnly ClampFecha(DateOnly d) =>
+        d < FechaMinValida ? FechaMinValida : (d > FechaMaxValida ? FechaMaxValida : d);
+
     public async Task<List<PlanillaTraficoRow>> GetPlanillaTraficoAsync(DateOnly dia)
     {
         var key = $"trafico|{dia:yyyyMMdd}";
@@ -130,38 +241,7 @@ public class ReportService
             await conn.OpenAsync();
 
             var sql = $"""
-                SELECT
-                    v.id_viaje                                           AS IdViaje,
-                    v.f_reserva                                          AS Fecha,
-                    v.origen                                             AS Origen,
-                    CONVERT(varchar(5), v.hs_present, 108)               AS HPre,
-                    CONVERT(varchar(5), v.hs_inicio, 108)               AS HIni,
-                    CONVERT(varchar(5), v.hs_fin, 108)                  AS HFin,
-                    CONVERT(varchar(5), v.hs_aviso, 108)                AS HAvi,
-                    CONVERT(varchar(5), v.hs_fin_apr, 108)              AS HCie,
-                    v.cronogram2                                         AS UPr,
-                    v.cronograma                                         AS UCb,
-                    v.id_interno                                         AS UAs,
-                    v.chequeo                                            AS Chq,
-                    v.chequeo_ag                                         AS Ag,
-                    LTRIM(RTRIM(v.d_destino)) + ' a ' + LTRIM(RTRIM(v.h_destino)) AS Recorrido,
-                    v.fletero                                            AS Fletero,
-                    v.nombre_cho                                         AS Chofer,
-                    LEFT(LTRIM(RTRIM(v.id_vehicu2)), 4)                  AS Veh,
-                    v.id_cliente                                         AS Cliente,
-                    v.pax                                                AS Pax,
-                    v.agua                                               AS Agua,
-                    CASE WHEN LTRIM(RTRIM(
-                        COALESCE(v.adi_cod_1,'') + COALESCE(v.adi_cod_2,'') +
-                        COALESCE(v.adi_cod_3,'') + COALESCE(v.adi_cod_4,'') +
-                        COALESCE(v.adi_cod_5,''))) <> '' THEN 'A' ELSE '' END AS Adj,
-                    v.comentario                                         AS Comentario,
-                    v.grupo                                              AS Grupo,
-                    v.vuelo                                              AS Vuelo,
-                    v.nombre_gui                                         AS Guia,
-                    v.estado_via                                         AS Estado,
-                    v.id_chofer                                          AS IdChofer
-                FROM viaje v
+                {TraficoProjection}
                 WHERE v._deleted = 0
                   AND v.f_reserva = '{dia:yyyy-MM-dd}'
                   AND v.estado_via <> 'CANCELADO'
@@ -171,61 +251,264 @@ public class ReportService
             using var cmd = conn.CreateCommand();
             cmd.CommandText = sql;
 
-            // Lectura por nombre de columna (robusta frente a cambios de orden en el SELECT).
-            string S(System.Data.Common.DbDataReader r, string c) { var i = r.GetOrdinal(c); return r.IsDBNull(i) ? "" : r.GetValue(i).ToString()!.Trim(); }
-            int? N(System.Data.Common.DbDataReader r, string c) { var i = r.GetOrdinal(c); return r.IsDBNull(i) ? null : Convert.ToInt32(r.GetValue(i)); }
-
-            // Cliente interno NORTUR (parametro.id_cliente_prueba). El FoxPro lo lee del parámetro;
-            // en la réplica es estable y vale 'NORTUR' (mismo criterio que GetReservasPorBandaHorariaAsync).
-            const string idClientePrueba = "NORTUR";
-
             var result = new List<PlanillaTraficoRow>();
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
-            {
-                var cronograma = S(reader, "UCb");
-                var cronogramaCbio = S(reader, "UPr");
-                var idChofer = S(reader, "IdChofer");
-                var cliente = S(reader, "Cliente");
-
-                // Réplica de chkNortur (arma_grid_viaje): fila interna si
-                // cronograma, cronogramacbio (réplica: cronogram2) o id_chofer = NORTUR.
-                bool esNortur = cronograma == idClientePrueba
-                             || cronogramaCbio == idClientePrueba
-                             || idChofer == idClientePrueba;
-
-                result.Add(new PlanillaTraficoRow(
-                    IdViaje: Convert.ToInt32(reader.GetValue(reader.GetOrdinal("IdViaje"))),
-                    Fecha: DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("Fecha"))),
-                    Origen: S(reader, "Origen"),
-                    EsNortur: esNortur,
-                    HPre: S(reader, "HPre"),
-                    HIni: S(reader, "HIni"),
-                    HFin: S(reader, "HFin"),
-                    HAvi: S(reader, "HAvi"),
-                    HCie: S(reader, "HCie"),
-                    UPr: S(reader, "UPr"),
-                    UCb: cronograma,
-                    UAs: S(reader, "UAs"),
-                    Chq: N(reader, "Chq"),
-                    Ag: N(reader, "Ag"),
-                    Recorrido: S(reader, "Recorrido"),
-                    Fletero: S(reader, "Fletero"),
-                    Chofer: S(reader, "Chofer"),
-                    Veh: S(reader, "Veh"),
-                    Cliente: cliente,
-                    Pax: N(reader, "Pax"),
-                    Agua: N(reader, "Agua"),
-                    Adj: S(reader, "Adj"),
-                    Comentario: S(reader, "Comentario"),
-                    Grupo: S(reader, "Grupo"),
-                    Vuelo: S(reader, "Vuelo"),
-                    Guia: S(reader, "Guia"),
-                    Estado: S(reader, "Estado")
-                ));
-            }
+                result.Add(MapPlanillaRow(reader));
             return result;
         }) ?? new();
+    }
+
+    /// <summary>
+    /// Planilla de Tráfico filtrada server-side — rama "Aplicar Filtros" del menú contextual de
+    /// trafico2.scx (procedimiento arma_grid_viaje). A diferencia de la vista de día único,
+    /// re-consulta `viaje` sobre un RANGO de fechas (xFecha1..xFecha2) con el WHERE propio de
+    /// cada filtro. Misma proyección (TraficoProjection) y mapeo (MapPlanillaRow) que la vista
+    /// normal. No se cachea: es una acción explícita del usuario (un disparo por aplicación).
+    /// Implementado por ahora: FECHA (rango). El resto del submenú se irá agregando acá con la
+    /// misma mecánica (cada uno suma su condición al WHERE sobre el mismo rango).
+    /// </summary>
+    public async Task<List<PlanillaTraficoRow>> GetPlanillaTraficoFiltradaAsync(TraficoFiltro filtro)
+    {
+        var desde = ClampFecha(filtro.Desde);
+        var hasta = ClampFecha(filtro.Hasta);
+        if (hasta < desde) (desde, hasta) = (hasta, desde);
+
+        // Rango de fechas común a casi todos los filtros (réplica de Between(str_f_reserva, x1, x2)).
+        var rango = $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'";
+
+        // WHERE por tipo de filtro (un Case de arma_grid_viaje por rama). El post-proceso del
+        // FoxPro descarta los CANCELADO en la vista normal → se filtra acá en el WHERE.
+        string where = filtro.Tipo switch
+        {
+            TraficoFiltroTipo.Fecha =>
+                $"v._deleted = 0 AND {rango} AND v.estado_via <> 'CANCELADO'",
+            // Tipo de Reserva (diálogo trafico_filtro_tipo_reserva.scx, código TIPO_RESERVA): rango +
+            // viaje.origen = 'T'/'P'. origen es el modo de carga de la reserva, NO el servicio:
+            //   'T' = por Transportación (turismo / transfer puntual, alta manual — botón Tur)
+            //   'P' = por Plantilla     (servicio recurrente de empresa, armado masivo — botón Emp)
+            // El FoxPro forzaba uno u otro (optiongroup excluyente). Acá se permite "Ambos": cuando
+            // Texto viene null/vacío no se agrega el AND origen y devuelve los dos (mejora pedida).
+            // Mismo eje P/T que los botones Emp/Tur de la toolbar, pero acá sobre un RANGO server-side.
+            TraficoFiltroTipo.TipoReserva =>
+                $"v._deleted = 0 AND {rango} AND v.estado_via <> 'CANCELADO'"
+                + (string.IsNullOrEmpty(filtro.Texto)
+                    ? ""
+                    : $" AND v.origen = '{filtro.Texto.Replace("'", "''")}'"),
+            // Fletero (diálogo "Buscar reservas por Fletero"): rango + viaje.fletero = X.
+            TraficoFiltroTipo.Fletero =>
+                $"v._deleted = 0 AND {rango} AND v.fletero = '{(filtro.Texto ?? "").Replace("'", "''")}' AND v.estado_via <> 'CANCELADO'",
+            // Conductores (diálogo trafico_filtro_chofer.scx): rango + viaje.id_chofer = X.
+            // En el FoxPro (bAceptar.Click) el chofer tiene prioridad sobre el fletero; acá el
+            // filtro de fletero es un diálogo aparte, así que esta rama es siempre por id_chofer.
+            TraficoFiltroTipo.Choferes =>
+                $"v._deleted = 0 AND {rango} AND v.id_chofer = '{(filtro.Texto ?? "").Replace("'", "''")}' AND v.estado_via <> 'CANCELADO'",
+            // Nº de Interno (diálogo trafico_filtro_interno.scx): rango + viaje.id_interno = X.
+            // Se filtra por el CÓDIGO de unidad (NT0044, AG0001…) que vive en viaje.id_interno y es
+            // único entre unidades activas — NO por el número suelto viaje.interno (que se repite y
+            // no coincide con la grilla). El FoxPro original usaba el número; acá se mejora al código
+            // que la operadora reconoce. El código se elige del combo de la nómina (no hay tipeo libre).
+            TraficoFiltroTipo.Interno =>
+                $"v._deleted = 0 AND {rango} AND v.id_interno = '{(filtro.Texto ?? "").Replace("'", "''")}' AND v.estado_via <> 'CANCELADO'",
+            // Estados de la Reserva (diálogo trafico_filtro_tipo_estado.scx): rango + estado_via = X.
+            // ÚNICA rama que puede traer CANCELADO: si el usuario elige justamente ese estado, NO se
+            // aplica el descarte de cancelados (si no, nunca devolvería filas). Para cualquier otro
+            // estado el descarte es redundante (el WHERE ya fija el estado), así que no se agrega.
+            TraficoFiltroTipo.Estado =>
+                $"v._deleted = 0 AND {rango} AND v.estado_via = '{(filtro.Texto ?? "").Replace("'", "''")}'",
+            // Números de Vuelos (diálogo trafico_filtro_vuelo.scx): rango + viaje.vuelo = X.
+            // Texto = "SIN VUELO" | "A CONFIRMAR" | el nº de vuelo elegido (modo Con Vuelo).
+            TraficoFiltroTipo.Vuelo =>
+                $"v._deleted = 0 AND {rango} AND v.vuelo = '{(filtro.Texto ?? "").Replace("'", "''")}' AND v.estado_via <> 'CANCELADO'",
+            // Nº Reserva (diálogo trafico_nro_reserva.scx, código RESERVA): viaje.id_viaje = N.
+            // IGNORA el rango de fechas (el nº de reserva es único en toda la base) — réplica fiel:
+            // el FoxPro no aplica Between en esta rama. NO se descarta CANCELADO: si el operador busca
+            // un nº puntual, lo quiere ver aunque esté cancelado (mismo criterio que el original, que
+            // no filtra estado acá). ⚠️ No hay índice sobre viaje.id_viaje → este WHERE hace scan
+            // completo (~84K lecturas en SQL 2012, ver skill modulo-trafico); es 1 disparo manual del
+            // usuario, aceptable. id_viaje es int.
+            TraficoFiltroTipo.Reserva =>
+                $"v._deleted = 0 AND v.id_viaje = {filtro.Numero ?? 0}",
+            // Nº Reserva En Ruta (mismo diálogo, código RESERVA_RUTA): viaje.id_viaje_i = N.
+            // id_viaje_i (réplica de id_viaje_int, bigint) es el correlativo que agrupa los viajes de
+            // una misma reserva "en ruta" (servicio multi-día del modo ruta de Reservas): un mismo
+            // número devuelve los N días de esa ruta. TAMBIÉN ignora el rango (réplica fiel) y tampoco
+            // descarta CANCELADO. Sin índice sobre id_viaje_i → scan; igual que arriba, disparo manual.
+            TraficoFiltroTipo.ReservaRuta =>
+                $"v._deleted = 0 AND v.id_viaje_i = {filtro.Numero ?? 0}",
+            _ => throw new NotSupportedException($"Filtro de Tráfico aún no implementado: {filtro.Tipo}")
+        };
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        var sql = $"""
+            {TraficoProjection}
+            WHERE {where}
+            ORDER BY v.f_reserva, v.hs_inicio, v.hs_present
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+
+        var result = new List<PlanillaTraficoRow>();
+        using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            result.Add(MapPlanillaRow(reader));
+        return result;
+    }
+
+    /// <summary>
+    /// Lista de fleteros (empresas transportistas) para el combo del filtro "Fleteros" de Tráfico,
+    /// réplica del diálogo "Buscar reservas por Fletero". Devuelve los códigos (fletero.id_contrat)
+    /// ordenados por fletero.orden — que es lo que guarda viaje.fletero. Caché 5 min.
+    /// </summary>
+    public async Task<List<string>> GetFleterosAsync()
+    {
+        const string key = "trafico-fleteros";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            const string sql = """
+                SELECT LTRIM(RTRIM(id_contrat)) AS f, MIN(orden) AS o
+                FROM fletero
+                WHERE _deleted = 0 AND LTRIM(RTRIM(id_contrat)) <> ''
+                GROUP BY LTRIM(RTRIM(id_contrat))
+                ORDER BY o, f
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            var result = new List<string>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                if (!reader.IsDBNull(0)) result.Add(reader.GetString(0));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>
+    /// Lista de conductores para el combo del filtro "Conductores" de Tráfico, réplica del
+    /// diálogo trafico_filtro_chofer.scx. Devuelve (id_chofer, nombre) ordenado por id_chofer
+    /// (igual que el cursor cursorTraficoChofer del FoxPro). El parámetro <paramref name="soloActivos"/>
+    /// replica el checkbox "Solamente los conductores activos": tildado (true) ⇒ Empty(f_delete),
+    /// destildado (false) ⇒ todos. viaje.id_chofer guarda este código. Caché 5 min por flag.
+    /// </summary>
+    public async Task<List<ChoferOpcion>> GetChoferesParaFiltroAsync(bool soloActivos)
+    {
+        var key = $"trafico-choferes-filtro|{(soloActivos ? "act" : "todos")}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            // Réplica del SELECT del Init / Check1.Click de trafico_filtro_chofer.scx:
+            //   Select id_chofer, nombre From chofer Where Empty(f_Delete) Order By id_chofer
+            // (la cláusula Empty(f_delete) se omite cuando el checkbox está destildado).
+            var sql = $"""
+                SELECT RTRIM(ISNULL(id_chofer, '')) AS Codigo, RTRIM(ISNULL(nombre, '')) AS Nombre
+                FROM chofer
+                WHERE _deleted = 0
+                  AND RTRIM(ISNULL(id_chofer, '')) <> ''
+                  {(soloActivos ? "AND f_delete IS NULL" : "")}
+                ORDER BY id_chofer
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            var result = new List<ChoferOpcion>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                result.Add(new ChoferOpcion(reader.GetString(0), reader.GetString(1)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>
+    /// Lista de unidades de la flota para el combo del filtro "Nº de Interno" de Tráfico.
+    /// El FoxPro (trafico_filtro_interno.scx) filtraba por el número suelto viaje.interno, pero ese
+    /// número se REPITE entre vehículos (162 distintos en 406 filas) y no coincide con lo que la
+    /// operadora ve en la grilla. El CÓDIGO de unidad real (NT0044, AG0001, TT0109…) vive en
+    /// `vehiculo.cronograma` y en `viaje.id_interno`, y entre unidades activas es ÚNICO. Por eso
+    /// el combo lista los códigos de unidad de la nómina vigente (activo = 1, sin baja) con su
+    /// número de interno y dominio para referencia. Caché 5 min.
+    /// </summary>
+    public async Task<List<InternoOpcion>> GetInternosParaFiltroAsync()
+    {
+        const string key = "trafico-internos-filtro";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            // Código de unidad (cronograma) de la nómina activa. interno es bigint → CAST + GetInt64.
+            // Orden por código (es lo que la operadora reconoce: NT0001, NT0002…).
+            const string sql = """
+                SELECT
+                    LTRIM(RTRIM(cronograma))      AS Codigo,
+                    CAST(interno AS bigint)       AS Interno,
+                    RTRIM(ISNULL(dominio, ''))    AS Dominio
+                FROM vehiculo
+                WHERE _deleted = 0 AND activo = 1
+                  AND LTRIM(RTRIM(ISNULL(cronograma, ''))) <> ''
+                ORDER BY cronograma
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            var result = new List<InternoOpcion>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                result.Add(new InternoOpcion(
+                    reader.GetString(0),
+                    reader.IsDBNull(1) ? 0 : reader.GetInt64(1),
+                    reader.IsDBNull(2) ? "" : reader.GetString(2)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>
+    /// Nº de vuelos reales que existen en `viaje` dentro de un rango de fechas — para el combo del
+    /// modo "Con Vuelo" del filtro "Números de Vuelos" (trafico_filtro_vuelo.scx). En el FoxPro era
+    /// un textbox libre; acá se ofrece la lista real del rango para evitar tipeos errados. Excluye
+    /// los literales "SIN VUELO" / "A CONFIRMAR" (esos son los otros dos modos del OptionGroup) y
+    /// los vacíos. NO se cachea: depende del rango que elige el usuario en el diálogo.
+    /// </summary>
+    public async Task<List<string>> GetVuelosEnRangoAsync(DateOnly desde, DateOnly hasta)
+    {
+        desde = ClampFecha(desde);
+        hasta = ClampFecha(hasta);
+        if (hasta < desde) (desde, hasta) = (hasta, desde);
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        var sql = $"""
+            SELECT DISTINCT LTRIM(RTRIM(vuelo)) AS Vuelo
+            FROM viaje
+            WHERE _deleted = 0
+              AND f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'
+              AND LTRIM(RTRIM(ISNULL(vuelo, ''))) NOT IN ('', 'SIN VUELO', 'A CONFIRMAR')
+            ORDER BY Vuelo
+            """;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        var result = new List<string>();
+        using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            if (!reader.IsDBNull(0)) result.Add(reader.GetString(0));
+        return result;
     }
 
     /// <summary>
@@ -273,6 +556,18 @@ public class ReportService
 
     public void InvalidarCacheDetalle(int idViaje) =>
         _cache.Remove($"detalle-viaje|{idViaje}");
+
+    /// <summary>
+    /// Limpia el caché de las grillas de ABM de solo lectura (Choferes/Clientes/Vehículos).
+    /// La llama el botón "Actualizar" de cada grilla para forzar una recarga en vivo desde
+    /// SQL aunque el TTL de 60s no haya vencido todavía.
+    /// </summary>
+    public void InvalidarCacheAbm()
+    {
+        _cache.Remove("choferes-lista");
+        _cache.Remove("clientes-lista");
+        _cache.Remove("vehiculos-lista");
+    }
 
     /// <summary>
     /// Listas de unidades para los combos de la pantalla de Tráfico (réplica del Init de trafico2.scx):
@@ -524,7 +819,8 @@ public class ReportService
     /// Detalle completo de un viaje — réplica de solo lectura del form FoxPro `trafico_zoom.scx`
     /// ("Zoom del Viaje"). Trae la fila de `viaje` más los lookups que hace el Init() del Fox:
     ///   - id_servici/2/3 → servicio.nombre (1°/2°/3° servicio)
-    ///   - id_operado     → cliente.razon_soci (operador turístico)
+    ///   - id_operado     → cliente_operador.nombre (operador = contacto del cliente; el Fox
+    ///                       resuelve el operador SIEMPRE contra cliente_operador, no cliente)
     ///   - id_vehicu2     → vehiculo_tipo.nombre + capacidad (pax)
     ///   - id_grupo       → cliente_grupo.nombre / f_grupo_fi / f_grupo_fc (si grupo &lt;&gt; 'SIN GRUPO')
     /// Nombres de columna ya mapeados FoxPro→SQL (truncados a 10 chars en la réplica).
@@ -573,7 +869,7 @@ public class ReportService
                     v.id_cliente                                AS IdCliente,
                     v.nombre_cli                                AS NombreCliente,
                     v.id_operado                                AS IdOperador,
-                    op.razon_soci                               AS NombreOperador,
+                    op.nombre                                   AS NombreOperador,
                     v.voucher_nr                                AS Voucher,
                     v.id_servici                                AS IdServicio1,
                     ser1.nombre                                 AS Servicio1,
@@ -617,7 +913,7 @@ public class ReportService
                     LEFT JOIN servicio       ser1 ON ser1.id_servici = v.id_servici AND ser1._deleted = 0
                     LEFT JOIN servicio       ser2 ON ser2.id_servici = v.id_servic2 AND ser2._deleted = 0
                     LEFT JOIN servicio       ser3 ON ser3.id_servici = v.id_servic3 AND ser3._deleted = 0
-                    LEFT JOIN cliente        op   ON op.id_cliente   = v.id_operado AND op._deleted = 0
+                    LEFT JOIN cliente_operador op  ON LTRIM(RTRIM(op.id_operado)) = LTRIM(RTRIM(v.id_operado)) AND op._deleted = 0
                     LEFT JOIN vehiculo_tipo  vt   ON vt.id_vehicul   = v.id_vehicu2 AND vt._deleted = 0
                     LEFT JOIN cliente_grupo  cg   ON cg.id           = v.id_grupo   AND cg._deleted = 0
                 WHERE v._deleted = 0
@@ -722,7 +1018,7 @@ public class ReportService
             await conn.OpenAsync();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = $"""
-                SELECT nombre, cantidad, precio
+                SELECT nombre, cantidad, precio, id_adicion
                 FROM viaje_adicional
                 WHERE _deleted = 0 AND id_viaje = {idViaje}
                 ORDER BY nombre
@@ -734,11 +1030,114 @@ public class ReportService
                 result.Add(new AdicionalViajeRow(
                     Nombre: reader.IsDBNull(0) ? "" : reader.GetValue(0).ToString()!.Trim(),
                     Cantidad: reader.IsDBNull(1) ? 0 : Convert.ToInt32(reader.GetValue(1)),
-                    Precio: reader.IsDBNull(2) ? 0m : Convert.ToDecimal(reader.GetValue(2))
+                    Precio: reader.IsDBNull(2) ? 0m : Convert.ToDecimal(reader.GetValue(2)),
+                    Codigo: reader.IsDBNull(3) ? "" : reader.GetValue(3).ToString()!.Trim()
                 ));
             }
             return result;
         }) ?? new();
+    }
+
+    /// <summary>
+    /// Ficha del operador de un viaje — réplica de "Ver Datos Operador" (submenú verdatosex de
+    /// trafico2.scx → form cliente_operador_abm en modo "consulta"):
+    ///   SELECT * FROM cliente_operador WHERE id_operador = viaje.id_operado
+    /// Solo lectura. El operador es un contacto/persona dentro de un cliente (agencia), NO el
+    /// "operador turístico" (que es otra cosa). Devuelve null si el viaje no tiene operador
+    /// asignado o el código no existe (el Fox muestra "No hay asignado ningún operador").
+    /// </summary>
+    public async Task<OperadorDetalleDto?> GetOperadorDetalleAsync(string idOperador)
+    {
+        if (string.IsNullOrWhiteSpace(idOperador)) return null;
+        var key = $"operador-detalle|{idOperador.Trim()}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            // id_operado = nombre truncado de id_operador en la réplica. Se busca por el código
+            // del operador (PK lógica). Escapado de comilla simple por las dudas (regla del proyecto).
+            cmd.CommandText = $"""
+                SELECT TOP 1 id_operado, id_cliente, nombre, telefono, celular,
+                       nextel, interno, email, comentario
+                FROM cliente_operador
+                WHERE _deleted = 0 AND LTRIM(RTRIM(id_operado)) = '{idOperador.Trim().Replace("'", "''")}'
+                """;
+            using var reader = await cmd.ExecuteReaderAsync();
+            if (!await reader.ReadAsync()) return null;
+            string S(string c) { var i = reader.GetOrdinal(c); return reader.IsDBNull(i) ? "" : reader.GetValue(i).ToString()!.Trim(); }
+            return new OperadorDetalleDto(
+                IdOperador: S("id_operado"),
+                IdCliente: S("id_cliente"),
+                Nombre: S("nombre"),
+                Telefono: S("telefono"),
+                Celular: S("celular"),
+                Nextel: S("nextel"),
+                Interno: S("interno"),
+                Email: S("email"),
+                Comentario: S("comentario"));
+        });
+    }
+
+    /// <summary>
+    /// Texto del recorrido de cabecera de un viaje — réplica de "Ver Recorrido" (submenú
+    /// verdatosex de trafico2.scx → form cabecera_recorrido_abm_zoom en modo "consulta"):
+    ///   SELECT * FROM cabecera WHERE codigo = viaje.gps_cod
+    /// y muestra cabecera.recorrido (descripción larga del circuito) en solo lectura.
+    /// Devuelve null si el viaje no tiene gps_cod o el código no existe en cabecera (el Fox
+    /// muestra "No hay ningún código de cabecera en ese viaje" / "No se encuentra datos...").
+    /// </summary>
+    public async Task<RecorridoCabeceraDto?> GetRecorridoCabeceraAsync(string gpsCod)
+    {
+        if (string.IsNullOrWhiteSpace(gpsCod)) return null;
+        var key = $"recorrido-cabecera|{gpsCod.Trim()}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT TOP 1 codigo, nombre, nombre1, nombre2, recorrido
+                FROM cabecera
+                WHERE _deleted = 0 AND LTRIM(RTRIM(codigo)) = '{gpsCod.Trim().Replace("'", "''")}'
+                """;
+            using var reader = await cmd.ExecuteReaderAsync();
+            if (!await reader.ReadAsync()) return null;
+            string S(string c) { var i = reader.GetOrdinal(c); return reader.IsDBNull(i) ? "" : reader.GetValue(i).ToString()!.Trim(); }
+            return new RecorridoCabeceraDto(
+                Codigo: S("codigo"),
+                Nombre: S("nombre"),
+                Nombre1: S("nombre1"),
+                Nombre2: S("nombre2"),
+                Recorrido: S("recorrido"));
+        });
+    }
+
+    /// <summary>
+    /// Ruta cruda del archivo adjunto de un viaje (viaje.file) — para "Ver Adjunto" (submenú
+    /// verdatosex de trafico2.scx). El FoxPro abría esa ruta con Shell.ShellExecute; acá la
+    /// resuelve AdjuntoService contra la carpeta accesible por el servidor. Devuelve la ruta
+    /// tal cual está en la base (ej O:\METROCARSYS\ADJUNTOS\x.pdf) o "" si no hay adjunto.
+    /// Se acota por f_reserva (igual que el Zoom) para SEEK por ix_viaje_f_reserva en vez de scan.
+    /// </summary>
+    public async Task<string> GetRutaAdjuntoViajeAsync(int idViaje, DateOnly? fReserva = null)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        var fResFiltro = fReserva is null ? "" : $"AND f_reserva = '{fReserva.Value:yyyy-MM-dd}'";
+        cmd.CommandText = $"""
+            SELECT TOP 1 [file]
+            FROM viaje
+            WHERE _deleted = 0 {fResFiltro} AND id_viaje = {idViaje}
+            """;
+        var val = await cmd.ExecuteScalarAsync();
+        return val is null || val is DBNull ? "" : val.ToString()!.Trim();
     }
 
     /// <summary>
@@ -966,7 +1365,7 @@ public class ReportService
     {
         return await _cache.GetOrCreateAsync("clientes-lista", async entry =>
         {
-            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
             await using var db = await _dbFactory.CreateDbContextAsync();
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
@@ -1135,7 +1534,7 @@ public class ReportService
     {
         return await _cache.GetOrCreateAsync("choferes-lista", async entry =>
         {
-            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
             await using var db = await _dbFactory.CreateDbContextAsync();
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
@@ -1354,7 +1753,7 @@ public class ReportService
     {
         return await _cache.GetOrCreateAsync("vehiculos-lista", async entry =>
         {
-            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
             await using var db = await _dbFactory.CreateDbContextAsync();
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
@@ -2279,6 +2678,243 @@ public class ReportService
                 rd.GetString(0), rd.GetString(1), rd.GetInt32(2), rd.GetDecimal(3)));
         return result;
     }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    //  Historial del viaje — réplica del form FoxPro `trafico_historial.scx`
+    //  ("Historia del viaje" del menú contextual de Tráfico). Solo lectura.
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Carga el "Historial sobre la reserva": la cabecera de auditoría (quién creó/eliminó/
+    /// modificó el viaje, con fechas) + la bitácora completa de movimientos de `viaje_log`.
+    /// Espeja el Init() de `trafico_historial.scx`: la cabecera sale de `viaje` (campos
+    /// u_create/f_create/u_delete/f_delete/u_modify/f_modify) y la grilla de `viaje_log`
+    /// WHERE id_viaje = X, ordenada por hora.
+    ///
+    /// PERFORMANCE: la query de cabecera filtra también por f_reserva (la fila de la planilla
+    /// siempre la conoce) → SEEK por ix_viaje_f_reserva en vez de un SCAN completo de `viaje`
+    /// (misma trampa que el Zoom; ver GetDetalleViajeAsync). La grilla de `viaje_log` SÍ tiene
+    /// índice propio por id_viaje (IX_viaje_log_idviaje), así que ahí el filtro por id_viaje
+    /// ya es un seek rápido pese a las 4,4M filas de la tabla.
+    /// </summary>
+    public async Task<HistorialViajeDto> GetHistorialViajeAsync(int idViaje, DateOnly? fReserva = null)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        var dto = new HistorialViajeDto { IdViaje = idViaje };
+
+        // ── 1) Cabecera de auditoría (tabla viaje) ──
+        var fResFiltro = fReserva is null
+            ? ""
+            : $"AND f_reserva = '{fReserva.Value:yyyy-MM-dd}'";
+        using (var cmdCab = conn.CreateCommand())
+        {
+            cmdCab.CommandText = $"""
+                SELECT TOP 1
+                    u_create AS UCreate, f_create AS FCreate,
+                    u_delete AS UDelete, f_delete AS FDelete,
+                    u_modify AS UModify, f_modify AS FModify
+                FROM viaje
+                WHERE _deleted = 0 {fResFiltro} AND id_viaje = {idViaje}
+                """;
+            using var rdCab = await cmdCab.ExecuteReaderAsync();
+            if (await rdCab.ReadAsync())
+            {
+                string S(string c) { var i = rdCab.GetOrdinal(c); return rdCab.IsDBNull(i) ? "" : rdCab.GetValue(i).ToString()!.Trim(); }
+                DateOnly? DO(string c) { var i = rdCab.GetOrdinal(c); return rdCab.IsDBNull(i) ? null : DateOnly.FromDateTime(rdCab.GetDateTime(i)); }
+                dto.UsuarioCreo = S("UCreate");
+                dto.FechaCreo = DO("FCreate");
+                dto.UsuarioElimino = S("UDelete");
+                dto.FechaElimino = DO("FDelete");
+                dto.UsuarioModifico = S("UModify");
+                dto.FechaModifico = DO("FModify");
+            }
+        }
+
+        // ── 2) Bitácora de movimientos (tabla viaje_log) ──
+        // Nombres truncados por la réplica DBF→SQL (10 chars): interno_ori→interno_or,
+        // interno_new→interno_ne, cronograma_new→cronogram2.
+        using (var cmdLog = conn.CreateCommand())
+        {
+            cmdLog.CommandText = $"""
+                SELECT
+                    hora       AS Hora,
+                    usuario    AS Usuario,
+                    motivo     AS Motivo,
+                    id_chofer  AS Chofer,
+                    cronograma AS Cronograma,
+                    cronogram2 AS CronogramaNuevo,
+                    interno_or AS InternoOrig,
+                    interno_ne AS InternoNuevo,
+                    comentario AS Comentario
+                FROM viaje_log
+                WHERE id_viaje = {idViaje}
+                ORDER BY hora, _sync_id
+                """;
+            using var rdLog = await cmdLog.ExecuteReaderAsync();
+            string S(string c) { var i = rdLog.GetOrdinal(c); return rdLog.IsDBNull(i) ? "" : rdLog.GetValue(i).ToString()!.Trim(); }
+            int? N(string c) { var i = rdLog.GetOrdinal(c); return rdLog.IsDBNull(i) ? null : Convert.ToInt32(rdLog.GetValue(i)); }
+            DateTime? DT(string c) { var i = rdLog.GetOrdinal(c); return rdLog.IsDBNull(i) ? null : rdLog.GetDateTime(i); }
+            while (await rdLog.ReadAsync())
+            {
+                dto.Movimientos.Add(new HistorialViajeRow(
+                    DT("Hora"), S("Usuario"), S("Motivo"), S("Chofer"),
+                    S("Cronograma"), S("CronogramaNuevo"),
+                    N("InternoOrig"), N("InternoNuevo"), S("Comentario")));
+            }
+        }
+
+        return dto;
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // "Novedad sobre el viaje" (menú contextual de Tráfico) — SOLO LECTURA
+    // ───────────────────────────────────────────────────────────────────────────
+    // El FoxPro (libro_novedad_alta → libro_novedad_abm "alta") DA DE ALTA una novedad
+    // en `libro_novedad` ligada al viaje (con opción de mandar correo al cliente). La regla
+    // strangler del proyecto deja la ESCRITURA en FoxPro: acá listamos las novedades ya
+    // cargadas de ese viaje (libro_novedad WHERE id_viaje = X), igual patrón que el historial.
+    //
+    // Trampas de la réplica (verificado contra sys.columns, 30/06/2026):
+    //   · usuario_create → usuario_cr (truncado a 10 chars); también usuario_de / usuario_mo.
+    //   · id_viaje es bigint en libro_novedad (en `viaje` es int) → CAST sobre el parámetro.
+    //   · 48.160 filas totales, 19.877 con id_viaje > 0; _deleted = 0 (no hay borradas hoy,
+    //     pero filtramos igual por convención del proyecto).
+    public async Task<List<NovedadViajeRow>> GetNovedadesViajeAsync(int idViaje)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT
+                id         AS Id,
+                f_carga    AS FCarga,
+                asunto     AS Asunto,
+                mensaje    AS Mensaje,
+                usuario_cr AS UsuarioCarga,
+                finalizo   AS Finalizo
+            FROM libro_novedad
+            WHERE _deleted = 0 AND id_viaje = {idViaje}
+            ORDER BY f_carga DESC, id DESC
+            """;
+
+        var lista = new List<NovedadViajeRow>();
+        using var rd = await cmd.ExecuteReaderAsync();
+        string S(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? "" : rd.GetValue(i).ToString()!.Trim(); }
+        DateTime? DT(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? null : rd.GetDateTime(i); }
+        bool B(string c) { var i = rd.GetOrdinal(c); return !rd.IsDBNull(i) && Convert.ToBoolean(rd.GetValue(i)); }
+        while (await rd.ReadAsync())
+        {
+            lista.Add(new NovedadViajeRow(
+                Convert.ToInt32(rd["Id"]), DT("FCarga"), S("Asunto"),
+                S("Mensaje"), S("UsuarioCarga"), B("Finalizo")));
+        }
+        return lista;
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // "Lista de pasajeros" (menú contextual de Tráfico) — SOLO LECTURA
+    // ───────────────────────────────────────────────────────────────────────────
+    // El FoxPro (trafico_pasajero_planilla.scx) es un ABM completo de la planilla CNRT
+    // (manifiesto de pasajeros con DNI/nacionalidad/profesión + datos de empresa/choferes/
+    // vehículos) que se imprime en PDF. Acá lo migramos en SOLO LECTURA: si ese viaje tiene
+    // una planilla generada (viaje_pasajero) la mostramos con su detalle (viaje_pasajero_detalle);
+    // si no, el diálogo avisa "sin lista generada".
+    //
+    // Realidad de la réplica (30/06/2026): viaje_pasajero tiene 1 fila y el detalle 0 →
+    // casi siempre devolverá null. Se migra por completitud del menú, no por volumen.
+    // Trampas de columnas truncadas: empresa_nom→empresa_no, razon_social→razon_soci,
+    // nacionalidad→nacionalid. id_viaje es bigint.
+    public async Task<PasajerosViajeDto?> GetPasajerosViajeAsync(int idViaje)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        PasajerosViajeDto? dto = null;
+
+        // ── 1) Cabecera de la planilla (viaje_pasajero) ──
+        using (var cmdCab = conn.CreateCommand())
+        {
+            cmdCab.CommandText = $"""
+                SELECT TOP 1
+                    razon_soci AS RazonSocial, id_cliente AS IdCliente, domicilio AS Domicilio,
+                    cuit AS Cuit, legajo AS Legajo, d_destino AS Desde, h_destino AS Hasta,
+                    clase AS Clase, f_inicio AS FInicio, f_fin AS FFin, hora AS Hora, km AS Km,
+                    empresa_no AS EmpresaNom, empresa_di AS EmpresaDir, empresa_cu AS EmpresaCuit,
+                    apellido_1 AS Apellido1, nombre_1 AS Nombre1, tdoc_1 AS Tdoc1, ndoc_1 AS Ndoc1,
+                    apellido_2 AS Apellido2, nombre_2 AS Nombre2, tdoc_2 AS Tdoc2, ndoc_2 AS Ndoc2,
+                    id_vehicul AS Vehiculo1, id_vehicu2 AS Vehiculo2, id_vehicu3 AS Vehiculo3
+                FROM viaje_pasajero
+                WHERE _deleted = 0 AND id_viaje = {idViaje}
+                """;
+            using var rd = await cmdCab.ExecuteReaderAsync();
+            if (await rd.ReadAsync())
+            {
+                string S(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? "" : rd.GetValue(i).ToString()!.Trim(); }
+                DateOnly? DO(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? null : DateOnly.FromDateTime(rd.GetDateTime(i)); }
+                long? L(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? null : Convert.ToInt64(rd.GetValue(i)); }
+
+                string ChoferTxt(string ape, string nom) =>
+                    (S(ape) + " " + S(nom)).Trim();
+
+                dto = new PasajerosViajeDto
+                {
+                    IdViaje = idViaje,
+                    RazonSocial = S("RazonSocial"),
+                    IdCliente = S("IdCliente"),
+                    Domicilio = S("Domicilio"),
+                    Cuit = S("Cuit"),
+                    Legajo = S("Legajo"),
+                    Desde = S("Desde"),
+                    Hasta = S("Hasta"),
+                    Clase = S("Clase"),
+                    FInicio = DO("FInicio"),
+                    FFin = DO("FFin"),
+                    Hora = S("Hora"),
+                    Km = L("Km"),
+                    EmpresaNom = S("EmpresaNom"),
+                    EmpresaDir = S("EmpresaDir"),
+                    EmpresaCuit = S("EmpresaCuit"),
+                    Chofer1 = ChoferTxt("Apellido1", "Nombre1"),
+                    Doc1 = (S("Tdoc1") + " " + S("Ndoc1")).Trim(),
+                    Chofer2 = ChoferTxt("Apellido2", "Nombre2"),
+                    Doc2 = (S("Tdoc2") + " " + S("Ndoc2")).Trim(),
+                };
+            }
+        }
+
+        // Sin cabecera → no hay planilla generada para este viaje.
+        if (dto is null) return null;
+
+        // ── 2) Detalle de pasajeros (viaje_pasajero_detalle) ──
+        using (var cmdDet = conn.CreateCommand())
+        {
+            cmdDet.CommandText = $"""
+                SELECT
+                    id AS Id, apeynom AS ApeYNom, tdoc AS Tdoc, ndoc AS Ndoc,
+                    nacionalid AS Nacionalidad, profesion AS Profesion, sexo AS Sexo, f_nac AS FNac
+                FROM viaje_pasajero_detalle
+                WHERE _deleted = 0 AND id_viaje = {idViaje}
+                ORDER BY id
+                """;
+            using var rd = await cmdDet.ExecuteReaderAsync();
+            string S(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? "" : rd.GetValue(i).ToString()!.Trim(); }
+            DateOnly? DO(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? null : DateOnly.FromDateTime(rd.GetDateTime(i)); }
+            while (await rd.ReadAsync())
+            {
+                dto.Pasajeros.Add(new PasajeroRow(
+                    S("ApeYNom"), S("Tdoc"), S("Ndoc"),
+                    S("Nacionalidad"), S("Profesion"), S("Sexo"), DO("FNac")));
+            }
+        }
+
+        return dto;
+    }
 }
 
 /// <summary>Resultado del login — espeja las variables públicas del FoxPro
@@ -2493,7 +3129,78 @@ public record PlanillaTraficoRow(
     string Grupo,
     string Vuelo,
     string Guia,
-    string Estado);
+    string Estado,
+    // ── Datos para "Ubicar en GPS" (réplica de ubicar_gps de trafico2.scx) ──
+    // Interno numérico del vehículo (viaje.interno). El FoxPro arma el código de bus GPS
+    // con los últimos 2 dígitos del interno; si es 0 prueba con Val(cronograma)/Val(cronograma2).
+    int? Interno,
+    // hs_inicio / hs_fin crudos: la URL "Recorrido en WEB" (Maps.aspx) los pasa como
+    // desde/hasta en formato YYYYMMDDHHMMSS (Ttoc(...,1) en FoxPro). hs_fin vacío → ahora.
+    DateTime? HsInicio,
+    DateTime? HsFin,
+    // ── Claves para "Ver Datos Extras" (réplica del submenú de trafico2.scx) ──
+    // Códigos completos que esperan los diálogos de ficha (ChoferDetalleDialog,
+    // VehiculoDetalleDialog). El cliente usa el campo Cliente (= id_cliente). Estos NO se
+    // muestran en la grilla: la columna Veh está truncada a 4 chars y Chofer es el nombre.
+    // OJO: la PK del vehículo es viaje.id_vehicu2 (= dominio/patente completa, ej "AE512LG"),
+    // NO viaje.id_vehicul (ese guarda solo el TIPO: BUS/VAN). El dominio matchea con
+    // vehiculo.id_vehicul (= vehiculo.dominio), que es lo que busca GetVehiculoDetalleAsync.
+    string IdChofer,
+    string IdVehiculo,
+    // ── Claves para el submenú "Ver Datos Extras" (réplica de verdatosex de trafico2.scx) ──
+    // id_operado → código del operador del cliente (PK lógica de cliente_operador) para
+    // "Ver Datos Operador". gps_cod → código de cabecera de recorrido (cabecera.codigo) para
+    // "Ver Recorrido". Adjunto → ruta del archivo adjunto (viaje.file, ej O:\...\x.pdf) para
+    // "Ver Adjunto". "Ver Adicionales" no necesita campo nuevo: filtra viaje_adicional por IdViaje.
+    string IdOperador,
+    string GpsCod,
+    string Adjunto);
+
+/// <summary>
+/// Tipo de filtro server-side de la planilla de Tráfico (rama "Aplicar Filtros" del menú
+/// contextual de trafico2.scx). Cada valor corresponde a un Case de arma_grid_viaje.
+/// </summary>
+public enum TraficoFiltroTipo
+{
+    Fecha,          // FECHA          — rango de fechas (fundacional)
+    TipoReserva,    // TIPO_RESERVA   — origen 'T'/'P'
+    Fletero,        // (agregado en el exe productivo) — viaje.fletero
+    Choferes,       // CHOFERES       — id_chofer
+    Interno,        // INTERNO        — interno
+    Estado,         // TIPO_ESTADO    — estado_via
+    Vuelo,          // VUELO          — vuelo
+    Cliente,        // CLIENTE        — id_cliente [+ grupo]
+    ClienteGrupo,   // CLIENTE_GRUPO  — cliente + varios grupos
+    Reserva,        // RESERVA        — id_viaje (sin rango de fechas)
+    ReservaRuta     // RESERVA_RUTA   — id_viaje_int (sin rango de fechas)
+}
+
+/// <summary>
+/// Descriptor de un filtro server-side de Tráfico. Desde/Hasta acotan el rango (réplica de
+/// xFecha1/xFecha2 de arma_grid_viaje). Texto/Numero portan el criterio según el tipo
+/// (p. ej. Numero = Nº de reserva o interno; Texto = vuelo, cliente, estado…).
+/// </summary>
+public record TraficoFiltro(
+    TraficoFiltroTipo Tipo,
+    DateOnly Desde,
+    DateOnly Hasta,
+    string? Texto = null,
+    int? Numero = null);
+
+/// <summary>
+/// Opción de conductor para el combo del filtro "Conductores" de Tráfico (réplica del cursor
+/// cursorTraficoChofer de trafico_filtro_chofer.scx). Codigo = chofer.id_chofer (lo que guarda
+/// viaje.id_chofer); Nombre = chofer.nombre desnormalizado (apellido + nombres).
+/// </summary>
+public record ChoferOpcion(string Codigo, string Nombre);
+
+/// <summary>
+/// Opción de unidad de la flota para el combo del filtro "Nº de Interno" de Tráfico.
+/// Codigo = vehiculo.cronograma = el CÓDIGO de unidad (NT0044, AG0001…) que se ve en la grilla y
+/// guarda viaje.id_interno (es por lo que se filtra). Interno = el número suelto vehiculo.interno
+/// (se repite entre unidades, solo informativo). Dominio = patente, para referencia.
+/// </summary>
+public record InternoOpcion(string Codigo, long Interno, string Dominio);
 
 /// <summary>
 /// Listas para los combos de unidades de la pantalla de Tráfico (trafico2.scx):
@@ -2554,7 +3261,27 @@ public record TraficoCanceladoRow(
 /// <summary>
 /// Una línea de la grilla de Adicionales del "Zoom del Viaje" (tabla viaje_adicional).
 /// </summary>
-public record AdicionalViajeRow(string Nombre, int Cantidad, decimal Precio);
+// Codigo = id_adicion (truncado de id_adicional en la réplica) — columna "Codigo" de la
+// grilla FoxPro de adicionales (trafico_zoom_adicional). El Zoom del Viaje no lo usa; el
+// diálogo "Ver Adicionales" del menú de Tráfico sí. Importe se calcula en la vista (Cantidad×Precio).
+public record AdicionalViajeRow(string Nombre, int Cantidad, decimal Precio, string Codigo = "");
+
+/// <summary>
+/// Ficha del operador de un viaje — "Ver Datos Operador" (cliente_operador en modo consulta).
+/// Campos del form FoxPro cliente_operador_abm: código, nombre, cliente, teléfono, celular,
+/// nextel, interno, email, comentario. Todo solo lectura.
+/// </summary>
+public record OperadorDetalleDto(
+    string IdOperador, string IdCliente, string Nombre, string Telefono,
+    string Celular, string Nextel, string Interno, string Email, string Comentario);
+
+/// <summary>
+/// Recorrido de cabecera de un viaje — "Ver Recorrido" (cabecera en modo consulta). El form
+/// FoxPro cabecera_recorrido_abm_zoom solo mostraba cabecera.recorrido; acá se agregan también
+/// código y los 3 nombres de la cabecera para dar contexto. Todo solo lectura.
+/// </summary>
+public record RecorridoCabeceraDto(
+    string Codigo, string Nombre, string Nombre1, string Nombre2, string Recorrido);
 
 /// <summary>
 /// Detalle completo de un viaje para el modal "Zoom del Viaje" (solo lectura).
@@ -2727,3 +3454,87 @@ public record FacturacionEstimadaMesRow(
 
 public record FacturacionEstimadaClienteRow(
     string Codigo, string RazonSocial, int Liquidaciones, decimal TotalEstimado);
+
+// ── Tráfico: Historial del viaje (trafico_historial.scx) ──
+
+/// <summary>
+/// Una línea de la bitácora de un viaje (tabla `viaje_log`) — una columna por cada celda
+/// de la grilla del form FoxPro `trafico_historial.scx`. <c>Hora</c> trae fecha + hora
+/// (el form la rotula "Hora" pero el dato es datetime). InternoOrig/InternoNuevo son los
+/// números de interno antes/después del movimiento; CronogramaNuevo la unidad nueva.
+/// </summary>
+public record HistorialViajeRow(
+    DateTime? Hora, string Usuario, string Motivo, string Chofer,
+    string Cronograma, string CronogramaNuevo,
+    int? InternoOrig, int? InternoNuevo, string Comentario);
+
+/// <summary>
+/// Historial completo de una reserva para el modal "Historial del viaje" (solo lectura).
+/// Espeja `trafico_historial.scx`: la cabecera de auditoría (Creó/Eliminó/Modificó, sale de
+/// `viaje`) + la lista de movimientos (<see cref="HistorialViajeRow"/>, sale de `viaje_log`).
+/// </summary>
+public class HistorialViajeDto
+{
+    public int IdViaje { get; set; }
+
+    // Cabecera (recuadro gris del form): 3 pares usuario + fecha.
+    public string UsuarioCreo { get; set; } = "";
+    public DateOnly? FechaCreo { get; set; }
+    public string UsuarioElimino { get; set; } = "";
+    public DateOnly? FechaElimino { get; set; }
+    public string UsuarioModifico { get; set; } = "";
+    public DateOnly? FechaModifico { get; set; }
+
+    public List<HistorialViajeRow> Movimientos { get; } = new();
+}
+
+/// <summary>
+/// Una novedad del libro ligada a un viaje, para el modal "Novedad sobre el viaje" (solo
+/// lectura). Espeja una fila de `libro_novedad` con id_viaje = X. El FoxPro daba de alta
+/// (libro_novedad_abm "alta"); acá solo se listan las ya cargadas.
+/// </summary>
+public record NovedadViajeRow(
+    int Id, DateTime? FCarga, string Asunto, string Mensaje, string UsuarioCarga, bool Finalizo);
+
+/// <summary>Un pasajero de la planilla CNRT (`viaje_pasajero_detalle`).</summary>
+public record PasajeroRow(
+    string ApeYNom, string Tdoc, string Ndoc,
+    string Nacionalidad, string Profesion, string Sexo, DateOnly? FNac);
+
+/// <summary>
+/// Planilla de pasajeros (manifiesto CNRT) de un viaje, para el modal "Lista de pasajeros"
+/// (solo lectura). Espeja `viaje_pasajero` (cabecera: cliente/empresa/destino/choferes/
+/// vehículos) + `viaje_pasajero_detalle` (los pasajeros). El FoxPro
+/// (trafico_pasajero_planilla.scx) la cargaba y la imprimía en PDF; acá solo se muestra.
+/// </summary>
+public class PasajerosViajeDto
+{
+    public int IdViaje { get; set; }
+
+    // Datos del servicio / cliente
+    public string RazonSocial { get; set; } = "";
+    public string IdCliente { get; set; } = "";
+    public string Domicilio { get; set; } = "";
+    public string Cuit { get; set; } = "";
+    public string Legajo { get; set; } = "";
+    public string Desde { get; set; } = "";
+    public string Hasta { get; set; } = "";
+    public string Clase { get; set; } = "";
+    public DateOnly? FInicio { get; set; }
+    public DateOnly? FFin { get; set; }
+    public string Hora { get; set; } = "";
+    public long? Km { get; set; }
+
+    // Empresa transportista (datos para el manifiesto CNRT)
+    public string EmpresaNom { get; set; } = "";
+    public string EmpresaDir { get; set; } = "";
+    public string EmpresaCuit { get; set; } = "";
+
+    // Choferes asignados (el FoxPro tiene hasta 3; mostramos los 2 primeros con dato)
+    public string Chofer1 { get; set; } = "";
+    public string Doc1 { get; set; } = "";
+    public string Chofer2 { get; set; } = "";
+    public string Doc2 { get; set; } = "";
+
+    public List<PasajeroRow> Pasajeros { get; } = new();
+}

@@ -45,13 +45,62 @@ SIN ASIGNAR ──asignar──► ASIGNADO ──fin──► FINALIZADO ──
 | Vista cancelados (Cxl) con motivo | ídem + `GetTraficoCanceladosAsync` |
 | **Panel Buses** (grid2: flota viva, franco, colores) | ídem + `GetPanelBusesAsync` |
 | Zoom del Viaje (solo lectura) | `Components/Shared/ZoomViajeDialog.razor` |
-| Export Excel (planilla y cancelados) | `ExcelExportService` |
+| **Historial del viaje** (bitácora `viaje_log` + auditoría, solo lectura) | `Components/Shared/HistorialViajeDialog.razor` (+ `TextoZoomDialog.razor` = el "Zoon Motivo") · doc: `docs/logica-foxpro/TRAFICO_HISTORIAL.md` |
+| **Novedad sobre el viaje** (libro de novedades del viaje, solo lectura) | `Components/Shared/NovedadViajeDialog.razor` · `GetNovedadesViajeAsync` · tabla `libro_novedad` · doc: `TRAFICO2_FILTROS.md` |
+| **Lista de pasajeros** (planilla CNRT del viaje, solo lectura) | `Components/Shared/ListaPasajerosDialog.razor` · `GetPasajerosViajeAsync` · tablas `viaje_pasajero`/`viaje_pasajero_detalle` · doc: `TRAFICO2_FILTROS.md` |
+| **Menú contextual completo "Ver Datos Extras"** (los 7 ítems del popup `verdatosex`) | ver tabla abajo |
+| Export Excel (planilla, cancelados, historial) | `ExcelExportService` |
 | **Auto-refresh inteligente 60s** (token de versión + flash de cambios) | `PlanillaTrafico.razor` + `GetTraficoVersionAsync` |
 | Grilla estilo "Ops Densa" (barra de estado + tinte, paleta desaturada) | clases `fila-estado--*` en `app.css` |
 
 Queries del módulo en `ReportService.cs`: `GetPlanillaTraficoAsync`,
 `GetTraficoCanceladosAsync`, `GetCombosUnidadesTraficoAsync`, `GetPanelBusesAsync`,
-`GetTraficoVersionAsync` (liviana, sin caché) + `InvalidarCacheTrafico`.
+`GetTraficoVersionAsync` (liviana, sin caché) + `InvalidarCacheTrafico`,
+`GetHistorialViajeAsync` (bitácora `viaje_log` + auditoría de `viaje`, sin caché),
+`GetNovedadesViajeAsync` (libro de novedades del viaje, `libro_novedad`),
+`GetPasajerosViajeAsync` (planilla CNRT, `viaje_pasajero` + `viaje_pasajero_detalle`),
+`GetOperadorDetalleAsync`, `GetRecorridoCabeceraAsync`, `GetAdicionalesViajeAsync`,
+`GetRutaAdjuntoViajeAsync` (Ver Datos Extras).
+
+### Submenú "Ver Datos Extras" (popup `verdatosex` de `menu_viaje_reserva.mnx`) — los 7 ítems migrados (jun 2026)
+
+Click derecho sobre una fila → "Ver Datos Extras". Cada ítem abre la ficha de solo lectura
+de la entidad de la fila (todos reusan diálogos o el patrón de ficha del proyecto). Se
+deshabilitan si la fila no tiene la clave. **Verificado contra `cursorViajeReserva` = `SELECT *
+FROM viaje`: todas las claves son columnas de `viaje`.**
+
+| Ítem | Form FoxPro origen | Clave (`viaje`) | Blazor | Tabla destino |
+| --- | --- | --- | --- | --- |
+| Ver Datos **Operador** | `cliente_operador_abm` (consulta) | `id_operado` | `OperadorDetalleDialog.razor` | `cliente_operador` por `id_operado` |
+| Ver Datos **Vehículo** | `vehiculo_abm` (consulta) | `id_vehicu2` (=dominio) | `VehiculoDetalleDialog.razor` | `vehiculo` |
+| Ver Datos **Chofer** | `chofer_abm` (consulta) | `id_chofer` | `ChoferDetalleDialog.razor` | `chofer` |
+| Ver Datos **Cliente** | `cliente_abm` (consulta) | `id_cliente` | `ClienteDetalleDialog.razor` | `cliente` |
+| Ver **Adjunto** | `Shell.ShellExecute(viaje.file)` | `file` | endpoint `/adjunto/{id}?f=fecha` + `AdjuntoService` | archivo físico (ver abajo) |
+| Ver **Recorrido** | `cabecera_recorrido_abm_zoom` (consulta) | `gps_cod` | `RecorridoCabeceraDialog.razor` | `cabecera` por `codigo` (texto del circuito) |
+| Ver **Adicionales** | `trafico_zoom_adicional` (consulta, `WITH id_viaje, .t.`) | `id_viaje` | `ViajeAdicionalesDialog.razor` | `viaje_adicional` por `id_viaje` |
+
+**Trampas resueltas (jun 2026):**
+- **`viaje.id_operado` (truncado de `id_operador`) → `cliente_operador`, NO `cliente`.** Verificado:
+  de 1461 viajes con operador, los **1461 matchean** en `cliente_operador.id_operado`; solo 17
+  matchean por casualidad en `cliente.id_cliente`. El "operador" es un **contacto/persona dentro
+  de un cliente** (agencia), no el operador turístico. **El Zoom del Viaje tenía este bug** (hacía
+  `id_operado → cliente.razon_soci`) — corregido a `cliente_operador.nombre` al migrar este lote.
+- **`viaje_adicional.id_adicion`** (truncado de `id_adicional`) = la columna "Código" de la grilla
+  de adicionales. `viaje_adicional` cols: `id, id_viaje, id_adicion, nombre, precio, cantidad`.
+- **`cabecera`** cols: `codigo, nombre, nombre1, nombre2, recorrido`. `viaje.gps_cod` = `cabecera.codigo`.
+  El FoxPro mostraba solo `recorrido` (editbox rojo); en Blazor se agrega código+nombres de contexto.
+- **Adjunto = archivo de red.** `viaje.file` guarda rutas tipo `O:\METROCARSYS\ADJUNTOS\x.pdf`
+  (unidad mapeada del FoxPro). El servidor de Blazor NO ve `O:` → `AdjuntoService` reemplaza el
+  prefijo (`Adjuntos:PrefijoFoxPro`) por la UNC real (`Adjuntos:BasePath` en `appsettings.json`,
+  **a completar con la UNC del recurso compartido**). El endpoint `/adjunto/{id}` exige sesión
+  (401 sin cookie), valida contención bajo `BasePath` (anti path-traversal) y sirve inline
+  (PDF/imagen se ven; el resto descarga). Solo 329 viajes tienen adjunto. Mientras `BasePath`
+  esté vacío, el ítem avisa que falta configurar la ruta.
+
+> **`viaje_log` SÍ tiene índice por `id_viaje`** (`IX_viaje_log_idviaje`) — a diferencia de
+> `viaje`. Por eso el Historial filtra por `id_viaje` directo (seek barato pese a 4,4M filas).
+> Columnas truncadas de `viaje_log`: `cronograma_new`→`cronogram2`, `interno_ori`→`interno_or`,
+> `interno_new`→`interno_ne`.
 
 ### Auto-refresh de la planilla (patrón, jun 2026)
 

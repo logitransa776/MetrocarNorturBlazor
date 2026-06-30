@@ -1,0 +1,184 @@
+@inject ReportService Reports
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Réplica de "Lista de pasajeros" (menú contextual de Tráfico, trafico_pasajero_planilla.scx).
+   SOLO LECTURA.
+     · El FoxPro era un ABM completo de la planilla CNRT (manifiesto de pasajeros con
+       DNI/nacionalidad/profesión + datos de empresa/choferes/vehículos) que se imprime en PDF.
+     · Acá: si el viaje tiene una planilla generada (viaje_pasajero) la mostramos con su
+       detalle (viaje_pasajero_detalle). Si no, avisamos "sin lista generada" — réplica del
+       cartel "Lista de pasajeros No Generada Aun" del form.
+   Nota: en la réplica SQL esta tabla casi no tiene datos (la carga del manifiesto se hace
+   esporádicamente). Se migra por completitud del menú contextual.
+   Mismos estilos que el "Historial del viaje" (hist-cab / hist-grid).
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog hist-dialog pax-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.Groups" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Lista de pasajeros</span>
+            <span class="zoom-title-bar__nro">Reserva&nbsp;#@IdViaje</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:200px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_d is null)
+        {
+            @* Réplica del cartel rojo "Lista de pasajeros No Generada Aun" del FoxPro. *@
+            <MudAlert Severity="Severity.Info" Class="my-2">
+                Este viaje no tiene una lista de pasajeros generada.
+            </MudAlert>
+        }
+        else
+        {
+            @* ── Datos del servicio / cliente / empresa transportista ── *@
+            <div class="hist-cab pax-cab">
+                <div class="hist-cab__item">
+                    <span class="hist-cab__label">Cliente</span>
+                    <span class="hist-cab__user" style="min-width:auto;">@Dato(_d.RazonSocial)</span>
+                </div>
+                <div class="hist-cab__item">
+                    <span class="hist-cab__label">CUIT</span>
+                    <span class="hist-cab__fecha">@Dato(_d.Cuit)</span>
+                </div>
+                <div class="hist-cab__item">
+                    <span class="hist-cab__label">Clase</span>
+                    <span class="hist-cab__fecha">@Dato(_d.Clase)</span>
+                </div>
+                <div class="hist-cab__item">
+                    <span class="hist-cab__label">Desde</span>
+                    <span class="hist-cab__fecha">@Dato(_d.Desde)</span>
+                </div>
+                <div class="hist-cab__item">
+                    <span class="hist-cab__label">Hasta</span>
+                    <span class="hist-cab__fecha">@Dato(_d.Hasta)</span>
+                </div>
+                <div class="hist-cab__item">
+                    <span class="hist-cab__label">Fecha</span>
+                    <span class="hist-cab__fecha">@Rango(_d.FInicio, _d.FFin) @(string.IsNullOrWhiteSpace(_d.Hora) ? "" : $"· {_d.Hora}")</span>
+                </div>
+                @if (_d.Km is > 0)
+                {
+                    <div class="hist-cab__item">
+                        <span class="hist-cab__label">Km</span>
+                        <span class="hist-cab__fecha">@_d.Km</span>
+                    </div>
+                }
+                @if (!string.IsNullOrWhiteSpace(_d.EmpresaNom))
+                {
+                    <div class="hist-cab__item">
+                        <span class="hist-cab__label">Transporte</span>
+                        <span class="hist-cab__fecha">@_d.EmpresaNom @(string.IsNullOrWhiteSpace(_d.EmpresaCuit) ? "" : $"({_d.EmpresaCuit})")</span>
+                    </div>
+                }
+                @if (!string.IsNullOrWhiteSpace(_d.Chofer1))
+                {
+                    <div class="hist-cab__item">
+                        <span class="hist-cab__label">Chofer</span>
+                        <span class="hist-cab__fecha">@_d.Chofer1 @(string.IsNullOrWhiteSpace(_d.Doc1) ? "" : $"· {_d.Doc1}")</span>
+                    </div>
+                }
+                @if (!string.IsNullOrWhiteSpace(_d.Chofer2))
+                {
+                    <div class="hist-cab__item">
+                        <span class="hist-cab__label">Chofer 2</span>
+                        <span class="hist-cab__fecha">@_d.Chofer2 @(string.IsNullOrWhiteSpace(_d.Doc2) ? "" : $"· {_d.Doc2}")</span>
+                    </div>
+                }
+            </div>
+
+            @* ── Grilla de pasajeros (viaje_pasajero_detalle) ── *@
+            @if (_d.Pasajeros.Count == 0)
+            {
+                <div class="hist-empty">La planilla está generada pero no tiene pasajeros cargados.</div>
+            }
+            else
+            {
+                <div class="pax-count">@_d.Pasajeros.Count pasajero@(_d.Pasajeros.Count == 1 ? "" : "s")</div>
+                <div class="hist-grid-wrap">
+                    <table class="hist-grid">
+                        <thead>
+                            <tr>
+                                <th class="r">#</th>
+                                <th>Apellido y Nombre</th>
+                                <th>T. Doc</th>
+                                <th>Nº Doc</th>
+                                <th>Nacionalidad</th>
+                                <th>Profesión</th>
+                                <th>Sexo</th>
+                                <th>F. Nac</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @{ var i = 0; }
+                            @foreach (var p in _d.Pasajeros)
+                            {
+                                i++;
+                                <tr>
+                                    <td class="r">@i</td>
+                                    <td>@p.ApeYNom</td>
+                                    <td>@p.Tdoc</td>
+                                    <td>@p.Ndoc</td>
+                                    <td>@p.Nacionalidad</td>
+                                    <td>@p.Profesion</td>
+                                    <td>@p.Sexo</td>
+                                    <td>@Fecha(p.FNac)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    </DialogContent>
+
+    <DialogActions>
+        @* La carga/impresión de la planilla CNRT sigue en FoxPro. *@
+        <MudText Typo="Typo.caption" Class="nov-nota">
+            La carga e impresión de la planilla CNRT se hace desde el sistema Metrocar (FoxPro).
+        </MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public int IdViaje { get; set; }
+
+    private PasajerosViajeDto? _d;
+    private bool _cargando = true;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override async Task OnInitializedAsync()
+    {
+        _d = await Reports.GetPasajerosViajeAsync(IdViaje);
+        _cargando = false;
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private string Dato(string s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+    private string Fecha(DateOnly? f) => f is null ? "" : f.Value.ToString("dd/MM/yyyy", _ar);
+    private string Rango(DateOnly? d, DateOnly? h)
+    {
+        if (d is null) return "";
+        if (h is null || h == d) return Fecha(d);
+        return $"{Fecha(d)} – {Fecha(h)}";
+    }
+}

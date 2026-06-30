@@ -1,0 +1,95 @@
+@inject ReportService Reports
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Réplica de "Novedad sobre el viaje" (menú contextual de Tráfico, trafico2.scx →
+   libro_novedad_alta → libro_novedad_abm "alta"). SOLO LECTURA.
+     · El FoxPro DABA DE ALTA una novedad en `libro_novedad` ligada al viaje (con opción
+       de mandar correo al cliente). La escritura sigue en FoxPro (estrategia strangler);
+       acá listamos las novedades ya cargadas de ese viaje (libro_novedad WHERE id_viaje=X).
+     · Cada novedad: fecha de carga + usuario, asunto y el mensaje completo.
+   Mismo patrón y estilos que el "Historial del viaje" (HistorialViajeDialog).
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog hist-dialog nov-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.NoteAlt" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Novedades del viaje</span>
+            <span class="zoom-title-bar__nro">Reserva&nbsp;#@IdViaje</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:220px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_novedades.Count == 0)
+        {
+            <div class="hist-empty">Este viaje no tiene novedades cargadas en el libro.</div>
+        }
+        else
+        {
+            <div class="nov-count">@_novedades.Count novedad@(_novedades.Count == 1 ? "" : "es") registrada@(_novedades.Count == 1 ? "" : "s")</div>
+            <div class="nov-list">
+                @foreach (var n in _novedades)
+                {
+                    <div class="nov-card @(n.Finalizo ? "nov-card--fin" : "")">
+                        <div class="nov-card__head">
+                            <span class="nov-card__asunto" title="@n.Asunto">@(string.IsNullOrWhiteSpace(n.Asunto) ? "—" : n.Asunto)</span>
+                            <span style="flex:1;"></span>
+                            @if (n.Finalizo)
+                            {
+                                <span class="nov-card__badge">FINALIZADA</span>
+                            }
+                            <span class="nov-card__fecha">@FechaHora(n.FCarga)</span>
+                        </div>
+                        <div class="nov-card__msg">@(string.IsNullOrWhiteSpace(n.Mensaje) ? "(sin mensaje)" : n.Mensaje)</div>
+                        <div class="nov-card__foot">
+                            <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                            <span>@(string.IsNullOrWhiteSpace(n.UsuarioCarga) ? "—" : n.UsuarioCarga)</span>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        @* La carga de nuevas novedades (y el envío de correo al cliente) sigue en FoxPro. *@
+        <MudText Typo="Typo.caption" Class="nov-nota">
+            Las altas de novedades se siguen cargando desde el sistema Metrocar (FoxPro).
+        </MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public int IdViaje { get; set; }
+
+    private List<NovedadViajeRow> _novedades = new();
+    private bool _cargando = true;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override async Task OnInitializedAsync()
+    {
+        _novedades = await Reports.GetNovedadesViajeAsync(IdViaje);
+        _cargando = false;
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private string FechaHora(DateTime? d) => d is null ? "" : d.Value.ToString("dd/MM/yyyy HH:mm", _ar);
+}

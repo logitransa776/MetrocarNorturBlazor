@@ -953,6 +953,14 @@ body.planilla-fixed .trafico-panel {
     border-right: 2px solid var(--nt-grid-sel) !important;
 }
 
+/* Contenedor navegable por teclado (tabindex="0"): sin el outline azul nativo del
+   navegador al enfocarlo. La fila activa (.fila-activa) ya marca la selección con su
+   borde; un outline alrededor de toda la grilla sería ruido visual. */
+.trafico-wrap--nav:focus,
+.trafico-wrap--nav:focus-visible {
+    outline: none;
+}
+
 /* Header clickeable para ordenar (panel Buses) */
 .trafico-grid thead th.sortable {
     cursor: pointer;
@@ -1656,6 +1664,214 @@ h1:focus {
     padding: 1px 9px;
 }
 
+/* ════════════════════════════════════════════════════════════
+   HISTORIAL DEL VIAJE — réplica de trafico_historial.scx
+   Reusa el shell .zoom-viaje-dialog (header azul + fondo). Aquí:
+   la cabecera de auditoría, la grilla de viaje_log y el sub-zoom
+   de motivo. Solo lectura.
+   ════════════════════════════════════════════════════════════ */
+
+/* Ancho del diálogo: la grilla tiene 9 columnas, conviene más aire que el Zoom */
+.hist-dialog { max-width: 1040px; }
+
+/* ── Cabecera de auditoría (recuadro gris del FoxPro) ── */
+.hist-cab {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 28px;
+    background: var(--z-bg-box);
+    border: 1px solid var(--z-border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    margin-bottom: 10px;
+}
+.hist-cab__item {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+.hist-cab__label {
+    font-weight: 700;
+    color: var(--z-label);
+    font-size: 0.82rem;
+}
+.hist-cab__user {
+    font-weight: 700;
+    color: var(--z-acento);   /* azul NORTUR, como el DisabledForeColor azul del FoxPro */
+    font-size: 0.9rem;
+    min-width: 70px;
+}
+.hist-cab__fecha {
+    color: var(--z-value);
+    font-size: 0.88rem;
+}
+
+/* ── Grilla de movimientos (viaje_log) ── */
+.hist-grid-wrap {
+    border: 1px solid var(--z-border);
+    border-radius: 6px;
+    overflow: auto;
+    max-height: 56vh;
+    background: var(--z-bg-box);
+}
+.hist-grid {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.86rem;
+}
+.hist-grid thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--z-header-bg);
+    color: #fff;
+    font-weight: 700;
+    text-align: left;
+    padding: 6px 9px;
+    white-space: nowrap;
+}
+.hist-grid thead th.r { text-align: right; }
+.hist-grid tbody td {
+    padding: 4px 9px;
+    border-bottom: 1px solid var(--z-sep);
+    color: var(--z-value);
+    white-space: nowrap;
+}
+.hist-grid tbody td.r { text-align: right; }
+.hist-grid tbody tr:nth-child(even) { background: rgba(0,0,0,0.018); }
+.hist-grid tbody tr:hover { background: #EAF0FA; cursor: pointer; }
+.hist-row--sel,
+.hist-grid tbody tr.hist-row--sel:hover {
+    background: #D6E2F5 !important;
+    box-shadow: inset 3px 0 0 var(--z-acento);
+}
+/* Comentario: no estirar la fila; recortar y mostrar completo en el tooltip / Zoon Motivo */
+.hist-grid td.hist-coment {
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Badge de motivo coloreado (valor agregado, no FoxPro) */
+.hist-motivo {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 0.76rem;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+.hist-empty,
+.hist-zoon__vacio {
+    color: var(--z-label);
+    font-style: italic;
+    padding: 18px 6px;
+    text-align: center;
+}
+
+/* ── Sub-diálogo "Zoon" (comentario completo, solo lectura) ── */
+.hist-zoon-dialog { max-width: 560px; }
+.hist-zoon__texto {
+    background: var(--z-bg-box);
+    border: 1px solid var(--z-border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    min-height: 220px;
+    color: var(--z-value);
+    font-size: 0.96rem;
+    line-height: 1.5;
+    white-space: pre-wrap;   /* respeta saltos de línea del comentario */
+    word-break: break-word;
+}
+
+/* ── "Novedad sobre el viaje" (NovedadViajeDialog, solo lectura) ── */
+.nov-dialog { max-width: 760px; }
+.nov-count,
+.pax-count {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--z-label);
+    margin-bottom: 8px;
+}
+.nov-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 56vh;
+    overflow: auto;
+    padding-right: 2px;
+}
+.nov-card {
+    border: 1px solid var(--z-border);
+    border-left: 3px solid var(--z-acento);   /* azul NORTUR, como el badge del Zoom */
+    border-radius: 6px;
+    background: var(--z-bg-box);
+    padding: 9px 12px;
+}
+.nov-card--fin {
+    border-left-color: #16A34A;   /* verde: novedad marcada como finalizada */
+    opacity: 0.92;
+}
+.nov-card__head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 5px;
+}
+.nov-card__asunto {
+    font-weight: 700;
+    color: var(--z-acento);
+    font-size: 0.9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 60%;
+}
+.nov-card__fecha {
+    color: var(--z-value);
+    font-size: 0.82rem;
+    white-space: nowrap;
+}
+.nov-card__badge {
+    background: #EAF7F3;
+    color: #1B7A63;
+    border-radius: 999px;
+    padding: 1px 9px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+.nov-card__msg {
+    color: var(--z-value);
+    font-size: 0.92rem;
+    line-height: 1.45;
+    white-space: pre-wrap;   /* respeta saltos de línea del mensaje */
+    word-break: break-word;
+}
+.nov-card__foot {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 7px;
+    color: var(--z-label);
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+.nov-card__foot .mud-icon-root { font-size: 1rem; }
+.nov-nota {
+    color: var(--z-label) !important;
+    font-style: italic;
+    margin-right: auto;
+    align-self: center;
+}
+
+/* ── "Lista de pasajeros" (ListaPasajerosDialog, solo lectura) ── */
+.pax-dialog { max-width: 1000px; }
+/* La cabecera de la planilla lleva más ítems que el historial → permitir que envuelva. */
+.pax-cab { gap: 6px 22px; }
+
 /* ── Grilla de la lista ── */
 .cli-grid__row {
     cursor: pointer;
@@ -1785,6 +2001,18 @@ h1:focus {
 .cli-mails {
     margin-top: 4px;
 }
+/* Celdas numéricas alineadas a la derecha dentro de las grillas de ficha (cli-mails).
+   Lo usa, por ejemplo, "Ver Adicionales" del menú de Tráfico (Cantidad/Precio/Importe). */
+.cli-mails th.r,
+.cli-mails td.r {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+/* Fila de total de la grilla de adicionales (Ver Adicionales). */
+.cli-mails tfoot tr.adic-total td {
+    border-top: 2px solid #C9D7EC;
+    background: #F2F7FF;
+}
 
 .cli-footer {
     display: flex;
@@ -1806,6 +2034,110 @@ h1:focus {
     display: flex;
     gap: 8px;
     margin-left: auto;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   ESTÁNDAR DE TABS — Pill azul NORTUR (.nortur-tabs--pill)
+   Reutilizable en cualquier ficha/dialog. Aplicado en:
+     • ClienteDetalleDialog   • ChoferDetalleDialog   • VehiculoDetalleDialog
+   Uso en el .razor:  <MudTabs Class="nortur-tabs nortur-tabs--pill">
+   ════════════════════════════════════════════════════════════════ */
+.nortur-tabs {
+    margin-top: 10px;
+}
+/* base: tipografía y tamaño de cada tab */
+.nortur-tabs .mud-tab {
+    min-height: 28px;            /* compacto: poco aire vertical */
+    height: 28px;
+    min-width: 0;
+    text-transform: none;        /* respeta el texto del tab como viene */
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    color: #5A6A88;              /* inactivo: gris azulado */
+    transition: background-color .15s ease, color .15s ease;
+}
+
+/* ── Variante pill azul NORTUR ── */
+.nortur-tabs--pill .mud-tabs-tabbar {
+    background: #F4F7FC;
+    border: 1px solid #E2E9F4;
+    border-radius: 9px;
+    padding: 3px;                /* franja gris bien fina arriba/abajo */
+    min-height: 0;
+    height: auto;
+}
+.nortur-tabs--pill .mud-tabs-tabbar-inner {
+    display: flex;
+    gap: 4px;
+    min-height: 20px;            /* barra fina, sin aire de más */
+}
+.nortur-tabs--pill .mud-tab-slider { display: none !important; }
+.nortur-tabs--pill .mud-tab {
+    flex: 1 1 auto;              /* reparten el sobrante, pero sin cortar el texto */
+    white-space: nowrap;
+    padding: 3px 14px;
+    margin: 0;
+    border-radius: 7px;
+    background: #E7ECF4;         /* inactivo: gris de base, se nota que es un tab */
+    border: 1px solid #DCE3EF;
+}
+.nortur-tabs--pill .mud-tab:hover {
+    background: #DCE6F5;         /* hover: un punto más marcado */
+    color: #003AA0;
+}
+.nortur-tabs--pill .mud-tab.mud-tab-active,
+.nortur-tabs--pill .mud-tab.mud-tab-active:hover {
+    background: #003AA0;
+    border-color: #003AA0;
+    color: #FFFFFF;
+    box-shadow: 0 1px 3px rgba(0,58,160,0.25);
+}
+.nortur-tabs--pill .mud-tab.mud-tab-active .mud-tab-content,
+.nortur-tabs--pill .mud-tab.mud-tab-active.mud-primary-text {
+    color: #FFFFFF !important;
+}
+
+/* ── Dato + etiqueta estándar de ficha (.nortur-ficha) ──
+   Dato liviano (contraste por color, no por grosor) + etiqueta naranja
+   NORTUR. Aplicado en: Cliente, Chofer, Vehículo.
+   Uso en el .razor:  <MudDialog Class="zoom-viaje-dialog nortur-ficha"> */
+.nortur-ficha .zoom-field__value {
+    font-size: 0.8rem;
+    font-weight: 500;            /* antes 600 — se veía "bloque negro" */
+    color: var(--z-value);
+    letter-spacing: 0.1px;
+}
+.nortur-ficha .zoom-field__value--acento {
+    font-weight: 700;
+    color: var(--z-acento);
+}
+.nortur-ficha .zoom-field__label {
+    color: #7A90AD;              /* gris azulado — deja al dato ser protagonista */
+    font-weight: 600;
+}
+
+/* ── Bloques como tarjeta: header gris + cuerpo blanco ──
+   (escopeado a las fichas; no toca Liquidación ni el Zoom del Viaje) */
+.nortur-ficha .zoom-box {
+    background: #FFFFFF;                       /* cuerpo blanco para máximo contraste */
+    border: 1px solid #D8E0EC;
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(16,40,80,0.05); /* leve elevación, se ve como tarjeta */
+    margin-top: 10px;
+}
+.nortur-ficha .zoom-box__label {
+    color: #3A4A66;                            /* título gris oscuro, legible */
+    background: #EDEFF3;                        /* FRANJA GRIS del header */
+    border-bottom: 1px solid #DCE2EC;
+    font-size: 0.76rem;
+    letter-spacing: 0.6px;
+    padding: 5px 12px 4px;
+}
+/* el borde-izquierdo de acento se mantiene, pero gris para acompañar la franja */
+.nortur-ficha .zoom-box--sec,
+.nortur-ficha .zoom-box--chofer {
+    border-left: 3px solid #98A6BF;
 }
 
 /* ── Vencimientos de registros del chofer ── */

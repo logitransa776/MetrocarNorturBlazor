@@ -23,18 +23,21 @@
         <div class="d-flex align-center" style="gap:6px;">
             <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft"
                            Variant="Variant.Filled" Color="Color.Primary"
-                           Title="Día anterior" OnClick="DiaAnterior" Disabled="_cargando" />
+                           Title="Día anterior" OnClick="DiaAnterior"
+                           Disabled="@(_cargando || _filtroActivo is not null)" />
             <MudDatePicker Date="_fecha" DateFormat="dddd dd/MM/yyyy"
                            Editable="true" Style="min-width:210px;"
                            MinDate="_min" MaxDate="_max"
+                           Disabled="@(_filtroActivo is not null)"
                            Culture="@_ar" PickerVariant="PickerVariant.Dialog"
                            DateChanged="OnFechaChanged" />
             <MudIconButton Icon="@Icons.Material.Filled.ChevronRight"
                            Variant="Variant.Filled" Color="Color.Primary"
-                           Title="Día siguiente" OnClick="DiaSiguiente" Disabled="_cargando" />
+                           Title="Día siguiente" OnClick="DiaSiguiente"
+                           Disabled="@(_cargando || _filtroActivo is not null)" />
             <MudButton Variant="Variant.Text" Color="Color.Primary"
                        StartIcon="@Icons.Material.Filled.Today"
-                       OnClick="IrHoy" Disabled="_cargando">Hoy</MudButton>
+                       OnClick="IrHoy" Disabled="@(_cargando || _filtroActivo is not null)">Hoy</MudButton>
         </div>
 
         <MudDivider Vertical="true" FlexItem="true" />
@@ -160,6 +163,29 @@
     </div>
 </MudPaper>
 
+@* ════════════ Banner de filtro server-side activo (Aplicar Filtros) ════════════
+   Aparece cuando hay un filtro de rango aplicado. La grilla muestra el resultado de la
+   re-consulta (posiblemente varios días); "Quitar filtro" vuelve a la vista de día único. *@
+@if (_filtroActivo is not null)
+{
+    <MudPaper Class="pa-2 mb-2 d-flex align-center flex-wrap planilla-page__filtro" Elevation="0"
+              Style="gap:10px; background:#FFF4E5; border:1px solid #F99410; border-radius:8px;">
+        <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Style="color:#F99410;" />
+        <span style="font-weight:600; color:#7A4E00;">Filtro activo:</span>
+        <span style="color:#7A4E00;">@DescripcionFiltro</span>
+        <span style="color:#9A6A00;">· @_filas.Count servicios</span>
+        <MudSpacer />
+        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
+                   StartIcon="@Icons.Material.Filled.Edit" OnClick="EditarFiltro" Class="mr-2">
+            Editar filtro
+        </MudButton>
+        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning"
+                   StartIcon="@Icons.Material.Filled.Close" OnClick="QuitarFiltro">
+            Quitar filtro
+        </MudButton>
+    </MudPaper>
+}
+
 @{
     // Filas tras aplicar Emp/Tur/Nortur + unidades + buscador. Los KPIs y la grilla usan este mismo conjunto.
     // MEMOIZADO: se recalculan solo cuando cambian datos o filtros (ver RecalcularVisibles),
@@ -181,7 +207,7 @@ else
     <div class="d-flex mb-2 planilla-page__kpis" style="gap:10px;">
         <div style="flex:1;">
             <KpiCard Label="Servicios" Value="@Fmt(visibles.Count)"
-                     Sub="@TituloFecha" Color="@NorturColors.Azul" />
+                     Sub="@(_filtroActivo is not null ? DescripcionFiltro : TituloFecha)" Color="@NorturColors.Azul" />
         </div>
         <div style="flex:1;">
             <KpiCard Label="Total pax" Value="@Fmt(visibles.Sum(f => f.Pax ?? 0))"
@@ -327,7 +353,14 @@ else
     else
     {
     <MudPaper Elevation="2" Class="trafico-panel" Style="border-radius:8px; overflow:hidden;">
-        <div class="trafico-wrap">
+        @* tabindex="0" hace focuseable el contenedor scrolleable para capturar las flechas
+           ↑/↓ SOLO cuando la grilla tiene el foco (no roba el teclado al buscador ni al
+           datepicker). @onkeydown:preventDefault frena el scroll nativo del navegador en
+           ↑/↓/Enter; el resto de teclas pasa normal. Ver OnGridKeyDown / MoverSeleccion. *@
+        <div class="trafico-wrap trafico-wrap--nav" tabindex="0"
+             @ref="_gridWrap"
+             @onkeydown="OnGridKeyDown"
+             @onkeydown:preventDefault="_preventDefaultTecla">
             <table class="trafico-grid trafico-grid--virtual">
                 @* Anchos FIJOS por columna (table-layout:fixed en app.css los respeta).
                    Calibrados al contenido típico: las largas (Recorrido/Chofer/Comentario)
@@ -416,7 +449,7 @@ else
                        Con SpacerElement="tr" los spacers son <tr> válidos dentro de la tabla y el
                        Intersection Observer de Virtualize mide bien. (Doc oficial .NET 10, sección
                        "Control the spacer element tag name".) *@
-                    <Virtualize Items="visibles" Context="f" ItemSize="22" OverscanCount="20"
+                    <Virtualize Items="visibles" Context="f" ItemSize="AltoFila" OverscanCount="20"
                                 SpacerElement="tr">
                         @{
                             var esActiva = _filaActiva == f.IdViaje;
@@ -426,9 +459,11 @@ else
                         <tr @key="f.IdViaje"
                             class="tg-row @EstadoCss(f.Estado) @(esActiva ? "fila-activa" : "") @(_filasCambiadas.Contains(f.IdViaje) ? "fila-flash" : "")"
                             style="cursor:pointer;"
-                            title="Doble click para ver el detalle del viaje"
-                            @onclick="() => _filaActiva = (_filaActiva == f.IdViaje ? 0 : f.IdViaje)"
-                            @ondblclick="() => AbrirZoom(f.IdViaje, f.Fecha)">
+                            title="Doble click: detalle del viaje · Click derecho: menú de acciones"
+                            @onclick="() => SeleccionarFilaClick(f.IdViaje)"
+                            @ondblclick="() => AbrirZoom(f.IdViaje, f.Fecha)"
+                            @oncontextmenu:preventDefault="true"
+                            @oncontextmenu="(e) => AbrirMenuContexto(e, f)">
                             <td class="r" style="color:#9AA7BC; font-size:0.72rem;">@(_indices.GetValueOrDefault(f.IdViaje))</td>
                             <td><span class="estado-chip estado-chip--@f.Estado.ToLowerInvariant().Replace(" ", "-")">@f.Estado</span></td>
                             <td>@f.Fecha.ToString("dd/MM/yyyy")</td>
@@ -472,7 +507,7 @@ else
             <span class="leyenda" style="background:#52CEFE;">CHEQUEO</span>
             <span style="margin-left:auto;">
                 @visibles.Count de @_filas.Count servicios
-                @if (_fecha is not null && EsFechaViva(DateOnly.FromDateTime(_fecha.Value)))
+                @if (_filtroActivo is null && _fecha is not null && EsFechaViva(DateOnly.FromDateTime(_fecha.Value)))
                 {
                     @if (_ultimoRefresh is not null)
                     {
@@ -480,6 +515,12 @@ else
                             · <span style="color:#16A34A;">●</span> actualizado @_ultimoRefresh.Value.ToString("HH:mm:ss") · auto 60s
                         </span>
                     }
+                }
+                else if (_filtroActivo is not null)
+                {
+                    <span title="Con un filtro de rango activo la planilla muestra un resultado fijo y no se auto-actualiza. Quitá el filtro para volver a la vista de día con auto-actualización.">
+                        · <span style="color:#F99410;">●</span> filtro activo · sin auto-actualización
+                    </span>
                 }
                 else
                 {
@@ -551,6 +592,114 @@ else
     </div>
 }
 
+@* ════════════ Menú contextual (botón derecho) — réplica del popup de Tráfico FoxPro (trafico2.scx) ════════════
+   UN solo MudMenu compartido para TODA la grilla. No se pone uno por fila: con <Virtualize> y ~400
+   filas sería un derroche y rompería el render. Se dispara por programa desde el @oncontextmenu de
+   cada fila (AbrirMenuContexto), se posiciona en el cursor (PositionAtCursor) y recuerda la fila
+   clickeada en _filaCtx; los ítems actúan sobre esa fila.
+
+   PRIMER LOTE = infraestructura + 1 demo: solo "Ver detalle del viaje" está activo (reusa el Zoom).
+   El resto se muestra DESHABILITADO para dejar a la vista la forma del menú del Metrocar. Los de
+   ESCRITURA (Novedad, Mantenimiento Viajes, Copiar Cronogramas) seguirán en FoxPro hasta que se
+   migre la escritura de Tráfico (regla estranguladora: Blazor en Tráfico es SOLO LECTURA). *@
+<MudMenu @ref="_menuCtx" PositionAtCursor="true" Dense="true">
+    <ActivatorContent>
+        @* Sin activador visible: el menú se abre por programa con el click derecho de la fila. *@
+        <span style="display:none;"></span>
+    </ActivatorContent>
+    <ChildContent>
+        <MudMenuItem Icon="@Icons.Material.Filled.ZoomIn" OnClick="VerDetalleContexto">
+            Ver detalle del viaje
+        </MudMenuItem>
+        <MudDivider />
+        @* GPS — promovidos al menú principal (antes anidados bajo "Ubicar en GPS", popup
+           "ubicarengp" de trafico2.scx). Quedan sueltos, uno debajo del otro, para que se
+           vean directamente sin abrir un submenú. Cada uno abre el sitio GPS (hoy
+           metrocar.nortur.ar) en una pestaña nueva, igual que el Shell.Open del método
+           ubicar_gps. "Recorrido en Grilla" se eliminó (el endpoint Inf_Hist.aspx del sitio
+           nuevo da 404). Se deshabilitan si la fila no tiene una unidad válida para ubicar. *@
+        <MudMenuItem Icon="@Icons.Material.Filled.MyLocation"
+                     Disabled="@(_filaCtx is null || UnidadGps(_filaCtx) is null)"
+                     OnClick="UbicarUnidadGps">Ubicar unidad</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.Map"
+                     Disabled="@(_filaCtx is null || UnidadGps(_filaCtx) is null)"
+                     OnClick="RecorridoWebGps">Recorrido en WEB</MudMenuItem>
+        <MudDivider />
+        <MudMenuItem Icon="@Icons.Material.Filled.Refresh" Disabled="true">Refresh</MudMenuItem>
+        @* "Novedad sobre el viaje" — SOLO LECTURA: el FoxPro daba de alta una novedad en
+           `libro_novedad`; acá listamos las novedades ya cargadas de ese viaje (la escritura
+           sigue en FoxPro). Diálogo NovedadViajeDialog. *@
+        <MudMenuItem Icon="@Icons.Material.Filled.NoteAlt" OnClick="VerNovedadesContexto">Novedad sobre el viaje</MudMenuItem>
+        <MudDivider />
+        <MudMenuItem Icon="@Icons.Material.Filled.FilterAlt" Disabled="true">Aplicar Filtros s/viaje ▸</MudMenuItem>
+        @* Aplicar Filtros — submenú server-side: re-consulta `viaje` por rango de fechas
+           (réplica de la rama "Aplicar Filtros" de arma_grid_viaje). Por ahora está activo
+           "Rango de Fechas" (el fundacional); el resto se va sumando con la misma mecánica. *@
+        @* StartIcon (no Icon): con Icon, un MudMenu anidado renderiza solo el ícono y oculta el Label. *@
+        <MudMenu Label="Aplicar Filtros" StartIcon="@Icons.Material.Filled.FilterList" Dense="true">
+            <MudMenuItem Icon="@Icons.Material.Filled.DateRange" OnClick="@(() => FiltrarRangoFechas())">Rango de Fechas</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Category" OnClick="@(() => FiltrarTipoReserva())">Tipo de Reserva</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.LocalShipping" OnClick="@(() => FiltrarFletero())">Fleteros</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Badge" OnClick="@(() => FiltrarConductor())">Conductores</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.DirectionsBus" OnClick="@(() => FiltrarInterno())">Nº Interno</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Flag" OnClick="@(() => FiltrarEstado())">Estados de la Reserva</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Flight" OnClick="@(() => FiltrarVuelo())">Números de Vuelos</MudMenuItem>
+            <MudDivider />
+            <MudMenuItem Disabled="true">Cliente y Grupo</MudMenuItem>
+            <MudMenuItem Disabled="true">Cliente y Varios Grupos</MudMenuItem>
+            <MudDivider />
+            <MudMenuItem Icon="@Icons.Material.Filled.Numbers" OnClick="@(() => FiltrarReserva())">Nº Reserva</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.AltRoute" OnClick="@(() => FiltrarReservaRuta())">Nº Reserva En Ruta</MudMenuItem>
+        </MudMenu>
+        <MudDivider />
+        <MudMenuItem Icon="@Icons.Material.Filled.Print" Disabled="true">Imprimir ▸</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.GridOn" Disabled="true">Exportar a Excel ▸</MudMenuItem>
+        <MudDivider />
+        <MudMenuItem Icon="@Icons.Material.Filled.EditNote" Disabled="true">Mantenimiento Viajes ▸</MudMenuItem>
+        @* "Lista de pasajeros" — SOLO LECTURA: muestra la planilla CNRT del viaje si está
+           generada (viaje_pasajero + detalle); si no, avisa que no hay lista. Diálogo
+           ListaPasajerosDialog. La carga/impresión sigue en FoxPro. *@
+        <MudMenuItem Icon="@Icons.Material.Filled.People" OnClick="VerListaPasajerosContexto">Lista de pasajeros</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.History" OnClick="VerHistorialContexto">Historia del viaje</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.ContentCopy" Disabled="true">Copiar Cronogramas</MudMenuItem>
+        @* Ver Datos Extras — submenú anidado (réplica del popup "verdatosex" de trafico2.scx).
+           Abre la ficha de solo lectura del Vehículo / Cliente / Chofer de la fila clickeada,
+           reusando los diálogos que ya existen (VehiculoDetalleDialog / ClienteDetalleDialog /
+           ChoferDetalleDialog). Cada ítem se deshabilita si la fila no tiene esa clave (ej. un
+           servicio sin unidad asignada no tiene id_vehicul). Operador / Adjunto / Recorrido /
+           Adicionales quedan fuera de este lote (mantienen la forma del menú del FoxPro).
+           StartIcon (no Icon): con Icon, un MudMenu anidado oculta el Label. *@
+        <MudMenu Label="Ver Datos Extras" StartIcon="@Icons.Material.Filled.MoreHoriz" Dense="true">
+            <MudMenuItem Icon="@Icons.Material.Filled.SupportAgent"
+                         Disabled="@(string.IsNullOrWhiteSpace(_filaCtx?.IdOperador))"
+                         OnClick="VerDatosOperador">Ver Datos Operador</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.DirectionsBus"
+                         Disabled="@(string.IsNullOrWhiteSpace(_filaCtx?.IdVehiculo))"
+                         OnClick="VerDatosVehiculo">Ver Datos Vehículo</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Badge"
+                         Disabled="@(string.IsNullOrWhiteSpace(_filaCtx?.IdChofer) || _filaCtx?.IdChofer == "NORTUR")"
+                         OnClick="VerDatosChofer">Ver Datos Chofer</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.ManageAccounts"
+                         Disabled="@(string.IsNullOrWhiteSpace(_filaCtx?.Cliente))"
+                         OnClick="VerDatosCliente">Ver Datos Cliente</MudMenuItem>
+            <MudDivider />
+            @* Ver Adjunto — abre el archivo de viaje.file (PDF/imagen) en pestaña nueva.
+               Se deshabilita si la fila no tiene adjunto. *@
+            <MudMenuItem Icon="@Icons.Material.Filled.AttachFile"
+                         Disabled="@(string.IsNullOrWhiteSpace(_filaCtx?.Adjunto))"
+                         OnClick="VerAdjunto">Ver Adjunto</MudMenuItem>
+            @* Ver Recorrido — texto del circuito de cabecera (viaje.gps_cod → cabecera.recorrido). *@
+            <MudMenuItem Icon="@Icons.Material.Filled.Route"
+                         Disabled="@(string.IsNullOrWhiteSpace(_filaCtx?.GpsCod))"
+                         OnClick="VerRecorrido">Ver Recorrido</MudMenuItem>
+            @* Ver Adicionales — grilla de viaje_adicional del viaje (siempre habilitado; el
+               diálogo avisa si no hay adicionales, igual que el form FoxPro). *@
+            <MudMenuItem Icon="@Icons.Material.Filled.AddShoppingCart"
+                         OnClick="VerAdicionales">Ver Adicionales</MudMenuItem>
+        </MudMenu>
+    </ChildContent>
+</MudMenu>
+
 </div>@* /.planilla-page *@
 
 @code {
@@ -563,7 +712,33 @@ else
     private string _filtro = "";
     private List<PlanillaTraficoRow> _filas = new();
     private bool _cargando;
-    private int _filaActiva;   // IdViaje de la fila seleccionada por click (0 = ninguna)
+    private int _filaActiva;   // IdViaje de la fila seleccionada por click/teclado (0 = ninguna)
+
+    // ── Navegación por teclado (↑/↓ mueven la selección; Enter abre el Zoom) ──
+    // Alto de fila en px. DEBE coincidir con ItemSize de <Virtualize> y con el alto real
+    // de .tg-row en app.css (22px). Lo usa el scroll programático para ubicar la fila activa.
+    private const int AltoFila = 22;
+    // Contenedor scrolleable de la grilla principal; se enfoca para recibir el teclado y se
+    // le calcula el scroll para mantener visible la fila activa.
+    private ElementReference _gridWrap;
+    // Controla @onkeydown:preventDefault de forma dinámica: solo frenamos el scroll nativo
+    // del navegador en las teclas que manejamos (↑/↓/Enter/Home/End), no en el resto.
+    private bool _preventDefaultTecla;
+    // Throttle del key-repeat: en Blazor Server cada keydown es un round-trip SignalR. Si el
+    // usuario MANTIENE apretada la flecha, ignoramos los ticks que llegan a menos de ~45ms del
+    // anterior para no saturar el canal. flecha-flecha-flecha normal pasa siempre.
+    private DateTime _ultimaTecla = DateTime.MinValue;
+    private static readonly TimeSpan ThrottleTecla = TimeSpan.FromMilliseconds(45);
+
+    // Menú contextual (botón derecho): un único MudMenu compartido para toda la grilla.
+    // _filaCtx = la fila sobre la que se hizo click derecho; los ítems del menú la usan.
+    private MudMenu _menuCtx = default!;
+    private PlanillaTraficoRow? _filaCtx;
+
+    // Filtro server-side activo (rama "Aplicar Filtros" del menú contextual). null = vista de
+    // día único. Con filtro, la grilla muestra el resultado de la re-consulta por rango y se
+    // apagan la navegación de día y el auto-refresh (la planilla queda fija hasta quitar el filtro).
+    private TraficoFiltro? _filtroActivo;
 
     // Resultado memoizado de los filtros. La grilla y los KPIs leen estos campos en el
     // render; se recalculan solo al cambiar datos o filtros (RecalcularVisibles), no en
@@ -679,6 +854,7 @@ else
             while (await _timerRefresh.WaitForNextTickAsync())
             {
                 if (_cargando || _fecha is null) continue;
+                if (_filtroActivo is not null) continue;   // con filtro de rango activo, sin polling por día
                 try
                 {
                     var dia = DateOnly.FromDateTime(_fecha.Value);
@@ -995,6 +1171,511 @@ else
             BackdropClick = true
         };
         await DialogService.ShowAsync<ZoomViajeDialog>("Zoom del Viaje", parametros, opciones);
+    }
+
+    // Click en una fila: togglea la selección (igual que antes) y, además, da foco al
+    // contenedor de la grilla para que las flechas ↑/↓ funcionen sin un click extra.
+    private async Task SeleccionarFilaClick(int idViaje)
+    {
+        _filaActiva = (_filaActiva == idViaje) ? 0 : idViaje;
+        await _gridWrap.FocusAsync();
+    }
+
+    // ── Navegación por teclado sobre la grilla principal (réplica del cursor de FoxPro) ──
+
+    // Captura las teclas cuando el contenedor de la grilla tiene el foco. Solo actuamos sobre
+    // ↑/↓ (mover selección), Enter (abrir Zoom de la fila activa) y Home/End (primera/última).
+    // El resto de teclas se ignora y sigue su curso normal. Opera 100% sobre _visibles (en
+    // memoria): no toca SQL ni red. El único costo es 1 interop de scroll por movimiento.
+    private async Task OnGridKeyDown(KeyboardEventArgs e)
+    {
+        // ¿Es una tecla que manejamos? Decide también si frenamos el scroll nativo.
+        bool manejada = e.Key is "ArrowDown" or "ArrowUp" or "Enter" or "Home" or "End";
+        _preventDefaultTecla = manejada;
+        if (!manejada) return;
+
+        // Throttle del key-repeat (Blazor Server): descartar ticks demasiado seguidos.
+        var ahora = DateTime.UtcNow;
+        if (ahora - _ultimaTecla < ThrottleTecla) return;
+        _ultimaTecla = ahora;
+
+        if (_visibles.Count == 0) return;
+
+        switch (e.Key)
+        {
+            case "ArrowDown": await MoverSeleccion(+1); break;
+            case "ArrowUp":   await MoverSeleccion(-1); break;
+            case "Home":      await IrAFila(0); break;
+            case "End":       await IrAFila(_visibles.Count - 1); break;
+            case "Enter":
+                // Enter sobre la fila activa = doble click (abre el Zoom). Igual que FoxPro.
+                if (_filaActiva != 0)
+                {
+                    var fila = _visibles.FirstOrDefault(f => f.IdViaje == _filaActiva);
+                    if (fila is not null) await AbrirZoom(fila.IdViaje, fila.Fecha);
+                }
+                break;
+        }
+    }
+
+    // Mueve la selección 'delta' filas (±1) respecto de la fila activa actual. Si no hay
+    // nada seleccionado, ↓ selecciona la primera y ↑ la última (arranque natural del cursor).
+    private async Task MoverSeleccion(int delta)
+    {
+        int destino;
+        if (_filaActiva == 0 || !_indices.TryGetValue(_filaActiva, out var pos1Based))
+        {
+            // Sin selección previa: ↓ → primera; ↑ → última.
+            destino = delta > 0 ? 0 : _visibles.Count - 1;
+        }
+        else
+        {
+            // _indices guarda posición 1-based; pasar a 0-based y aplicar el delta acotado.
+            destino = Math.Clamp((pos1Based - 1) + delta, 0, _visibles.Count - 1);
+        }
+        await IrAFila(destino);
+    }
+
+    // Selecciona la fila en la posición 0-based dada y asegura que quede visible en el viewport
+    // de <Virtualize> mediante scroll calculado (la fila destino puede no estar en el DOM).
+    private async Task IrAFila(int indice)
+    {
+        if (indice < 0 || indice >= _visibles.Count) return;
+        _filaActiva = _visibles[indice].IdViaje;
+        // El scroll programático va contra el contenedor de ESTA grilla. Se calcula por
+        // aritmética (indice * AltoFila), no por scrollIntoView, porque la fila puede no
+        // estar renderizada. Ver traficoScrollFila en descarga.js.
+        await JS.InvokeVoidAsync("traficoScrollFila", ".trafico-wrap--nav", indice, AltoFila);
+    }
+
+    // ── Menú contextual (botón derecho sobre una fila) ──
+
+    // Abre el menú compartido en la posición del cursor, sobre la fila clickeada.
+    // El @oncontextmenu:preventDefault de la fila evita el menú nativo del navegador.
+    // OpenMenuAsync(e, false): 'false' = menú persistente (no se cierra solo, no es hover).
+    private async Task AbrirMenuContexto(MouseEventArgs e, PlanillaTraficoRow f)
+    {
+        _filaCtx = f;
+        _filaActiva = f.IdViaje;   // resaltar la fila sobre la que se abre el menú
+        await _menuCtx.OpenMenuAsync(e, false);
+    }
+
+    // Ítem demo del menú: reusa el Zoom del Viaje (mismo diálogo que el doble click).
+    private async Task VerDetalleContexto()
+    {
+        if (_filaCtx is null) return;
+        await AbrirZoom(_filaCtx.IdViaje, _filaCtx.Fecha);
+    }
+
+    // "Historia del viaje" del menú contextual: abre el modal de historial (solo lectura),
+    // réplica del form FoxPro trafico_historial.scx. Se pasa la fecha para que la cabecera
+    // de auditoría haga SEEK por f_reserva (ver GetHistorialViajeAsync).
+    private async Task VerHistorialContexto()
+    {
+        if (_filaCtx is null) return;
+        var parametros = new DialogParameters<HistorialViajeDialog>
+        {
+            { x => x.IdViaje, _filaCtx.IdViaje },
+            { x => x.FReserva, _filaCtx.Fecha }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<HistorialViajeDialog>("Historial del viaje", parametros, opciones);
+    }
+
+    // "Novedad sobre el viaje" del menú contextual: abre el modal de novedades (solo lectura),
+    // réplica de libro_novedad_abm "alta" (trafico2.scx). Lista las novedades ya cargadas en
+    // `libro_novedad` para ese viaje; la carga de nuevas sigue en FoxPro (estrategia strangler).
+    private async Task VerNovedadesContexto()
+    {
+        if (_filaCtx is null) return;
+        var parametros = new DialogParameters<NovedadViajeDialog>
+        {
+            { x => x.IdViaje, _filaCtx.IdViaje }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<NovedadViajeDialog>("Novedades del viaje", parametros, opciones);
+    }
+
+    // "Lista de pasajeros" del menú contextual: abre el modal de la planilla CNRT (solo
+    // lectura), réplica de trafico_pasajero_planilla.scx. Muestra viaje_pasajero +
+    // viaje_pasajero_detalle si la planilla está generada; si no, avisa que no hay lista.
+    private async Task VerListaPasajerosContexto()
+    {
+        if (_filaCtx is null) return;
+        var parametros = new DialogParameters<ListaPasajerosDialog>
+        {
+            { x => x.IdViaje, _filaCtx.IdViaje }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<ListaPasajerosDialog>("Lista de pasajeros", parametros, opciones);
+    }
+
+    // ── Ver Datos Extras — réplica del submenú "verdatosex" de trafico2.scx ──
+    // Abren la ficha de solo lectura del Vehículo / Cliente / Chofer de la fila clickeada,
+    // reusando los diálogos que ya existen (mismo patrón y estilo que el Zoom del Viaje).
+    // Los ítems se deshabilitan en el menú si la fila no tiene la clave correspondiente.
+
+    // Opciones comunes de los diálogos de ficha (idénticas al Zoom: ancho grande, sin botón
+    // de cierre propio porque cada diálogo trae el suyo en su barra de título).
+    private static readonly DialogOptions FichaDialogOptions = new()
+    {
+        MaxWidth = MaxWidth.Large,
+        FullWidth = true,
+        CloseButton = false,
+        CloseOnEscapeKey = true,
+        BackdropClick = true
+    };
+
+    private async Task VerDatosVehiculo()
+    {
+        var id = _filaCtx?.IdVehiculo;
+        if (string.IsNullOrWhiteSpace(id)) return;
+        var parametros = new DialogParameters<VehiculoDetalleDialog> { { x => x.IdVehiculo, id } };
+        await DialogService.ShowAsync<VehiculoDetalleDialog>("Datos del Vehículo", parametros, FichaDialogOptions);
+    }
+
+    private async Task VerDatosChofer()
+    {
+        var id = _filaCtx?.IdChofer;
+        if (string.IsNullOrWhiteSpace(id) || id == "NORTUR") return;
+        var parametros = new DialogParameters<ChoferDetalleDialog> { { x => x.IdChofer, id } };
+        await DialogService.ShowAsync<ChoferDetalleDialog>("Datos del Chofer", parametros, FichaDialogOptions);
+    }
+
+    private async Task VerDatosCliente()
+    {
+        var id = _filaCtx?.Cliente;
+        if (string.IsNullOrWhiteSpace(id)) return;
+        var parametros = new DialogParameters<ClienteDetalleDialog> { { x => x.IdCliente, id } };
+        await DialogService.ShowAsync<ClienteDetalleDialog>("Datos del Cliente", parametros, FichaDialogOptions);
+    }
+
+    // Ver Datos Operador — réplica de cliente_operador_abm "consulta" (cliente_operador por
+    // id_operado = viaje.id_operado). El operador es un contacto/persona dentro de un cliente.
+    private async Task VerDatosOperador()
+    {
+        var id = _filaCtx?.IdOperador;
+        if (string.IsNullOrWhiteSpace(id)) return;
+        var parametros = new DialogParameters<OperadorDetalleDialog> { { x => x.IdOperador, id } };
+        await DialogService.ShowAsync<OperadorDetalleDialog>("Datos del Operador", parametros, FichaDialogOptions);
+    }
+
+    // Ver Recorrido — réplica de cabecera_recorrido_abm_zoom "consulta" (cabecera por
+    // codigo = viaje.gps_cod). Muestra la descripción larga del circuito.
+    private async Task VerRecorrido()
+    {
+        var cod = _filaCtx?.GpsCod;
+        if (string.IsNullOrWhiteSpace(cod)) return;
+        var parametros = new DialogParameters<RecorridoCabeceraDialog> { { x => x.GpsCod, cod } };
+        await DialogService.ShowAsync<RecorridoCabeceraDialog>("Recorrido de la Cabecera", parametros, FichaDialogOptions);
+    }
+
+    // Ver Adicionales — réplica de trafico_zoom_adicional en modo consulta (grilla de
+    // viaje_adicional WHERE id_viaje, solo lectura).
+    private async Task VerAdicionales()
+    {
+        if (_filaCtx is null) return;
+        var parametros = new DialogParameters<ViajeAdicionalesDialog> { { x => x.IdViaje, _filaCtx.IdViaje } };
+        await DialogService.ShowAsync<ViajeAdicionalesDialog>("Adicionales del Viaje", parametros, FichaDialogOptions);
+    }
+
+    // Ver Adjunto — réplica de Shell.ShellExecute(viaje.file) del FoxPro. Abre el endpoint
+    // /adjunto/{idViaje}?f=fecha en una pestaña nueva: el servidor mapea la ruta del FoxPro a
+    // la carpeta accesible y sirve el archivo (PDF/imagen inline). Se pasa f_reserva para que
+    // el lookup haga SEEK por ix_viaje_f_reserva en vez de scan. Si el navegador bloquea el
+    // pop-up, se avisa (mismo patrón que Ubicar en GPS).
+    private async Task VerAdjunto()
+    {
+        if (_filaCtx is null || string.IsNullOrWhiteSpace(_filaCtx.Adjunto)) return;
+        var url = $"/adjunto/{_filaCtx.IdViaje}?f={_filaCtx.Fecha:yyyy-MM-dd}";
+        var ok = await JS.InvokeAsync<bool>("abrirEnNuevaPestana", url);
+        if (!ok)
+            await JS.InvokeVoidAsync("alert",
+                "El navegador bloqueó la ventana del adjunto. Habilitá las ventanas emergentes para este sitio e intentá de nuevo.");
+    }
+
+    // ── Ubicar en GPS — réplica del método ubicar_gps de trafico2.scx ──
+    // El FoxPro abría el sitio GPS con Shell.Open(url); acá abrimos la URL en pestaña nueva.
+    //
+    // ⚠️ El servidor viejo del FoxPro (embedded.sytes.net:8085) YA NO EXISTE (DNS NXDOMAIN).
+    // El GPS hoy vive en metrocar.nortur.ar y cambió el formato de la URL respecto del FoxPro:
+    //   · dominio:  embedded.sytes.net:8085   →  metrocar.nortur.ar
+    //   · cod:      94 (ubicar) / 12640 (rec) →  12640 para AMBOS
+    //   · int:      2 dígitos del interno      →  el CÓDIGO DE UNIDAD COMPLETO (ej "NT0042")
+    // Verificado contra el sitio productivo (movil.aspx y Maps.aspx responden 200; el marcador
+    // del mapa se rotula con el int que se le pasa, ej "NT0042"). "Recorrido en Grilla"
+    // (Inf_Hist.aspx) da 404 en el sitio nuevo → queda deshabilitado en el menú.
+    private const string GpsBaseUrl = "http://metrocar.nortur.ar";
+    private const string GpsCod = "12640";
+
+    // Código de unidad que entiende el GPS (ej "NT0042"). Prioridad: id_interno (U/As) →
+    // cronograma (U/Cb) → cronograma2 (U/Pr), descartando vacíos y los literales no-unidad
+    // ("S/C" sin asignar, "NORTUR" servicio de prueba). Devuelve null si no hay unidad válida.
+    private static string? UnidadGps(PlanillaTraficoRow f)
+    {
+        foreach (var cand in new[] { f.UAs, f.UCb, f.UPr })
+        {
+            var u = cand?.Trim();
+            if (string.IsNullOrEmpty(u)) continue;
+            if (u is "S/C" or "NORTUR") continue;
+            return u;
+        }
+        return null;
+    }
+
+    // Ubicar unidad → movil.aspx (cTipo_consulta = "UBICAR" en el FoxPro).
+    private async Task UbicarUnidadGps()
+    {
+        if (_filaCtx is null) return;
+        var unidad = UnidadGps(_filaCtx);
+        if (unidad is null) { await AvisarSinGps(); return; }
+        var url = $"{GpsBaseUrl}/movil.aspx?cod={GpsCod}&int={Uri.EscapeDataString(unidad)}";
+        await AbrirGps(url);
+    }
+
+    // Recorrido en WEB → Maps.aspx (cTipo_consulta = "RECORRIDO"). Pasa desde/hasta como
+    // hs_inicio/hs_fin en formato YYYYMMDDHHMMSS (Ttoc(...,1) del FoxPro); hs_fin vacío → ahora.
+    private async Task RecorridoWebGps()
+    {
+        if (_filaCtx is null) return;
+        var unidad = UnidadGps(_filaCtx);
+        if (unidad is null) { await AvisarSinGps(); return; }
+        var desde = FmtGps(_filaCtx.HsInicio ?? DateTime.Now);
+        var hasta = FmtGps(_filaCtx.HsFin ?? DateTime.Now);
+        var url = $"{GpsBaseUrl}/Maps.aspx?cod={GpsCod}&int={Uri.EscapeDataString(unidad)}&desde={desde}&hasta={hasta}";
+        await AbrirGps(url);
+    }
+
+    // Formato de fecha/hora que espera el sitio GPS (igual a Ttoc(dt,1) de FoxPro): YYYYMMDDHHMMSS.
+    private static string FmtGps(DateTime dt) => dt.ToString("yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture);
+
+    // Abre la URL del GPS en una pestaña nueva; si el navegador bloquea el pop-up, avisa.
+    private async Task AbrirGps(string url)
+    {
+        var ok = await JS.InvokeAsync<bool>("abrirEnNuevaPestana", url);
+        if (!ok)
+            await JS.InvokeVoidAsync("alert",
+                "El navegador bloqueó la ventana del GPS. Habilitá las ventanas emergentes para este sitio e intentá de nuevo.");
+    }
+
+    // Réplica del MessageBox del FoxPro cuando el servicio no tiene unidad/cronograma válidos.
+    private async Task AvisarSinGps() =>
+        await JS.InvokeVoidAsync("alert",
+            "El servicio no tiene una unidad asignada con datos válidos para ubicarlo en el GPS " +
+            "(sin unidad asignada ni cronograma).");
+
+    // ── Aplicar Filtros (server-side) — réplica de la rama "Aplicar Filtros" de arma_grid_viaje ──
+
+    // Texto del filtro activo para el banner y el KPI.
+    private string DescripcionFiltro => _filtroActivo switch
+    {
+        null => "",
+        { Tipo: TraficoFiltroTipo.Fecha } f => f.Desde == f.Hasta
+            ? $"Fecha {f.Desde:dd/MM/yyyy}"
+            : $"Rango de fechas {f.Desde:dd/MM/yyyy} – {f.Hasta:dd/MM/yyyy}",
+        // Tipo de Reserva: Texto = "T"|"P"|null (null = Ambos).
+        { Tipo: TraficoFiltroTipo.TipoReserva } f =>
+            $"Tipo de reserva {(f.Texto switch { "T" => "Transportación", "P" => "Plantilla", _ => "Ambos" })} · {(f.Desde == f.Hasta ? $"{f.Desde:dd/MM/yyyy}" : $"{f.Desde:dd/MM/yyyy} – {f.Hasta:dd/MM/yyyy}")}",
+        { Tipo: TraficoFiltroTipo.Fletero } f =>
+            $"Fletero {f.Texto} · {(f.Desde == f.Hasta ? $"{f.Desde:dd/MM/yyyy}" : $"{f.Desde:dd/MM/yyyy} – {f.Hasta:dd/MM/yyyy}")}",
+        { Tipo: TraficoFiltroTipo.Choferes } f =>
+            $"Conductor {f.Texto} · {(f.Desde == f.Hasta ? $"{f.Desde:dd/MM/yyyy}" : $"{f.Desde:dd/MM/yyyy} – {f.Hasta:dd/MM/yyyy}")}",
+        { Tipo: TraficoFiltroTipo.Interno } f =>
+            $"Unidad {f.Texto} · {(f.Desde == f.Hasta ? $"{f.Desde:dd/MM/yyyy}" : $"{f.Desde:dd/MM/yyyy} – {f.Hasta:dd/MM/yyyy}")}",
+        { Tipo: TraficoFiltroTipo.Estado } f =>
+            $"Estado {f.Texto} · {(f.Desde == f.Hasta ? $"{f.Desde:dd/MM/yyyy}" : $"{f.Desde:dd/MM/yyyy} – {f.Hasta:dd/MM/yyyy}")}",
+        { Tipo: TraficoFiltroTipo.Vuelo } f =>
+            $"Vuelo {f.Texto} · {(f.Desde == f.Hasta ? $"{f.Desde:dd/MM/yyyy}" : $"{f.Desde:dd/MM/yyyy} – {f.Hasta:dd/MM/yyyy}")}",
+        // Nº Reserva / Nº Reserva En Ruta no usan rango (buscan en toda la base) → solo el número.
+        { Tipo: TraficoFiltroTipo.Reserva } f => $"Nº Reserva {f.Numero}",
+        { Tipo: TraficoFiltroTipo.ReservaRuta } f => $"Nº Reserva En Ruta {f.Numero}",
+        var f => f.Tipo.ToString()
+    };
+
+    // Rango de Fechas: abre el diálogo; si el usuario acepta, pasa a modo filtro server-side.
+    // El parámetro `actual` (≠ null en modo "editar filtro") precarga los campos del diálogo.
+    private async Task FiltrarRangoFechas(TraficoFiltro? actual = null)
+    {
+        var dia = _fecha is not null ? DateOnly.FromDateTime(_fecha.Value) : DateOnly.FromDateTime(DateTime.Today);
+        var parametros = new DialogParameters<TraficoFiltroRangoDialog> { { x => x.DiaActual, dia }, { x => x.FiltroInicial, actual } };
+        var opciones = new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<TraficoFiltroRangoDialog>("Rango de Fechas", parametros, opciones);
+        var res = await dialog.Result;
+        if (res is { Canceled: false, Data: TraficoFiltro filtro })
+            await AplicarFiltro(filtro);
+    }
+
+    // Tipo de Reserva: diálogo trafico_filtro_tipo_reserva (rango + radio Transportación/Plantilla/Ambos).
+    private async Task FiltrarTipoReserva(TraficoFiltro? actual = null)
+    {
+        var dia = _fecha is not null ? DateOnly.FromDateTime(_fecha.Value) : DateOnly.FromDateTime(DateTime.Today);
+        var parametros = new DialogParameters<TraficoFiltroTipoReservaDialog> { { x => x.DiaActual, dia }, { x => x.FiltroInicial, actual } };
+        var opciones = new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<TraficoFiltroTipoReservaDialog>("Buscar reservas por Tipo de Reserva", parametros, opciones);
+        var res = await dialog.Result;
+        if (res is { Canceled: false, Data: TraficoFiltro filtro })
+            await AplicarFiltro(filtro);
+    }
+
+    // Fleteros: diálogo "Buscar reservas por Fletero" (rango + combo de fletero).
+    private async Task FiltrarFletero(TraficoFiltro? actual = null)
+    {
+        var dia = _fecha is not null ? DateOnly.FromDateTime(_fecha.Value) : DateOnly.FromDateTime(DateTime.Today);
+        var parametros = new DialogParameters<TraficoFiltroFleteroDialog> { { x => x.DiaActual, dia }, { x => x.FiltroInicial, actual } };
+        var opciones = new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<TraficoFiltroFleteroDialog>("Buscar reservas por Fletero", parametros, opciones);
+        var res = await dialog.Result;
+        if (res is { Canceled: false, Data: TraficoFiltro filtro })
+            await AplicarFiltro(filtro);
+    }
+
+    // Conductores: diálogo trafico_filtro_chofer.scx (rango + checkbox "solo activos" + combo
+    // de conductor). Filtra viaje por id_chofer = X sobre el rango de fechas.
+    private async Task FiltrarConductor(TraficoFiltro? actual = null)
+    {
+        var dia = _fecha is not null ? DateOnly.FromDateTime(_fecha.Value) : DateOnly.FromDateTime(DateTime.Today);
+        var parametros = new DialogParameters<TraficoFiltroConductorDialog> { { x => x.DiaActual, dia }, { x => x.FiltroInicial, actual } };
+        var opciones = new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<TraficoFiltroConductorDialog>("Buscar reservas por Conductor", parametros, opciones);
+        var res = await dialog.Result;
+        if (res is { Canceled: false, Data: TraficoFiltro filtro })
+            await AplicarFiltro(filtro);
+    }
+
+    // Nº de Interno: diálogo trafico_filtro_interno.scx (rango + interno validado contra la flota).
+    // Filtra viaje por interno = N sobre el rango de fechas.
+    private async Task FiltrarInterno(TraficoFiltro? actual = null)
+    {
+        var dia = _fecha is not null ? DateOnly.FromDateTime(_fecha.Value) : DateOnly.FromDateTime(DateTime.Today);
+        var parametros = new DialogParameters<TraficoFiltroInternoDialog> { { x => x.DiaActual, dia }, { x => x.FiltroInicial, actual } };
+        var opciones = new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<TraficoFiltroInternoDialog>("Filtro por Nº de Interno", parametros, opciones);
+        var res = await dialog.Result;
+        if (res is { Canceled: false, Data: TraficoFiltro filtro })
+            await AplicarFiltro(filtro);
+    }
+
+    // Estados de la Reserva: diálogo trafico_filtro_tipo_estado.scx (rango + combo de estado).
+    // Filtra viaje por estado_via = X sobre el rango (esta rama SÍ puede traer CANCELADO).
+    private async Task FiltrarEstado(TraficoFiltro? actual = null)
+    {
+        var dia = _fecha is not null ? DateOnly.FromDateTime(_fecha.Value) : DateOnly.FromDateTime(DateTime.Today);
+        var parametros = new DialogParameters<TraficoFiltroEstadoDialog> { { x => x.DiaActual, dia }, { x => x.FiltroInicial, actual } };
+        var opciones = new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<TraficoFiltroEstadoDialog>("Buscar reservas por Tipo de Estado", parametros, opciones);
+        var res = await dialog.Result;
+        if (res is { Canceled: false, Data: TraficoFiltro filtro })
+            await AplicarFiltro(filtro);
+    }
+
+    // Números de Vuelos: diálogo trafico_filtro_vuelo.scx (rango + 3 modos Sin/Con/A confirmar).
+    // Filtra viaje por vuelo = X sobre el rango de fechas.
+    private async Task FiltrarVuelo(TraficoFiltro? actual = null)
+    {
+        var dia = _fecha is not null ? DateOnly.FromDateTime(_fecha.Value) : DateOnly.FromDateTime(DateTime.Today);
+        var parametros = new DialogParameters<TraficoFiltroVueloDialog> { { x => x.DiaActual, dia }, { x => x.FiltroInicial, actual } };
+        var opciones = new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<TraficoFiltroVueloDialog>("Buscar reservas por Nº de Vuelo", parametros, opciones);
+        var res = await dialog.Result;
+        if (res is { Canceled: false, Data: TraficoFiltro filtro })
+            await AplicarFiltro(filtro);
+    }
+
+    // Nº Reserva: diálogo trafico_nro_reserva.scx (un número, sin rango). Filtra viaje por
+    // id_viaje = N en toda la base (devuelve un solo viaje).
+    private async Task FiltrarReserva(TraficoFiltro? actual = null) => await PedirNumeroReserva(
+        TraficoFiltroTipo.Reserva, "Buscar Reserva por Número", actual);
+
+    // Nº Reserva En Ruta: mismo diálogo en modo ruta. Filtra viaje por id_viaje_i = N (el
+    // correlativo que agrupa los viajes/días de una reserva "en ruta" multi-día).
+    private async Task FiltrarReservaRuta(TraficoFiltro? actual = null) => await PedirNumeroReserva(
+        TraficoFiltroTipo.ReservaRuta, "Buscar Reserva En Ruta por Número", actual);
+
+    // Abre TraficoFiltroReservaDialog en el modo dado y aplica el filtro si el usuario acepta.
+    private async Task PedirNumeroReserva(TraficoFiltroTipo modo, string titulo, TraficoFiltro? actual = null)
+    {
+        var parametros = new DialogParameters<TraficoFiltroReservaDialog> { { x => x.Modo, modo }, { x => x.FiltroInicial, actual } };
+        var opciones = new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<TraficoFiltroReservaDialog>(titulo, parametros, opciones);
+        var res = await dialog.Result;
+        if (res is { Canceled: false, Data: TraficoFiltro filtro })
+            await AplicarFiltro(filtro);
+    }
+
+    private async Task AplicarFiltro(TraficoFiltro filtro)
+    {
+        _filtroActivo = filtro;
+        _verCancelados = false;   // el filtro server-side opera sobre la vista normal
+        await CargarFiltrado();
+    }
+
+    // Carga la grilla desde el filtro server-side (re-consulta `viaje` con WHERE por rango).
+    private async Task CargarFiltrado()
+    {
+        if (_filtroActivo is null) return;
+        _cargando = true;
+        StateHasChanged();
+
+        _filaActiva = 0;
+        _filasCambiadas.Clear();
+        _filas = await Reports.GetPlanillaTraficoFiltradaAsync(_filtroActivo);
+        _cancelados = new();      // sin vista de cancelados en modo filtro
+        _version = null;          // el auto-refresh queda en pausa mientras dure el filtro
+        _ultimoRefresh = DateTime.Now;
+
+        RecalcularVisibles();
+        _cargando = false;
+    }
+
+    // Reabre el diálogo del filtro activo con sus valores precargados, para ajustar fechas/criterio
+    // sin tener que quitar y volver a armar el filtro desde cero. Cada diálogo recibe el filtro
+    // vigente vía FiltroInicial; al aceptar, AplicarFiltro re-consulta con el filtro modificado.
+    private async Task EditarFiltro()
+    {
+        if (_filtroActivo is null) return;
+        var f = _filtroActivo;
+        var tarea = f.Tipo switch
+        {
+            TraficoFiltroTipo.Fecha => FiltrarRangoFechas(f),
+            TraficoFiltroTipo.TipoReserva => FiltrarTipoReserva(f),
+            TraficoFiltroTipo.Fletero => FiltrarFletero(f),
+            TraficoFiltroTipo.Choferes => FiltrarConductor(f),
+            TraficoFiltroTipo.Interno => FiltrarInterno(f),
+            TraficoFiltroTipo.Estado => FiltrarEstado(f),
+            TraficoFiltroTipo.Vuelo => FiltrarVuelo(f),
+            TraficoFiltroTipo.Reserva => FiltrarReserva(f),
+            TraficoFiltroTipo.ReservaRuta => FiltrarReservaRuta(f),
+            _ => Task.CompletedTask
+        };
+        await tarea;
+    }
+
+    // Quita el filtro y vuelve a la vista de día único (con auto-refresh).
+    private async Task QuitarFiltro()
+    {
+        _filtroActivo = null;
+        await Cargar();
     }
 
     private async Task DescargarExcel()
