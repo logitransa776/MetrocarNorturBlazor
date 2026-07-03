@@ -127,25 +127,7 @@ else
             <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
                     @* Título + chip de foco (cross-filter) a la derecha, dentro del panel del gráfico. *@
-                    <div class="rfs-bar-head mb-3">
-                        <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
-                            @_metrica por servicio — top 10
-                        </MudText>
-                        @if (_servicioFocus is not null)
-                        {
-                            <div class="rfs-focus">
-                                <span class="rfs-focus__lbl">Filtrado:</span>
-                                <span class="rfs-focus__val" style="@($"background:{ColorDe(_servicioFocus)};")">@_servicioFocus</span>
-                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
-                                               OnClick="LimpiarFoco" Title="Quitar filtro"
-                                               Style="color:#64748B; padding:2px;" />
-                            </div>
-                        }
-                        else
-                        {
-                            <span class="rfs-focus-hint">💡 Clic en un servicio para enfocar el tablero</span>
-                        }
-                    </div>
+                    @CabeceraFoco($"{_metrica} por servicio — top 10")
                     <ApexChart TItem="BarItem" Options="_optsBar" Height="360" @ref="_barChart"
                                OnDataPointSelection="OnBarSelection">
                         <ApexPointSeries TItem="BarItem"
@@ -159,9 +141,8 @@ else
             </MudItem>
             <MudItem xs="12" md="5" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
-                    <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:700; color:#112F5B;">
-                        Distribución — top 8 + otros
-                    </MudText>
+                    @* Misma cabecera título + chip de foco que el panel de barras (control duplicado). *@
+                    @CabeceraFoco("Distribución — top 10 + otros")
                     <ApexChart TItem="PieItem" Options="_optsPie" Height="360" @ref="_pieChart"
                                OnDataPointSelection="OnPieSelection">
                         <ApexPointSeries TItem="PieItem"
@@ -315,11 +296,13 @@ else
     private ApexChart<PieItem>? _pieChart;
 
     // Paleta categórica validada (dataviz): azul de serie #2058D0 (el corporativo #003AA0
-    // es demasiado oscuro para marcas de gráfico). El gris neutro final queda reservado para "Otros".
+    // es demasiado oscuro para marcas de gráfico). 10 hues para cubrir el top 10 de barras y
+    // donut con color propio; el gris neutro final queda reservado para "Otros". Los 10 hues
+    // pasan separación CVD (ΔE ≥ 12) — validado con scripts/validate_palette.js de la skill dataviz.
     private static readonly List<string> _palette = new()
     {
-        "#2058D0", "#F99410", "#16A34A", "#DC2626",
-        "#0EA5E9", "#7C3AED", "#B45309", "#DB2777"
+        "#2058D0", "#F99410", "#16A34A", "#DC2626", "#0EA5E9",
+        "#7C3AED", "#B45309", "#DB2777", "#0D9488", "#65A30D"
     };
     private const string _colorOtros = "#94A3B8";   // gris neutro para la categoría "Otros"
 
@@ -334,6 +317,30 @@ else
 
     private string ColorDe(string servicio) =>
         _colorPorServicio.TryGetValue(servicio, out var c) ? c : _colorOtros;
+
+    // Cabecera de un panel de gráfico: título a la izquierda + chip de foco (o hint) a la
+    // derecha. Se usa idéntica en el panel de barras y en el de donut (control duplicado en
+    // ambos tableros). El título se pasa por parámetro porque el de barras es dinámico (métrica).
+    private RenderFragment CabeceraFoco(string titulo) => __builder =>
+    {
+        <div class="rfs-bar-head mb-3">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@titulo</MudText>
+            @if (_servicioFocus is not null)
+            {
+                <div class="rfs-focus">
+                    <span class="rfs-focus__lbl">Filtrado:</span>
+                    <span class="rfs-focus__val" style="@($"background:{ColorDe(_servicioFocus)};")">@_servicioFocus</span>
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                   OnClick="LimpiarFoco" Title="Quitar filtro"
+                                   Style="color:#64748B; padding:2px;" />
+                </div>
+            }
+            else
+            {
+                <span class="rfs-focus-hint">💡 Clic en un servicio para enfocar el tablero</span>
+            }
+        </div>
+    };
 
     private ApexChartOptions<SerieDia> _optsArea = new()
     {
@@ -478,11 +485,13 @@ else
             .Select(x => new BarItem(x.Servicio, (decimal)x.Valor))
             .ToList();
 
-        // Donut: top 8 con hue fijo + el resto plegado en "Otros" (gris neutro)
-        _pieItems = ranking.Take(8)
+        // Donut: top 10 con hue fijo + el resto plegado en "Otros" (gris neutro). Top 10 (no 8)
+        // para que los mismos servicios de las barras top 10 tengan color propio también acá →
+        // coherencia total de color entre ambos gráficos.
+        _pieItems = ranking.Take(10)
             .Select(x => new PieItem(x.Servicio, (decimal)x.Valor))
             .ToList();
-        var resto = ranking.Skip(8).Sum(x => x.Valor);
+        var resto = ranking.Skip(10).Sum(x => x.Valor);
         if (resto > 0)
             _pieItems.Add(new PieItem("Otros", (decimal)resto));
 

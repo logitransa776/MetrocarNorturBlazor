@@ -266,9 +266,10 @@ servicio queda de un color en las barras y de otro en el donut. Solución: **un 
 `categoría → color` que alimenta a todos los gráficos.**
 
 ```csharp
-// Paleta categórica (8 hues validados con dataviz) + gris reservado para "Otros".
+// Paleta categórica (10 hues validados con dataviz, ΔE CVD ≥ 12) + gris para "Otros".
 private static readonly List<string> _palette = new()
-{ "#2058D0","#F99410","#16A34A","#DC2626","#0EA5E9","#7C3AED","#B45309","#DB2777" };
+{ "#2058D0","#F99410","#16A34A","#DC2626","#0EA5E9",
+  "#7C3AED","#B45309","#DB2777","#0D9488","#65A30D" };
 private const string _colorOtros = "#94A3B8";
 
 private Dictionary<string,string> _colorPorServicio = new();
@@ -286,8 +287,11 @@ _optsPie.Colors = _pieItems.Select(p => ColorDe(p.Servicio)).ToList();  // "Otro
 
 Claves:
 - **Ranking por valor decide el hue** (top 1 = azul, top 2 = naranja…): estable dentro de un
-  mismo dataset. Los que caen fuera del top 8 (que el donut pliega en "Otros") van a gris —
-  así una barra #9/#10 es gris, coherente con "Otros" del donut.
+  mismo dataset. Los que caen fuera de los 10 hues (que el donut pliega en "Otros") van a gris.
+- **Barras top 10 y donut top 10 + "Otros"** (03/07/2026): la paleta tiene 10 hues justamente
+  para que los 10 servicios del top tengan color propio en AMBOS gráficos (antes eran 8 hues +
+  donut top 8, y los #9/#10 salían grises — el usuario los quería distintos). "Otros" agrupa del
+  #11 en adelante. Regla dataviz: un 11º color NUNCA es un hue generado → se pliega en "Otros".
 - **Gráfico de barras con UNA serie** necesita `PlotOptions.Bar.Distributed = true` para que
   cada barra tome su propio color (sin `Distributed`, todas usarían `Colors[0]`). Con
   `Distributed` la leyenda repite el eje Y → `Legend = new() { Show = false }`.
@@ -356,9 +360,11 @@ es el update suave de ApexCharts, sin remontar. Sacar `_chartsKey = Guid.NewGuid
 `ActualizarGraficos()` tras `Recalcular()`. (Verificable en test: marcar el MudPaper del panel
 con un atributo y comprobar que sobrevive al foco → no remontó.)
 
-**Ubicación del chip de foco:** vive al lado del título del gráfico de barras (`.rfs-bar-head`:
-título a la izquierda, chip/hint a la derecha), NO como barra ancha sobre los KPIs. Pedido del
-usuario y queda más integrado.
+**Ubicación del chip de foco:** vive al lado del título del gráfico (`.rfs-bar-head`: título a
+la izquierda, chip/hint a la derecha), NO como barra ancha sobre los KPIs. Está **duplicado en
+los dos paneles** (barras y donut) — la cabecera se extrajo a un `RenderFragment CabeceraFoco(string titulo)`
+para no repetir el markup (el título va por parámetro porque el de barras es dinámico con la
+métrica). La ✕ de cualquiera de los dos chips limpia el foco de todo el tablero.
 
 **Trampas resueltas:**
 - **Resetear el foco al Aplicar filtros** (`_servicioFocus = null` en `Cargar()`): un nuevo
