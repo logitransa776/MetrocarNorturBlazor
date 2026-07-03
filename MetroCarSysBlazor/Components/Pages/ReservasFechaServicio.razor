@@ -168,12 +168,21 @@ else
                     Click en una celda para ver las reservas una por una
                 </MudText>
             </div>
-            <MudButton Variant="Variant.Filled" Color="MudColor.Success"
-                       StartIcon="@Icons.Material.Filled.Download"
-                       OnClick="DescargarExcel" Disabled="_cargandoDet"
-                       Style="border-radius:8px; text-transform:none;">
-                Descargar Excel
-            </MudButton>
+            <div class="d-flex align-center flex-wrap" style="gap:12px;">
+                @* Orden de las columnas de servicio — cambia al instante, sin re-query. *@
+                <MudSelect T="string" Value="_ordenColumnas" ValueChanged="CambiarOrdenColumnas"
+                           Label="Ordenar columnas" Dense="true" Margin="Margin.Dense"
+                           Variant="Variant.Outlined" Style="width:190px;">
+                    <MudSelectItem T="string" Value="@("Alfabetico")">Alfabético (A–Z)</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("PorTotal")">Por total (mayor primero)</MudSelectItem>
+                </MudSelect>
+                <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                           StartIcon="@Icons.Material.Filled.Download"
+                           OnClick="DescargarExcel" Disabled="_cargandoDet"
+                           Style="border-radius:8px; text-transform:none;">
+                    Descargar Excel
+                </MudButton>
+            </div>
         </div>
         @if (_cargandoDet)
         {
@@ -389,6 +398,9 @@ else
     private Dictionary<DateOnly, int> _pivTotFila = new();
     private Dictionary<string, int> _pivTotCol = new();
     private int _granTotal;
+    // Orden de las columnas de servicio de la tabla: "Alfabetico" (A–Z, default) o
+    // "PorTotal" (mayor total primero). Cambia en memoria, sin re-query.
+    private string _ordenColumnas = "Alfabetico";
 
     private static readonly string[] _dias = { "dom", "lun", "mar", "mié", "jue", "vie", "sáb" };
     private static string FmtFecha(DateOnly f) => $"{_dias[(int)f.DayOfWeek]} {f:dd/MM/yyyy}";
@@ -522,11 +534,30 @@ else
         // La tabla mantiene TODAS las columnas de servicio (para poder cambiar de foco), pero
         // las no enfocadas se atenúan por CSS. Los valores se calculan sobre el dataset completo.
         _pivFechas = datos.Select(d => d.Fecha).Distinct().OrderBy(f => f).ToList();
-        _pivServicios = _detalle.Select(d => d.Servicio).Distinct().OrderBy(s => s).ToList();
         _pivMap = _detalle.ToDictionary(d => (d.Fecha, d.Servicio), val);
         _pivTotFila = datos.GroupBy(d => d.Fecha).ToDictionary(g => g.Key, g => g.Sum(val));
         _pivTotCol = _detalle.GroupBy(d => d.Servicio).ToDictionary(g => g.Key, g => g.Sum(val));
         _granTotal = datos.Sum(val);
+
+        OrdenarPivServicios();   // orden de columnas según el selector (usa _pivTotCol)
+    }
+
+    // Ordena las columnas de servicio de la tabla según el modo elegido en el selector.
+    // Alfabético (A–Z) o Por total (mayor primero, desempate alfabético). Usa _pivTotCol.
+    private void OrdenarPivServicios()
+    {
+        var servicios = _detalle.Select(d => d.Servicio).Distinct();
+        _pivServicios = _ordenColumnas == "PorTotal"
+            ? servicios.OrderByDescending(s => PivTotCol(s)).ThenBy(s => s).ToList()
+            : servicios.OrderBy(s => s).ToList();
+    }
+
+    // Cambio del orden de columnas: solo reordena la tabla en memoria, sin re-query ni tocar
+    // los gráficos.
+    private void CambiarOrdenColumnas(string orden)
+    {
+        _ordenColumnas = orden;
+        OrdenarPivServicios();
     }
 
     // Actualiza los gráficos en su lugar (sin remontar → sin parpadeo). Blazor-ApexCharts
