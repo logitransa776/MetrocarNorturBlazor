@@ -13,12 +13,12 @@ Pad **Facturación** (`MENU_PRINCIPAL.MPR`, visible con letra **"F"** en `cAcces
 
 | Ítem de menú | Form que abre | Qué es |
 | --- | --- | --- |
-| Clientes → ABM | `cliente.scx` | catálogo (ver `CLIENTE_ABM.md`) |
+| Clientes → ABM | `cliente.scx` | catálogo (ver `../catalogos/CLIENTE_ABM.md`) |
 | Clientes → Clientes Tarifas | `cliente_tarifa.scx` | qué lista de precio usa un cliente por vigencia |
 | Clientes → Clientes Descuentos | `cliente_descuento.scx` | desc/incr % por período y tipo de vehículo |
 | Clientes → Clientes - Empresa Facturación | `cliente_cambia_empresa_fc.scx` | cambio masivo de `cliente.empresa_fc` |
 | Fleteros | `fletero.scx` | catálogo de prestadores externos |
-| Grupos | `cliente_grupo.scx` | ver `CLIENTE_GRUPO_ABM.md` |
+| Grupos | `cliente_grupo.scx` | ver `../catalogos/CLIENTE_GRUPO_ABM.md` |
 | Tarifario de Venta → Altas y Copias | `lista_precio_cliente.scx` | crea vigencias / copia tarifarios de venta |
 | Tarifario de Venta → Mantenimiento | `lista_precio_cliente_mantenimiento.scx` (+`_abm`) | edita precios uno a uno |
 | Tarifario de Venta → Definición | `lista_precio_modelo.scx` (+`_abm`) | cabecera de lista: nombre + moneda |
@@ -493,7 +493,7 @@ productivo manda — verificar con el usuario qué pantalla ve.
    cliente; **(estado_pag=LIQUIDADO, viaje.liquidaci2)** es el de pago a fletero. Son
    independientes entre sí.
 3. **El grabado cierra el grupo** (`cliente_grupo.f_grupo_fc = HOY`): tocar liquidación
-   implica coordinar con el módulo Reservas (candado documentado en `CLIENTE_GRUPO_ABM.md`).
+   implica coordinar con el módulo Reservas (candado documentado en `../catalogos/CLIENTE_GRUPO_ABM.md`).
 4. El **revertir** del FoxPro deja residuos (no limpia `viaje.liquidacio` ni reabre el
    grupo): si se migra, corregir esa asimetría.
 5. La cascada de precios (convenido → sin cargo → cabecera → servicios × modo_fac) y la
@@ -504,4 +504,7 @@ productivo manda — verificar con el usuario qué pantalla ve.
    UPDATE grupo + UPDATE viajes en una transacción única.
 8. Mientras rija el strangler (skill `abm-metrocar`): `liquidacion`, `liquidacion_detalle`,
    `viaje`, `cliente_grupo`, `lista_precio*` son tablas con dueño FoxPro → **solo lectura**
-   desde Blazor hasta migrar el ABM completo con su puente inverso.
+   desde Blazor. El cutover de `liquidacion`/`liquidacion_detalle`/`viaje`/`cliente_grupo`
+   es **el día D** (plan Buslink, Fase 5: el Graba se construye antes pero se activa con el
+   feature flag el día del corte; no hay puente inverso — decisión 02/07/2026).
+   `lista_precio*` queda para un anillo posterior (Fase 8).

@@ -46,6 +46,8 @@ builder.Services.AddHostedService<DbWarmupService>();
 builder.Services.AddScoped<ReportService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<ExcelExportService>();
+// Capa de escritura (INSERT/UPDATE). Estrena la escritura con el ABM de Usuarios.
+builder.Services.AddScoped<AbmService>();
 // Adjuntos de viajes (Tráfico → Ver Datos Extras → Ver Adjunto). Singleton: solo lee config.
 builder.Services.AddSingleton<AdjuntoService>();
 

@@ -8,284 +8,338 @@
 @inject IPermissionService Permisos
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject IDialogService DialogService
+@rendermode InteractiveServer
 
 <PageTitle>Reservas por banda horaria</PageTitle>
 
-<div class="page-header mb-4">
+@* ── Encabezado de página ── *@
+<div class="page-header mb-3">
     <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
         Reservas por banda horaria
     </MudText>
     <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
-        Metrocar Nortur · estado SIN ASIGNAR / ASIGNADO · origen transportación
+        Metrocar Nortur · viajes de transportación por franja horaria de inicio
     </MudText>
 </div>
 
-<MudGrid Spacing="3">
+@* ── Barra de filtros (horizontal, compacta) — mismo patrón que Reservas por fecha y servicio ── *@
+<MudPaper Elevation="1" Class="rfs-filtros mb-4">
+    <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudSize.Small" Style="color:#003AA0; flex-shrink:0;" />
 
-    @* ── Filtros ── *@
-    <MudItem xs="12" md="3">
-        <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
-            <MudText Typo="Typo.subtitle2" Class="mb-3" Style="color:#003AA0; font-weight:800; letter-spacing:0.05em; text-transform:uppercase;">Filtros</MudText>
+    @* Desde/Hasta juntos como par (gap chico), separados del resto de los filtros *@
+    <div class="rfs-fechas">
+        <MudDatePicker Label="Desde" @bind-Date="_desde"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+        <MudDatePicker Label="Hasta" @bind-Date="_hasta"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+    </div>
 
-            <MudDatePicker Label="Desde" @bind-Date="_desde"
-                           Class="mb-2" MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy" />
-            <MudDatePicker Label="Hasta" @bind-Date="_hasta"
-                           Class="mb-3" MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy" />
+    <MudSelect T="string" Label="Tipo de vehículo" MultiSelection="true" @bind-SelectedValues="_vehiculosSel"
+               SelectAll="true" SelectAllText="Todos" Dense="true"
+               Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:200px;"
+               MultiSelectionTextFunc="@(s => s.Count == _vehiculos.Count ? "Todos" : $"{s.Count} de {_vehiculos.Count}")">
+        @foreach (var v in _vehiculos)
+        {
+            <MudSelectItem T="string" Value="@v.Id">@v.Nombre</MudSelectItem>
+        }
+    </MudSelect>
 
-            <div class="d-flex align-center justify-space-between mb-1">
-                <MudText Typo="Typo.caption" Style="color:#7A90AD; font-weight:600;">Tipo de vehículo</MudText>
-                <MudButton Size="MudSize.Small" Variant="Variant.Text" Color="MudColor.Primary"
-                           OnClick="ToggleTodosVehiculos">
-                    @(_todosVehiculosSeleccionados ? "Ninguno" : "Todos")
-                </MudButton>
-            </div>
-            <MudSelect T="string" MultiSelection="true"
-                       @bind-SelectedValues="_vehiculosSel" Class="mb-4"
-                       MultiSelectionTextFunc="@(s => s.Count == _vehiculos.Count ? "Todos" : $"{s.Count} tipo(s)")">
-                @foreach (var v in _vehiculos)
+    <MudSelect T="string" Label="Estados" MultiSelection="true" @bind-SelectedValues="_estadosSel"
+               SelectAll="true" SelectAllText="Todos" Dense="true"
+               Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:190px;"
+               MultiSelectionTextFunc="@(s => s.Count == ReportService.EstadosViaje.Count ? "Todos" : $"{s.Count} de {ReportService.EstadosViaje.Count}")">
+        @foreach (var e in ReportService.EstadosViaje)
+        {
+            <MudSelectItem T="string" Value="@e">@e</MudSelectItem>
+        }
+    </MudSelect>
+
+    <div class="rfs-metrica">
+        <MudRadioGroup T="string" Value="_metrica" ValueChanged="CambiarMetrica">
+            <MudRadio T="string" Value="@("Reservas")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Viajes</MudRadio>
+            <MudRadio T="string" Value="@("Pax")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Pax</MudRadio>
+        </MudRadioGroup>
+    </div>
+
+    <span style="flex:1 1 auto;"></span>
+
+    <MudButton Variant="Variant.Filled" Color="MudColor.Primary"
+               OnClick="Cargar" Disabled="_cargando" StartIcon="@Icons.Material.Filled.Search"
+               Style="border-radius:8px; height:40px; text-transform:none; flex-shrink:0;">
+        @(_cargando ? "Cargando..." : "Aplicar filtros")
+    </MudButton>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else if (_filas.Count == 0)
+{
+    <MudAlert Severity="Severity.Warning" Style="border-radius:12px;">No hay viajes para los filtros seleccionados.</MudAlert>
+}
+else
+{
+    @* ── KPIs ── (flex: se reparten parejo). Cuatro tarjetas: dos llevan valor de texto
+       largo (banda/vehículo), por eso no forzamos una quinta que las apretaría y recortaría. *@
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="@(_metrica == "Pax" ? "Total pax" : "Total viajes")" Value="@Fmt(_totalMetrica)"
+                 Sub="@($"prom. {Fmt(_promedioDiario)} {UnidadMetrica}/día")" Color="@NorturColors.Azul" />
+        <KpiCard Label="Días con actividad" Value="@_diasConActividad.ToString()" Sub="en el período" Color="@NorturColors.Verde" />
+        <KpiCard Label="Banda más cargada" Value="@_bandaMasCargada"
+                 Sub="@($"{Fmt(_maxBanda)} {UnidadMetrica}")" Color="@NorturColors.Naranja" />
+        <KpiCard Label="Vehículo líder" Value="@_vehiculoLider"
+                 Sub="@($"{Fmt(_maxVehiculo)} {UnidadMetrica}")" Color="@NorturColors.Rojo" />
+    </div>
+
+    <div @key="_chartsKey">
+        @* ── Gráfico barras apiladas por fecha × banda ── *@
+        <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
+            <MudText Typo="Typo.subtitle2" Class="mb-2" Style="font-weight:700; color:#112F5B;">
+                @(_metrica == "Pax" ? "Pax" : "Viajes") por día y banda horaria
+            </MudText>
+            <ApexChart TItem="ChartItem" Options="_optsBar" Height="320">
+                @foreach (var banda in _bandasPresentes)
                 {
-                    <MudSelectItem T="string" Value="@v.Id">@v.Nombre</MudSelectItem>
+                    var b = banda;
+                    <ApexPointSeries TItem="ChartItem"
+                                     Items="_chartData.Where(x => x.Banda == b).ToList()"
+                                     Name="@b"
+                                     SeriesType="SeriesType.Bar"
+                                     XValue="@(x => x.Fecha)"
+                                     YValue="@(x => x.Valor)" />
                 }
-            </MudSelect>
-
-            <MudButton FullWidth="true" Variant="Variant.Filled" Color="MudColor.Primary"
-                       OnClick="Cargar" Disabled="_cargando" StartIcon="@Icons.Material.Filled.Search"
-                       Style="border-radius:8px;">
-                @(_cargando ? "Cargando..." : "Aplicar filtros")
-            </MudButton>
-
-            <MudDivider Class="my-3" />
-
-            @* Leyenda de bandas *@
-            <MudText Typo="Typo.caption" Style="color:#7A90AD; font-weight:600; text-transform:uppercase; letter-spacing:0.05em;" Class="mb-2">Bandas horarias</MudText>
-            @for (int i = 0; i < _bandas.Length; i++)
-            {
-                var idx = i;
-                <div class="d-flex align-center mb-1" style="gap:8px;">
-                    <div style="width:12px; height:12px; border-radius:3px; background:@_palette[idx]; flex-shrink:0;"></div>
-                    <MudText Typo="Typo.caption" Style="color:#4A5A6A;">@_bandas[idx]</MudText>
-                </div>
-            }
+            </ApexChart>
         </MudPaper>
-    </MudItem>
 
-    @* ── Contenido principal ── *@
-    <MudItem xs="12" md="9">
-        @if (_cargando)
-        {
-            <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
-        }
-        else if (_filas.Count == 0 && _yaConsultado)
-        {
-            <MudAlert Severity="Severity.Warning" Style="border-radius:12px;">No hay reservas para los filtros seleccionados.</MudAlert>
-        }
-        else if (_filas.Count > 0)
-        {
-            @* ── KPIs ── *@
-            <MudGrid Spacing="3" Class="mb-3">
-                <MudItem xs="6" sm="3">
-                    <KpiCard Label="Total viajes" Value="@Fmt(_totalViajes)" Sub="@PeriodoTxt" Color="@NorturColors.Azul" />
-                </MudItem>
-                <MudItem xs="6" sm="3">
-                    <KpiCard Label="Días con actividad" Value="@_diasConActividad.ToString()" Sub="en el período" Color="@NorturColors.Verde" />
-                </MudItem>
-                <MudItem xs="6" sm="3">
-                    <KpiCard Label="Banda más cargada" Value="@_bandaMasCargada" Sub="@($"{Fmt(_maxBanda)} viajes")" Color="@NorturColors.Naranja" />
-                </MudItem>
-                <MudItem xs="6" sm="3">
-                    <KpiCard Label="Vehículo líder" Value="@_vehiculoLider" Sub="@($"{Fmt(_maxVehiculo)} viajes")" Color="@NorturColors.Rojo" />
-                </MudItem>
-            </MudGrid>
-
-            @* ── Gráfico barras apiladas por fecha ── *@
-            <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
-                <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:700; color:#112F5B;">
-                    Viajes por día y banda horaria
-                </MudText>
-                <ApexChart TItem="ChartItem" Options="_optsBar">
-                    @foreach (var banda in _bandasPresentes)
-                    {
-                        var b = banda;
-                        <ApexPointSeries TItem="ChartItem"
-                                         Items="_chartData.Where(x => x.Banda == b).ToList()"
-                                         Name="@b"
-                                         SeriesType="SeriesType.Bar"
-                                         XValue="@(x => x.Fecha)"
-                                         YValue="@(x => x.Valor)" />
-                    }
-                </ApexChart>
-            </MudPaper>
-
-            @* ── Donut por banda total ── *@
-            <MudGrid Spacing="3" Class="mb-3">
-                <MudItem xs="12" md="6">
-                    <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
-                        <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:700; color:#112F5B;">
-                            Distribución por banda horaria
-                        </MudText>
-                        <ApexChart TItem="DonutItem" Options="_optsPieBanda">
-                            <ApexPointSeries TItem="DonutItem"
-                                             Items="_donutBanda"
-                                             Name="Viajes"
-                                             SeriesType="SeriesType.Donut"
-                                             XValue="@(x => x.Label)"
-                                             YValue="@(x => x.Valor)" />
-                        </ApexChart>
-                    </MudPaper>
-                </MudItem>
-                <MudItem xs="12" md="6">
-                    <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
-                        <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:700; color:#112F5B;">
-                            Distribución por tipo de vehículo
-                        </MudText>
-                        <ApexChart TItem="DonutItem" Options="_optsPieVeh">
-                            <ApexPointSeries TItem="DonutItem"
-                                             Items="_donutVehiculo"
-                                             Name="Viajes"
-                                             SeriesType="SeriesType.Donut"
-                                             XValue="@(x => x.Label)"
-                                             YValue="@(x => x.Valor)" />
-                        </ApexChart>
-                    </MudPaper>
-                </MudItem>
-            </MudGrid>
-
-            @* ── Tabla pivote fecha × banda ── *@
-            <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
-                <div class="d-flex justify-space-between align-center mb-3">
-                    <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
-                        Detalle: viajes por fecha y banda horaria
+        @* ── Donuts: por banda + por vehículo ── *@
+        <MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
+            <MudItem xs="12" md="6" Style="display:flex; flex-direction:column;">
+                <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                    <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:700; color:#112F5B;">
+                        Distribución por banda horaria
                     </MudText>
-                    <MudButton Variant="Variant.Filled" Color="MudColor.Success"
-                               StartIcon="@Icons.Material.Filled.Download"
-                               OnClick="DescargarExcel"
-                               Style="border-radius:8px; text-transform:none;">
-                        Descargar Excel
-                    </MudButton>
-                </div>
-                <div style="overflow-x:auto;">
-                    <MudSimpleTable Dense="true" Hover="true" Striped="true">
-                        <thead>
-                            <tr>
-                                <th style="white-space:nowrap;">Fecha</th>
-                                @foreach (var banda in _bandas)
-                                {
-                                    <th style="text-align:right; white-space:nowrap;">@banda</th>
-                                }
-                                <th style="text-align:right; font-weight:800; white-space:nowrap;">TOTAL</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var fecha in _pivFechas)
-                            {
-                                var total = _bandas.Sum(b => PivVal(fecha, b));
-                                <tr>
-                                    <td style="white-space:nowrap;">@fecha.ToString("dd/MM/yyyy")</td>
-                                    @foreach (var banda in _bandas)
-                                    {
-                                        var v = PivVal(fecha, banda);
-                                        <td style="text-align:right; @(v > 0 ? "font-weight:600;" : "color:#B0BEC5;")">@(v > 0 ? Fmt(v) : "—")</td>
-                                    }
-                                    <td style="text-align:right; font-weight:800;">@Fmt(total)</td>
-                                </tr>
-                            }
-                            @* Fila de totales *@
-                            <tr style="background:#E8EFF9; font-weight:800;">
-                                <td>TOTAL</td>
-                                @foreach (var banda in _bandas)
-                                {
-                                    <td style="text-align:right;">@Fmt(_pivFechas.Sum(f => PivVal(f, banda)))</td>
-                                }
-                                <td style="text-align:right;">@Fmt(_totalViajes)</td>
-                            </tr>
-                        </tbody>
-                    </MudSimpleTable>
-                </div>
-            </MudPaper>
+                    <ApexChart TItem="DonutItem" Options="_optsPieBanda" Height="320">
+                        <ApexPointSeries TItem="DonutItem"
+                                         Items="_donutBanda"
+                                         Name="@UnidadMetrica"
+                                         SeriesType="SeriesType.Donut"
+                                         XValue="@(x => x.Label)"
+                                         YValue="@(x => x.Valor)" />
+                    </ApexChart>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="6" Style="display:flex; flex-direction:column;">
+                <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                    <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:700; color:#112F5B;">
+                        Distribución por tipo de vehículo
+                    </MudText>
+                    <ApexChart TItem="DonutItem" Options="_optsPieVeh" Height="320">
+                        <ApexPointSeries TItem="DonutItem"
+                                         Items="_donutVehiculo"
+                                         Name="@UnidadMetrica"
+                                         SeriesType="SeriesType.Donut"
+                                         XValue="@(x => x.Label)"
+                                         YValue="@(x => x.Valor)" />
+                    </ApexChart>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    </div>
+
+    @* ── Tabla pivote fecha × banda ── *@
+    <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
+        <div class="d-flex justify-space-between align-center flex-wrap mb-3" style="gap:8px;">
+            <div>
+                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                    Detalle: @(_metrica == "Pax" ? "pax" : "viajes") por fecha y banda horaria
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                    Click en una celda para ver los viajes uno por uno
+                </MudText>
+            </div>
+            <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                       StartIcon="@Icons.Material.Filled.Download"
+                       OnClick="DescargarExcel" Disabled="_cargandoDet"
+                       Style="border-radius:8px; text-transform:none;">
+                Descargar Excel
+            </MudButton>
+        </div>
+        @if (_cargandoDet)
+        {
+            <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-2" Style="border-radius:4px;" />
         }
-    </MudItem>
-</MudGrid>
+        <div class="rfs-tabla-wrap">
+            <table class="rfs-tabla">
+                <thead>
+                    <tr>
+                        <th class="rfs-col-fecha">Fecha</th>
+                        @foreach (var b in _bandas)
+                        {
+                            var banda = b;
+                            <th class="rfs-th-serv rfs-click" title="Ver todos los viajes de la banda @banda en el período"
+                                @onclick="() => AbrirDetalleBanda(banda)">
+                                <span class="rbh-legend-dot" style="background:@ColorBanda(banda);"></span>@banda
+                            </th>
+                        }
+                        <th class="rfs-th-total">TOTAL</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @* Virtualize: un rango largo de fechas puede superar las ~150 filas
+                       (regla de performance del proyecto). SpacerElement="tr" porque los
+                       spacers viven dentro de un <tbody>. *@
+                    <Virtualize Items="_pivFechas" Context="f" ItemSize="30" OverscanCount="12" SpacerElement="tr">
+                        <tr>
+                            <td class="rfs-col-fecha @(EsFinde(f) ? "rfs-finde" : "")">@FmtFecha(f)</td>
+                            @foreach (var b in _bandas)
+                            {
+                                var banda = b;
+                                var v = PivVal(f, banda);
+                                if (v > 0)
+                                {
+                                    <td class="rfs-num rfs-click" title="Ver viajes de la banda @banda el @f.ToString("dd/MM")"
+                                        @onclick="() => AbrirDetalleCelda(f, banda)">@Fmt(v)</td>
+                                }
+                                else
+                                {
+                                    <td class="rfs-num rfs-cero">·</td>
+                                }
+                            }
+                            <td class="rfs-num rfs-tot rfs-click" title="Ver todos los viajes del día"
+                                @onclick="() => AbrirDetalleDia(f)">@Fmt(PivTotFila(f))</td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td class="rfs-col-fecha rfs-tot">TOTAL</td>
+                        @foreach (var b in _bandas)
+                        {
+                            var banda = b;
+                            <td class="rfs-num rfs-tot rfs-click" title="Ver todos los viajes de la banda @banda en el período"
+                                @onclick="() => AbrirDetalleBanda(banda)">@Fmt(PivTotCol(banda))</td>
+                        }
+                        <td class="rfs-num rfs-tot rfs-grantot">@Fmt(_granTotal)</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </MudPaper>
+}
 
 @code {
     private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
     private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
 
+    // ── Filtros en edición ──
     private DateTime? _desde = DateTime.Today.AddMonths(-1);
     private DateTime? _hasta = DateTime.Today;
     private IReadOnlyCollection<string> _vehiculosSel = new HashSet<string>();
-    private bool _todosVehiculosSeleccionados => _vehiculos.Count > 0 && _vehiculosSel.Count == _vehiculos.Count;
+    // Default: todos los estados MENOS cancelado (fiel al FoxPro, que hardcodea <> CANCELADO).
+    private IReadOnlyCollection<string> _estadosSel =
+        new HashSet<string>(ReportService.EstadosViaje.Where(e => e != "CANCELADO"));
+    private string _metrica = "Reservas";   // "Reservas" (viajes) | "Pax"
+    private bool _todosVehiculos => _vehiculos.Count > 0 && _vehiculosSel.Count == _vehiculos.Count;
+
+    // ── Filtros APLICADOS (snapshot al tocar "Aplicar"): el drill-down y el Excel
+    //    tienen que corresponder a lo que se está viendo, no a lo editado a medias ──
+    private DateOnly _fDesdeAp, _fHastaAp;
+    private List<string> _vehAp = new();
+    private List<string> _estAp = new();
 
     private List<VehiculoTipoDto> _vehiculos = new();
     private List<BandaHorariaRow> _filas = new();
+    private List<BandaHorariaDetalleRow>? _detalle;   // lazy: se trae al primer drill-down/Excel
     private bool _cargando;
+    private bool _cargandoDet;
     private bool _yaConsultado;
+    private Guid _chartsKey = Guid.NewGuid();
 
-    private static readonly string[] _bandas =
-    {
-        "00:00-00:01", "00:02-06:29", "06:30-08:29",
-        "08:30-14:00", "14:01-18:00", "18:01-23:59"
-    };
-
-    private static readonly List<string> _palette = new()
-    {
-        "#0EA5E9", "#7C3AED", "#16A34A", "#003AA0", "#F99410", "#DC2626"
-    };
+    // Las 6 bandas en orden fijo (desde el service).
+    private static readonly IReadOnlyList<string> _bandas = ReportService.BandasHorarias;
 
     // KPIs
-    private int _totalViajes;
+    private int _totalMetrica;
     private int _diasConActividad;
-    private string _bandaMasCargada = "";
+    private int _promedioDiario;
+    private string _bandaMasCargada = "—";
     private int _maxBanda;
-    private string _vehiculoLider = "";
+    private string _vehiculoLider = "—";
     private int _maxVehiculo;
-    private string PeriodoTxt => $"{_desde:dd/MM/yyyy} – {_hasta:dd/MM/yyyy}";
+    private string PeriodoTxt => $"{_fDesdeAp:dd/MM/yyyy} – {_fHastaAp:dd/MM/yyyy}";
+    private string UnidadMetrica => _metrica == "Pax" ? "pax" : "viajes";
 
-    // Chart types
+    // ── Gráficos ApexCharts ──
     private record ChartItem(string Fecha, string Banda, decimal Valor);
     private record DonutItem(string Label, decimal Valor);
-
     private List<ChartItem> _chartData = new();
     private List<string> _bandasPresentes = new();
     private List<DonutItem> _donutBanda = new();
     private List<DonutItem> _donutVehiculo = new();
 
-    // Pivot
-    private List<DateOnly> _pivFechas = new();
-    private Dictionary<(DateOnly, string), int> _pivMap = new();
-
-    private ApexChartOptions<ChartItem> _optsBar = new()
+    // Paleta por banda (una por franja, orden fijo). Frío → cálido siguiendo la hora del día.
+    private static readonly List<string> _paletteBanda = new()
     {
-        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Stacked = true },
+        "#0EA5E9", "#7C3AED", "#16A34A", "#2058D0", "#F99410", "#DC2626"
+    };
+    // Paleta categórica para vehículos (validada dataviz; gris neutro al final para "Otros").
+    private static readonly List<string> _paletteVeh = new()
+    {
+        "#2058D0", "#F99410", "#16A34A", "#DC2626",
+        "#0EA5E9", "#7C3AED", "#B45309", "#94A3B8"
+    };
+
+    private static string ColorBanda(string banda)
+    {
+        var i = _bandas.ToList().IndexOf(banda);
+        return i >= 0 && i < _paletteBanda.Count ? _paletteBanda[i] : "#94A3B8";
+    }
+
+    private readonly ApexChartOptions<ChartItem> _optsBar = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Stacked = true, Animations = new() { Enabled = false } },
         PlotOptions = new() { Bar = new() { BorderRadius = 2, BorderRadiusApplication = BorderRadiusApplication.End } },
-        Colors = _palette,
-        Xaxis = new() { Labels = new() { Style = new() { FontSize = "10px" }, Rotate = -45 } },
-        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px" } } } },
+        Colors = _paletteBanda,
+        Xaxis = new() { Labels = new() { Style = new() { FontSize = "10px", Colors = "#7A90AD" }, Rotate = -45, HideOverlappingLabels = true } },
+        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px", Colors = "#7A90AD" } } } },
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
         Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
         Legend = new() { Position = LegendPosition.Top, FontSize = "11px" },
         Theme = new() { Mode = Mode.Light },
     };
 
-    private ApexChartOptions<DonutItem> _optsPieBanda = new()
+    private readonly ApexChartOptions<DonutItem> _optsPieBanda = new()
     {
-        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent" },
-        Colors = _palette,
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        Colors = _paletteBanda,
         Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px" },
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
     };
 
-    private static readonly List<string> _paletteVeh = new()
+    private readonly ApexChartOptions<DonutItem> _optsPieVeh = new()
     {
-        "#003AA0", "#F99410", "#16A34A", "#DC2626", "#0EA5E9", "#7C3AED"
-    };
-
-    private ApexChartOptions<DonutItem> _optsPieVeh = new()
-    {
-        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent" },
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
         Colors = _paletteVeh,
         Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px" },
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
     };
+
+    // ── Pivote ──
+    private List<DateOnly> _pivFechas = new();
+    private Dictionary<(DateOnly, string), int> _pivMap = new();
+    private Dictionary<DateOnly, int> _pivTotFila = new();
+    private Dictionary<string, int> _pivTotCol = new();
+    private int _granTotal;
+
+    private static readonly string[] _dias = { "dom", "lun", "mar", "mié", "jue", "vie", "sáb" };
+    private static string FmtFecha(DateOnly f) => $"{_dias[(int)f.DayOfWeek]} {f:dd/MM/yyyy}";
+    private static bool EsFinde(DateOnly f) => f.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
 
     protected override async Task OnInitializedAsync()
     {
@@ -304,82 +358,137 @@
         await Cargar();
     }
 
-    private void ToggleTodosVehiculos()
-    {
-        _vehiculosSel = _todosVehiculosSeleccionados
-            ? new HashSet<string>()
-            : new HashSet<string>(_vehiculos.Select(v => v.Id));
-    }
-
     private async Task Cargar()
     {
         if (_desde is null || _hasta is null) return;
         _cargando = true;
+        StateHasChanged();
 
-        var desde = DateOnly.FromDateTime(_desde.Value);
-        var hasta = DateOnly.FromDateTime(_hasta.Value);
-        var sel = _todosVehiculosSeleccionados ? new List<string>() : _vehiculosSel.ToList();
+        // Snapshot de filtros aplicados (convención del service: lista vacía = todos)
+        _fDesdeAp = DateOnly.FromDateTime(_desde.Value);
+        _fHastaAp = DateOnly.FromDateTime(_hasta.Value);
+        _vehAp = _todosVehiculos ? new List<string>() : _vehiculosSel.ToList();
+        _estAp = _estadosSel.Count == ReportService.EstadosViaje.Count ? new List<string>() : _estadosSel.ToList();
+        _detalle = null;
 
-        _filas = await Reports.GetReservasPorBandaHorariaAsync(desde, hasta, sel);
+        _filas = await Reports.GetReservasPorBandaHorariaAsync(_fDesdeAp, _fHastaAp, _vehAp, _estAp);
         _yaConsultado = true;
         Recalcular();
 
         _cargando = false;
     }
 
+    // Cambio de métrica: recálculo en memoria, sin nueva query.
+    private void CambiarMetrica(string metrica)
+    {
+        _metrica = metrica;
+        if (_filas.Count > 0) Recalcular();
+    }
+
     private void Recalcular()
     {
-        _totalViajes = _filas.Sum(f => f.Reservas);
+        Func<BandaHorariaRow, int> val = _metrica == "Pax" ? f => f.Pax : f => f.Reservas;
+
+        _totalMetrica = _filas.Sum(val);
         _diasConActividad = _filas.Select(f => f.Fecha).Distinct().Count();
+        _promedioDiario = _diasConActividad > 0 ? (int)Math.Round((double)_totalMetrica / _diasConActividad) : 0;
 
         // Banda más cargada
         var porBanda = _filas.GroupBy(f => f.Banda)
-            .Select(g => (Banda: g.Key, Total: g.Sum(r => r.Reservas)))
+            .Select(g => (Banda: g.Key, Total: g.Sum(val)))
             .OrderByDescending(x => x.Total).ToList();
         _bandaMasCargada = porBanda.FirstOrDefault().Banda ?? "—";
         _maxBanda = porBanda.FirstOrDefault().Total;
 
         // Vehículo líder
         var porVeh = _filas.GroupBy(f => f.TipoVehiculo)
-            .Select(g => (Veh: g.Key, Total: g.Sum(r => r.Reservas)))
+            .Select(g => (Veh: g.Key, Total: g.Sum(val)))
             .OrderByDescending(x => x.Total).ToList();
         _vehiculoLider = porVeh.FirstOrDefault().Veh ?? "—";
         _maxVehiculo = porVeh.FirstOrDefault().Total;
 
-        // Pivot map
+        // Pivote
         _pivFechas = _filas.Select(f => f.Fecha).Distinct().OrderBy(d => d).ToList();
         _pivMap = _filas
             .GroupBy(f => (f.Fecha, f.Banda))
-            .ToDictionary(g => g.Key, g => g.Sum(r => r.Reservas));
+            .ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivTotFila = _filas.GroupBy(f => f.Fecha).ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivTotCol = _filas.GroupBy(f => f.Banda).ToDictionary(g => g.Key, g => g.Sum(val));
+        _granTotal = _totalMetrica;
 
-        // Chart data (barras apiladas por fecha)
-        _bandasPresentes = _bandas
-            .Where(b => _filas.Any(f => f.Banda == b))
-            .ToList();
-
+        // Gráfico de barras apiladas (solo las bandas con datos, en orden fijo)
+        _bandasPresentes = _bandas.Where(b => _filas.Any(f => f.Banda == b)).ToList();
         _chartData = _pivFechas
             .SelectMany(fecha => _bandasPresentes.Select(banda =>
                 new ChartItem(fecha.ToString("dd/MM"), banda, PivVal(fecha, banda))))
             .ToList();
 
-        // Donuts
-        _donutBanda = porBanda
-            .Select(x => new DonutItem(x.Banda, x.Total))
+        // Donuts — banda en orden fijo (colores estables), vehículo por volumen
+        _donutBanda = _bandas
+            .Where(b => porBanda.Any(x => x.Banda == b))
+            .Select(b => new DonutItem(b, porBanda.First(x => x.Banda == b).Total))
             .ToList();
+        _donutVehiculo = porVeh.Select(x => new DonutItem(x.Veh, x.Total)).ToList();
 
-        _donutVehiculo = porVeh
-            .Select(x => new DonutItem(x.Veh, x.Total))
-            .ToList();
+        _chartsKey = Guid.NewGuid();   // fuerza el remount de los ApexChart con los datos nuevos
     }
 
     private int PivVal(DateOnly f, string b) => _pivMap.TryGetValue((f, b), out var v) ? v : 0;
+    private int PivTotFila(DateOnly f) => _pivTotFila.TryGetValue(f, out var v) ? v : 0;
+    private int PivTotCol(string b) => _pivTotCol.TryGetValue(b, out var v) ? v : 0;
+
+    // ── Drill-down: los viajes uno por uno detrás del número ──
+
+    // El detalle del período se trae UNA vez por combinación de filtros (con caché en el
+    // service) recién cuando se usa: primer click en una celda o descarga de Excel.
+    private async Task<List<BandaHorariaDetalleRow>> GetDetalleAsync()
+    {
+        if (_detalle is null)
+        {
+            _cargandoDet = true;
+            StateHasChanged();
+            _detalle = await Reports.GetReservasBandaHorariaDetalleAsync(_fDesdeAp, _fHastaAp, _vehAp, _estAp);
+            _cargandoDet = false;
+        }
+        return _detalle;
+    }
+
+    private Task AbrirDetalleCelda(DateOnly f, string banda) =>
+        AbrirDetalle(d => d.Reserva.Fecha == f && d.Banda == banda, $"Banda {banda} — {FmtFecha(f)}");
+
+    private Task AbrirDetalleDia(DateOnly f) =>
+        AbrirDetalle(d => d.Reserva.Fecha == f, $"Todas las bandas — {FmtFecha(f)}");
+
+    private Task AbrirDetalleBanda(string banda) =>
+        AbrirDetalle(d => d.Banda == banda, $"Banda {banda} — {PeriodoTxt}");
+
+    private async Task AbrirDetalle(Func<BandaHorariaDetalleRow, bool> filtro, string subtitulo)
+    {
+        var todas = await GetDetalleAsync();
+        var items = todas.Where(filtro).Select(d => d.Reserva).ToList();
+        if (items.Count == 0) return;
+
+        var parametros = new DialogParameters<ReservasFsDetalleDialog>
+        {
+            { x => x.Items, items },
+            { x => x.Subtitulo, subtitulo }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.ExtraLarge,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<ReservasFsDetalleDialog>("Detalle de viajes", parametros, opciones);
+    }
 
     private async Task DescargarExcel()
     {
-        // Genera una tabla plana: Fecha, Banda, TipoVehiculo, Reservas
-        var rows = _filas.OrderBy(f => f.Fecha).ThenBy(f => f.Banda).ThenBy(f => f.TipoVehiculo).ToList();
-        var bytes = Excel.BandaHoraria(rows);
-        var nombre = $"banda_horaria_{_desde:yyyyMMdd}_{_hasta:yyyyMMdd}.xlsx";
+        var viajes = await GetDetalleAsync();
+        var bytes = Excel.BandaHoraria(_filas, _metrica, viajes);
+        var nombre = $"banda_horaria_{_fDesdeAp:yyyyMMdd}_{_fHastaAp:yyyyMMdd}.xlsx";
         using var stream = new MemoryStream(bytes);
         using var streamRef = new DotNetStreamReference(stream);
         await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);

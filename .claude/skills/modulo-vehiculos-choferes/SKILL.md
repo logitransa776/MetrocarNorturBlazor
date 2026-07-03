@@ -108,15 +108,18 @@ Cada pantalla tiene su doc detallada (tablas, columnas, validaciones, reglas no 
 - `references/VEHICULOS.md` — maestro de flota (filtros, vencimientos, dueños, permisos). **Migrado solo lectura.**
 - `references/FLETEROS.md` — transportistas contratados (catálogo compartido con Facturación).
 - `references/TIPO_VEHICULOS.md` — catálogo de categorías (el más simple, buen 1er ABM).
-- `references/ODOMETROS.md` — `vehiculo_km`, lecturas de kilómetros.
+- `references/ODOMETROS.md` — `vehiculo_km`, lecturas de kilómetros. ⚠️ **Descubierto
+  02/07/2026: la ASIGNACIÓN de Tráfico también escribe `vehiculo_km`** (primer odómetro del
+  mes → INSERT + cierra `km_fin` del mes anterior) — ver `TRAFICO2_TOOLBAR.md` §2.2. La tabla
+  cambia de dueño con el circuito `viaje` el día D (plan Buslink), NO como catálogo suelto.
 - `references/SINIESTROS.md` — accidentes (form gigante de ~70 campos).
 - `references/APERCIBIMIENTOS.md` — sanciones + motivos (tablas vacías hoy).
 - `references/CAPACITACIONES.md` — cursos por chofer + catálogo de cursos.
 - `references/AGENDA_VENCIMIENTOS.md` — informe de vtos (chofer + vehículo), no ABM.
 
-> La doc FoxPro "oficial" del proyecto vive en `docs/logica-foxpro/` (ej: `CHOFER_ABM.md`).
+> La doc FoxPro "oficial" del proyecto vive en `docs/PlanoFoxPro/` (ej: `CHOFER_ABM.md`).
 > Las referencias de esta skill resumen para decisión rápida; el detalle completo de un form
-> migrado va a `docs/logica-foxpro/<FORM>_ABM.md` cuando se construye.
+> migrado va a `docs/PlanoFoxPro/<FORM>_ABM.md` cuando se construye.
 
 ---
 
@@ -124,7 +127,7 @@ Cada pantalla tiene su doc detallada (tablas, columnas, validaciones, reglas no 
 
 | Pantalla | Página | Ficha/Dialog | Doc |
 | --- | --- | --- | --- |
-| Choferes (solo lectura) | `Components/Pages/Choferes.razor` (`/choferes`) | `ChoferDetalleDialog.razor` (5 tabs) | `docs/logica-foxpro/CHOFER_ABM.md` |
+| Choferes (solo lectura) | `Components/Pages/Choferes.razor` (`/choferes`) | `ChoferDetalleDialog.razor` (5 tabs) | `docs/PlanoFoxPro/vehiculos-choferes/CHOFER_ABM.md` |
 | Vehículos - Flota (solo lectura) | `Components/Pages/Vehiculos.razor` (`/vehiculos`) | `VehiculoDetalleDialog.razor` (6 tabs) | `references/VEHICULOS.md` |
 
 Patrón aplicado (copiar para las siguientes): lista MudTable con filtros + egresados en

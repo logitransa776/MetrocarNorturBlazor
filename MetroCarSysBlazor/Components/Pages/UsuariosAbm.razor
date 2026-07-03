@@ -1,0 +1,182 @@
+@page "/usuarios-abm"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@rendermode InteractiveServer
+
+<PageTitle>Usuarios y Permisos — NORTUR</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+        Usuarios y Permisos
+    </MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Sistema · Accesos — alta, baja y modificación de usuarios del sistema
+    </MudText>
+</div>
+
+@* ── Filtros (réplica de la toolbar FoxPro) ── *@
+<MudPaper Class="pa-3 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:16px;">
+        <MudTextField @bind-Value="_busqueda" Label="Buscar usuario"
+                      Immediate="true" DebounceInterval="200"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Style="min-width:280px; flex:1;" />
+        <MudCheckBox T="bool" @bind-Value="_verInhabilitados" Label="Ver inhabilitados" Color="Color.Primary" Size="Size.Small" />
+        <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">
+            @Filtrados.Count() de @_usuarios.Count
+        </MudChip>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">
+            Actualizar
+        </MudButton>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="Filtrados" Dense="true" Hover="true" Striped="true"
+                  FixedHeader="true" Height="calc(100vh - 300px)"
+                  Bordered="false" Class="cli-grid grid-compacta"
+                  RowClass="cli-grid__row" RowClassFunc="@RowClass"
+                  OnRowClick="@OnRowClick" T="UsuarioListaRow">
+            <HeaderContent>
+                <MudTh><MudTableSortLabel SortBy="new Func<UsuarioListaRow, object>(x => x.Id)">Código</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel InitialDirection="SortDirection.Ascending" SortBy="new Func<UsuarioListaRow, object>(x => x.Usuario)">Nombre</MudTableSortLabel></MudTh>
+                <MudTh>Nivel</MudTh>
+                <MudTh>Operador</MudTh>
+                <MudTh>Inhabilitado</MudTh>
+                <MudTh>Módulos habilitados</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Código" Style="font-weight:700; color:#003AA0;">@context.Id</MudTd>
+                <MudTd DataLabel="Nombre" Style="font-weight:600;">@context.Usuario</MudTd>
+                <MudTd DataLabel="Nivel">@context.Nivel</MudTd>
+                <MudTd DataLabel="Operador" Style="text-align:center;">
+                    @if (context.Operador)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Style="color:#16A34A;" />
+                    }
+                </MudTd>
+                <MudTd DataLabel="Inhabilitado" Style="text-align:center;">
+                    @(context.FInhabilitacion is null ? "" : context.FInhabilitacion.Value.ToString("dd/MM/yy"))
+                </MudTd>
+                <MudTd DataLabel="Módulos habilitados" Style="letter-spacing:1px; font-family:monospace; color:#5A6A88;">@context.Acceso</MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">No hay usuarios para el filtro aplicado.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        @* ── Botonera réplica FoxPro (Agregar / Eliminar / Modificar / Ver) — ESCRITURA habilitada ── *@
+        <div class="cli-toolbar usr-toolbar">
+            <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.Add"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Agregar">Agregar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Eliminar" Disabled="_sel is null">Eliminar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Modificar" Disabled="_sel is null">Modificar</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Visibility"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Ver" Disabled="_sel is null">Ver ficha</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.AdminPanelSettings" Size="Size.Small" /> Solo el supervisor · doble clic para ver la ficha
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private List<UsuarioListaRow> _usuarios = new();
+    private bool _cargando = true;
+    private string? _busqueda;
+    private bool _verInhabilitados;
+    private UsuarioListaRow? _sel;
+
+    private IEnumerable<UsuarioListaRow> Filtrados =>
+        _usuarios.Where(u =>
+            (string.IsNullOrWhiteSpace(_busqueda)
+                || u.Usuario.Contains(_busqueda, StringComparison.OrdinalIgnoreCase)
+                || u.Id.ToString().Contains(_busqueda))
+            && (_verInhabilitados || u.FInhabilitacion is null));
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('S'))   // módulo Usuarios y Password (Sistema → Accesos)
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        _usuarios = await Reports.GetUsuariosAsync();
+        // Mantener la selección si el usuario sigue existiendo tras recargar.
+        if (_sel is not null)
+            _sel = _usuarios.FirstOrDefault(u => u.Id == _sel.Id);
+        _cargando = false;
+    }
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private string RowClass(UsuarioListaRow u, int _) =>
+        (u.FInhabilitacion is not null ? "cli-grid__row--egresado " : "")
+        + (_sel is not null && _sel.Id == u.Id ? "cli-grid__row--sel" : "");
+
+    private void OnRowClick(TableRowClickEventArgs<UsuarioListaRow> args)
+    {
+        _sel = args.Item;
+        if (args.MouseEventArgs.Detail >= 2 && _sel is not null)
+            _ = AbrirDialog("ver", _sel.Id);
+    }
+
+    private Task Agregar() => AbrirDialog("alta", 0);
+    private Task Ver() => _sel is null ? Task.CompletedTask : AbrirDialog("ver", _sel.Id);
+    private Task Modificar() => _sel is null ? Task.CompletedTask : AbrirDialog("modifica", _sel.Id);
+    private Task Eliminar() => _sel is null ? Task.CompletedTask : AbrirDialog("baja", _sel.Id);
+
+    private async Task AbrirDialog(string modo, int id)
+    {
+        var parametros = new DialogParameters<UsuarioEditorDialog>
+        {
+            { x => x.Modo, modo },
+            { x => x.Id, id }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = false   // que no cierre por accidente mientras se edita
+        };
+        var dlg = await DialogService.ShowAsync<UsuarioEditorDialog>("ABM de Usuarios", parametros, opciones);
+        var res = await dlg.Result;
+        // Si el dialog grabó (Data == true), recargar la grilla en vivo.
+        if (res is not null && !res.Canceled && res.Data is bool grabo && grabo)
+            await Refrescar();
+    }
+}

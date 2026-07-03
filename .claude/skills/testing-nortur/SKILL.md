@@ -212,9 +212,20 @@ En orden, después de construir el ABM (ver `abm-metrocar` para construirlo):
 ## Estado y mantenimiento
 
 - Flujo de capturas + smoke tests: **operativo** (29/06/2026).
-- Validación de escritura de ABMs: **protocolo definido, sin ABM aún** — al testear el primer
-  ABM (`zona`), anotar acá las trampas reales encontradas. Esta skill mejora con cada ABM:
-  cada falso positivo o trampa de validación se guarda acá, no se repite en el chat.
+- Validación de escritura de ABMs: **estrenada con el ABM de Usuarios (01/07/2026)**. Trampas reales:
+  - **No se puede invocar el `AbmService` desde afuera de la app.** Se validó la lógica de escritura
+    ejecutando el **mismo SQL** que genera el service (alta con `MAX(id)+1`, INSERT con `_deleted=0`,
+    UPDATE `f_delete`) sobre `ZZTEST01` con `sqlcmd`, comprobando las dos señales y limpiando con
+    DELETE físico. Es válido y rápido cuando el service es un traductor directo a SQL.
+  - **Lógica pura (sin base) se valida aparte**: el orden del string `acceso` (`PermisosCatalogo.Construir`)
+    se probó replicándolo en PowerShell (entrada desordenada → orden fijo). No hace falta base para eso.
+  - **La app viva bloquea el `.exe`** → `dotnet build` normal falla con MSB3027 (lock). Para verificar
+    que el CÓDIGO compila sin frenar la app: `dotnet build -p:BaseOutputPath="obj/verifybuild/" -p:UseAppHost=false`
+    (compila a otro output, no toca el .exe lockeado). Para VER la UI nueva sí hay que reiniciar la app.
+  - **Capturas del ABM**: `SUPERVISOR` es el mejor usuario para fotografiar el dialog (tiene `'S'` para
+    entrar y `'X'` para ver el checkbox "Tablero de comando" habilitado). Su password (local, plano) sale
+    de `SELECT password FROM usuario WHERE usuario='SUPERVISOR'`. Correr el `.spec` efímero con
+    `NORTUR_USER="SUPERVISOR" NORTUR_PASS="..."` inline, y **borrarlo + borrar los PNG** al terminar.
 - Decisión registrada: `browser-tools-mcp` descartado (lee el navegador; en Blazor Server la
   verdad está en el server log). `browser-automation` (skill de scraping/redes) no instalada;
   se absorbieron sus 5 reglas útiles (§C dos señales, §F selectores/cierre, §G reporte honesto).

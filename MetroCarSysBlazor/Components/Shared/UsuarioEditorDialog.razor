@@ -1,0 +1,320 @@
+@inject ReportService Reports
+@inject AbmService Abm
+@inject IPermissionService Permisos
+@inject NorturAuthStateProvider AuthState
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   ABM de Usuarios — réplica del form FoxPro usuario_abm.scx. Un solo dialog con 4 modos:
+   "ver" (solo lectura), "alta", "modifica", "baja". Los 16 permisos salen del catálogo
+   PermisosCatalogo (orden fijo S R T C D V L F A E U B H X N M). Reglas del FoxPro:
+   'C' (Avisos) requiere 'T' (Tráfico); 'X' (Tablero) solo lo otorga el SUPERVISOR.
+   La escritura la hace AbmService (SqlParameter + transacción). Devuelve true si grabó.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha usr-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@_icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@_titulo</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">@_chip</span>
+            @if (!string.IsNullOrEmpty(_usuario))
+            {
+                <span class="zoom-title-bar__nro">@_usuario</span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:200px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_noExiste)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">El usuario ya no existe.</MudAlert>
+        }
+        else
+        {
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+            }
+            @if (EsBaja)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                    ¿Está totalmente seguro de <b>inhabilitar</b> al usuario «@_usuario»?
+                    Podrá rehabilitarlo luego desde «Modificar».
+                </MudAlert>
+            }
+            @if (_inhabilitado && !EsBaja)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    Usuario inhabilitado el @Fecha(_model.FDelete). Tildá «Rehabilitar» para reactivarlo.
+                </MudAlert>
+            }
+
+            @* ── Identificación ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Identificación</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Usuario</div>
+                        @if (EsAlta)
+                        {
+                            <MudTextField @bind-Value="_model.Usuario" MaxLength="15" Immediate="true"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Placeholder="NOMBRE"
+                                          Disabled="!SoloEscritura" Style="text-transform:uppercase;" />
+                        }
+                        else
+                        {
+                            <div class="zoom-field__value zoom-field__value--acento">@_usuario</div>
+                        }
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Operador mesa tráfico</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudCheckBox @bind-Value="_model.Operador" Color="Color.Primary" Size="Size.Small"
+                                         Dense="true" Label="Sí" />
+                        }
+                        else
+                        {
+                            <div class="zoom-field__value">@(_model.Operador ? "Sí" : "No")</div>
+                        }
+                    </div>
+                    @if (!EsAlta)
+                    {
+                        <div class="zoom-field zoom-field--1">
+                            <div class="zoom-field__label">Alta</div>
+                            <div class="zoom-field__value">@Fecha(_model.FCreate)</div>
+                        </div>
+                        <div class="zoom-field zoom-field--1">
+                            <div class="zoom-field__label">Últ. modif.</div>
+                            <div class="zoom-field__value">@Fecha(_model.FModify)</div>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @* ── Contraseña (alta / modifica) ── *@
+            @if (SoloEscritura)
+            {
+                <div class="zoom-box zoom-box--sec">
+                    <span class="zoom-box__label">Contraseña @(EsModifica ? "(dejar en blanco = no cambiar)" : "")</span>
+                    <div class="zoom-row pa-2">
+                        <div class="zoom-field zoom-field--2">
+                            <div class="zoom-field__label">Password</div>
+                            <MudTextField @bind-Value="_password" InputType="InputType.Password"
+                                          MaxLength="15" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </div>
+                        <div class="zoom-field zoom-field--2">
+                            <div class="zoom-field__label">Repita</div>
+                            <MudTextField @bind-Value="_passwordRepite" InputType="InputType.Password"
+                                          MaxLength="15" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </div>
+                        @if (EsModifica && _inhabilitado)
+                        {
+                            <div class="zoom-field zoom-field--1">
+                                <div class="zoom-field__label">&nbsp;</div>
+                                <MudCheckBox @bind-Value="_rehabilitar" Color="Color.Success" Size="Size.Small"
+                                             Dense="true" Label="Rehabilitar" />
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            @* ── Operaciones permitidas (los 16 permisos del string acceso) ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Operaciones permitidas</span>
+                <div class="usr-perms pa-2">
+                    @foreach (var p in PermisosCatalogo.Todos)
+                    {
+                        var deshab = !SoloEscritura || DeshabilitarPermiso(p);
+                        <div class="usr-perm @(_perms.Contains(p.Letra) ? "usr-perm--on" : "")" title="@p.Descripcion">
+                            <MudCheckBox T="bool"
+                                         Value="_perms.Contains(p.Letra)"
+                                         ValueChanged="@(v => TogglePermiso(p.Letra, v))"
+                                         Color="Color.Primary" Size="Size.Small" Dense="true"
+                                         Disabled="deshab" />
+                            <span class="usr-perm__label">@p.Etiqueta</span>
+                            <span class="usr-perm__letra">@p.Letra</span>
+                        </div>
+                    }
+                </div>
+                @if (SoloEscritura)
+                {
+                    <div class="usr-perms__hint px-2 pb-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
+                        <span>«Avisos de chequeos» requiere «Trafico». «Tablero de comando» solo lo otorga el SUPERVISOR.</span>
+                    </div>
+                }
+            </div>
+
+            @* ── Botonera ── *@
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@(SoloEscritura ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                    @(SoloEscritura ? "Acceso resultante: " + PermisosCatalogo.Construir(_perms) : "Vista de solo lectura")
+                </div>
+                <div class="cli-footer__btns">
+                    @if (EsAlta)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="_grabando">
+                            @(_grabando ? "Grabando…" : "Agregar")
+                        </MudButton>
+                    }
+                    else if (EsModifica)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="_grabando">
+                            @(_grabando ? "Grabando…" : "Modificar")
+                        </MudButton>
+                    }
+                    else if (EsBaja)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Delete" OnClick="Grabar" Disabled="_grabando">
+                            @(_grabando ? "Procesando…" : "Inhabilitar")
+                        </MudButton>
+                    }
+                    <MudButton Variant="@(SoloLectura ? Variant.Filled : Variant.Text)"
+                               Color="@(SoloLectura ? Color.Primary : Color.Default)" Size="Size.Small"
+                               OnClick="Cerrar">@(SoloLectura ? "Cerrar" : "Cancelar")</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Modo: "ver" | "alta" | "modifica" | "baja" (como el parámetro del usuario_abm.scx).</summary>
+    [Parameter] public string Modo { get; set; } = "ver";
+    /// <summary>Id del usuario (para ver/modifica/baja). En alta se ignora.</summary>
+    [Parameter] public int Id { get; set; }
+
+    private UsuarioDetalleDto _model = new();
+    private string _usuario = "";
+    private readonly HashSet<char> _perms = new();
+    private string _password = "", _passwordRepite = "";
+    private bool _rehabilitar;
+    private bool _cargando = true, _grabando, _noExiste, _inhabilitado;
+    private string? _error;
+    private bool _editorEsSupervisor;
+    private string _usuarioEditor = "";
+
+    private bool EsAlta => Modo == "alta";
+    private bool EsModifica => Modo == "modifica";
+    private bool EsBaja => Modo == "baja";
+    private bool SoloLectura => Modo == "ver";
+    private bool SoloEscritura => EsAlta || EsModifica;   // modos con inputs editables
+
+    private string _titulo => EsAlta ? "Alta de Usuario"
+        : EsModifica ? "Modificar Usuario"
+        : EsBaja ? "Inhabilitar Usuario"
+        : "Datos del Usuario";
+    private string _chip => EsAlta ? "Nuevo" : EsModifica ? "Edición" : EsBaja ? "Baja lógica" : "Solo lectura";
+    private string _icono => EsAlta ? Icons.Material.Filled.PersonAdd
+        : EsBaja ? Icons.Material.Filled.PersonRemove
+        : Icons.Material.Filled.ManageAccounts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _usuarioEditor = AuthState.UsuarioActual ?? "";
+        _editorEsSupervisor = string.Equals(_usuarioEditor, "SUPERVISOR", StringComparison.OrdinalIgnoreCase);
+
+        if (EsAlta)
+        {
+            _model = new UsuarioDetalleDto();
+            _cargando = false;
+            return;
+        }
+
+        var d = await Reports.GetUsuarioDetalleAsync(Id);
+        if (d is null) { _noExiste = true; _cargando = false; return; }
+
+        _model = d;
+        _usuario = d.Usuario;
+        _inhabilitado = d.FDelete is not null;
+        foreach (var c in (d.Acceso ?? "").ToUpperInvariant().Where(char.IsLetter))
+            _perms.Add(c);
+        _cargando = false;
+    }
+
+    // 'C' (Avisos) solo si hay 'T'; 'X' (Tablero) solo si el editor es SUPERVISOR.
+    private bool DeshabilitarPermiso(PermisosCatalogo.Permiso p)
+    {
+        if (p.DependeDeTrafico && !_perms.Contains('T')) return true;
+        if (p.SoloSupervisor && !_editorEsSupervisor) return true;
+        return false;
+    }
+
+    private void TogglePermiso(char letra, bool on)
+    {
+        if (on) _perms.Add(letra);
+        else
+        {
+            _perms.Remove(letra);
+            // Si se saca Tráfico, cae también Avisos de chequeos (regla del FoxPro).
+            if (letra == 'T') _perms.Remove('C');
+        }
+    }
+
+    private async Task Grabar()
+    {
+        _error = null;
+        _grabando = true;
+
+        var acceso = PermisosCatalogo.Construir(_perms);
+
+        if (EsBaja)
+        {
+            var r = await Abm.BajaUsuarioAsync(Id, _usuarioEditor);
+            Finalizar(r);
+            return;
+        }
+
+        // Validación de contraseña (alta / modifica).
+        if (EsAlta && string.IsNullOrWhiteSpace(_password))
+        {
+            _error = "Cargá una contraseña para el nuevo usuario."; _grabando = false; return;
+        }
+        if (!string.Equals(_password, _passwordRepite))
+        {
+            _error = "No concuerdan los password."; _grabando = false; return;
+        }
+
+        if (EsAlta)
+        {
+            var r = await Abm.AltaUsuarioAsync(_model.Usuario, _password, acceso, _model.Operador);
+            Finalizar(r);
+        }
+        else // modifica
+        {
+            // Password en blanco = no cambiar → se manda la actual.
+            var pass = string.IsNullOrEmpty(_password) ? _model.Password : _password;
+            var r = await Abm.ModificaUsuarioAsync(Id, pass, acceso, _model.Operador, _rehabilitar, _usuarioEditor);
+            Finalizar(r);
+        }
+    }
+
+    private void Finalizar(AbmService.AbmResult r)
+    {
+        _grabando = false;
+        if (r.Ok) MudDialog.Close(DialogResult.Ok(true));
+        else { _error = r.Error; StateHasChanged(); }
+    }
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+
+    private string Fecha(DateOnly? f) => f is null ? "—" : f.Value.ToString("dd/MM/yyyy");
+}

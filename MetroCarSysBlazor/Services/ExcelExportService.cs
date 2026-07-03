@@ -14,7 +14,8 @@ public class ExcelExportService
     /// </summary>
     public byte[] ReservasFechaServicio(
         IReadOnlyList<ReservaFechaServicioRow> detalle,
-        string metrica /* "Reservas" | "Pax" */)
+        string metrica /* "Reservas" | "Pax" */,
+        IReadOnlyList<ReservaFsDetalleRow>? reservas = null)
     {
         using var wb = new XLWorkbook();
 
@@ -98,6 +99,41 @@ public class ExcelExportService
         }
         wsRk.Row(1).Style.Font.Bold = true;
         wsRk.Columns().AdjustToContents();
+
+        // --- Hoja 4: Reservas una por una (informe detallado) -----------------
+        if (reservas is { Count: > 0 })
+        {
+            var wsRes = wb.Worksheets.Add("Reservas");
+            var cab = new[]
+            {
+                "Nº Reserva", "Fecha", "Hora", "Servicio", "Cliente",
+                "Recorrido", "Pax", "Estado", "Interno", "Chofer", "Grupo", "Origen"
+            };
+            for (var c = 0; c < cab.Length; c++)
+                wsRes.Cell(1, c + 1).Value = cab[c];
+
+            var rRes = 2;
+            foreach (var v in reservas)
+            {
+                wsRes.Cell(rRes, 1).Value = v.IdViaje;
+                wsRes.Cell(rRes, 2).Value = v.Fecha.ToDateTime(TimeOnly.MinValue);
+                wsRes.Cell(rRes, 2).Style.DateFormat.Format = "dd/mm/yyyy";
+                wsRes.Cell(rRes, 3).Value = v.Hora;
+                wsRes.Cell(rRes, 4).Value = v.Servicio;
+                wsRes.Cell(rRes, 5).Value = v.Cliente;
+                wsRes.Cell(rRes, 6).Value = v.Recorrido;
+                wsRes.Cell(rRes, 7).Value = v.Pax;
+                wsRes.Cell(rRes, 8).Value = v.Estado;
+                if (v.Interno.HasValue) wsRes.Cell(rRes, 9).Value = v.Interno.Value;
+                wsRes.Cell(rRes, 10).Value = v.Chofer;
+                wsRes.Cell(rRes, 11).Value = v.Grupo;
+                wsRes.Cell(rRes, 12).Value = v.Origen == "P" ? "Plantilla" : "Transportación";
+                rRes++;
+            }
+            wsRes.Row(1).Style.Font.Bold = true;
+            wsRes.SheetView.FreezeRows(1);
+            wsRes.Columns().AdjustToContents(1, Math.Min(reservas.Count + 1, 500));
+        }
 
         using var ms = new MemoryStream();
         wb.SaveAs(ms);
@@ -226,19 +262,30 @@ public class ExcelExportService
     }
 
     /// <summary>
-    /// Exporta el informe de Reservas por Banda Horaria.
-    /// Hoja 1: detalle plano. Hoja 2: pivote fecha × banda. Hoja 3: resumen por vehículo.
+    /// Exporta el informe de Reservas por Banda Horaria (mismo estilo multi-hoja que
+    /// ReservasFechaServicio). Hoja 1: detalle agregado. Hoja 2: pivote fecha × banda con la
+    /// métrica elegida + fila TOTAL. Hoja 3: resumen por vehículo × banda. Hoja 4 (opcional):
+    /// los viajes uno por uno (drill-down), cuando se pasa <paramref name="viajes"/>.
     /// </summary>
-    public byte[] BandaHoraria(IReadOnlyList<BandaHorariaRow> filas)
+    public byte[] BandaHoraria(
+        IReadOnlyList<BandaHorariaRow> filas,
+        string metrica /* "Reservas" | "Pax" */,
+        IReadOnlyList<BandaHorariaDetalleRow>? viajes = null)
     {
+        // La métrica elige qué número va en pivote/resumen (viajes o pax).
+        Func<BandaHorariaRow, int> val = metrica == "Pax" ? f => f.Pax : f => f.Reservas;
+        var etiquetaMetrica = metrica == "Pax" ? "Pax" : "Viajes";
+        var bandas = ReportService.BandasHorarias;
+
         using var wb = new XLWorkbook();
 
-        // Hoja 1: Detalle
+        // --- Hoja 1: Detalle agregado (fecha × veh × banda, con viajes y pax) ----
         var wsDet = wb.Worksheets.Add("Detalle");
         wsDet.Cell(1, 1).Value = "Fecha";
         wsDet.Cell(1, 2).Value = "Tipo vehículo";
         wsDet.Cell(1, 3).Value = "Banda horaria";
         wsDet.Cell(1, 4).Value = "Viajes";
+        wsDet.Cell(1, 5).Value = "Pax";
         var r = 2;
         foreach (var f in filas)
         {
@@ -247,66 +294,118 @@ public class ExcelExportService
             wsDet.Cell(r, 2).Value = f.TipoVehiculo;
             wsDet.Cell(r, 3).Value = f.Banda;
             wsDet.Cell(r, 4).Value = f.Reservas;
+            wsDet.Cell(r, 5).Value = f.Pax;
             r++;
         }
         wsDet.Row(1).Style.Font.Bold = true;
         wsDet.Columns().AdjustToContents();
 
-        // Hoja 2: Pivote fecha × banda
-        string[] bandas = { "00:00-00:01", "00:02-06:29", "06:30-08:29", "08:30-14:00", "14:01-18:00", "18:01-23:59" };
+        // --- Hoja 2: Pivote fecha × banda (valor = métrica elegida) --------------
         var fechas = filas.Select(f => f.Fecha).Distinct().OrderBy(d => d).ToList();
         var mapa = filas
             .GroupBy(f => (f.Fecha, f.Banda))
-            .ToDictionary(g => g.Key, g => g.Sum(x => x.Reservas));
+            .ToDictionary(g => g.Key, g => g.Sum(val));
 
-        var wsPiv = wb.Worksheets.Add("Pivote por banda");
+        var wsPiv = wb.Worksheets.Add($"Pivote ({etiquetaMetrica})");
         wsPiv.Cell(1, 1).Value = "Fecha";
-        for (var c = 0; c < bandas.Length; c++)
+        for (var c = 0; c < bandas.Count; c++)
             wsPiv.Cell(1, c + 2).Value = bandas[c];
-        wsPiv.Cell(1, bandas.Length + 2).Value = "TOTAL";
+        wsPiv.Cell(1, bandas.Count + 2).Value = "TOTAL";
 
         for (var i = 0; i < fechas.Count; i++)
         {
             wsPiv.Cell(i + 2, 1).Value = fechas[i].ToDateTime(TimeOnly.MinValue);
             wsPiv.Cell(i + 2, 1).Style.DateFormat.Format = "dd/mm/yyyy";
             var tot = 0;
-            for (var c = 0; c < bandas.Length; c++)
+            for (var c = 0; c < bandas.Count; c++)
             {
                 var v = mapa.TryGetValue((fechas[i], bandas[c]), out var x) ? x : 0;
                 wsPiv.Cell(i + 2, c + 2).Value = v;
                 tot += v;
             }
-            wsPiv.Cell(i + 2, bandas.Length + 2).Value = tot;
+            wsPiv.Cell(i + 2, bandas.Count + 2).Value = tot;
         }
+        // Fila TOTAL por columna
+        var rTot = fechas.Count + 2;
+        wsPiv.Cell(rTot, 1).Value = "TOTAL";
+        var granTot = 0;
+        for (var c = 0; c < bandas.Count; c++)
+        {
+            var colTot = fechas.Sum(f => mapa.TryGetValue((f, bandas[c]), out var x) ? x : 0);
+            wsPiv.Cell(rTot, c + 2).Value = colTot;
+            granTot += colTot;
+        }
+        wsPiv.Cell(rTot, bandas.Count + 2).Value = granTot;
         wsPiv.Row(1).Style.Font.Bold = true;
+        wsPiv.Row(rTot).Style.Font.Bold = true;
+        wsPiv.Column(bandas.Count + 2).Style.Font.Bold = true;
         wsPiv.Columns().AdjustToContents();
 
-        // Hoja 3: Resumen por vehículo y banda
+        // --- Hoja 3: Resumen por vehículo × banda (valor = métrica elegida) ------
         var wsVeh = wb.Worksheets.Add("Resumen por vehículo");
         wsVeh.Cell(1, 1).Value = "Tipo vehículo";
-        for (var c = 0; c < bandas.Length; c++)
+        for (var c = 0; c < bandas.Count; c++)
             wsVeh.Cell(1, c + 2).Value = bandas[c];
-        wsVeh.Cell(1, bandas.Length + 2).Value = "TOTAL";
+        wsVeh.Cell(1, bandas.Count + 2).Value = "TOTAL";
 
         var vehiculos = filas.Select(f => f.TipoVehiculo).Distinct().OrderBy(v => v).ToList();
         var mapaVeh = filas
             .GroupBy(f => (f.TipoVehiculo, f.Banda))
-            .ToDictionary(g => g.Key, g => g.Sum(x => x.Reservas));
+            .ToDictionary(g => g.Key, g => g.Sum(val));
 
         for (var i = 0; i < vehiculos.Count; i++)
         {
             wsVeh.Cell(i + 2, 1).Value = vehiculos[i];
             var tot = 0;
-            for (var c = 0; c < bandas.Length; c++)
+            for (var c = 0; c < bandas.Count; c++)
             {
                 var v = mapaVeh.TryGetValue((vehiculos[i], bandas[c]), out var x) ? x : 0;
                 wsVeh.Cell(i + 2, c + 2).Value = v;
                 tot += v;
             }
-            wsVeh.Cell(i + 2, bandas.Length + 2).Value = tot;
+            wsVeh.Cell(i + 2, bandas.Count + 2).Value = tot;
         }
         wsVeh.Row(1).Style.Font.Bold = true;
+        wsVeh.Column(bandas.Count + 2).Style.Font.Bold = true;
         wsVeh.Columns().AdjustToContents();
+
+        // --- Hoja 4: Viajes uno por uno (drill-down) -----------------------------
+        if (viajes is { Count: > 0 })
+        {
+            var wsV = wb.Worksheets.Add("Viajes");
+            string[] cab =
+            {
+                "Nº Reserva", "Fecha", "Hora", "Banda", "Tipo vehículo", "Servicio", "Cliente",
+                "Recorrido", "Pax", "Estado", "Interno", "Chofer", "Grupo", "Origen"
+            };
+            for (var c = 0; c < cab.Length; c++)
+                wsV.Cell(1, c + 1).Value = cab[c];
+
+            var rV = 2;
+            foreach (var d in viajes)
+            {
+                var v = d.Reserva;
+                wsV.Cell(rV, 1).Value = v.IdViaje;
+                wsV.Cell(rV, 2).Value = v.Fecha.ToDateTime(TimeOnly.MinValue);
+                wsV.Cell(rV, 2).Style.DateFormat.Format = "dd/mm/yyyy";
+                wsV.Cell(rV, 3).Value = v.Hora;
+                wsV.Cell(rV, 4).Value = d.Banda;
+                wsV.Cell(rV, 5).Value = d.TipoVehiculo;
+                wsV.Cell(rV, 6).Value = v.Servicio;
+                wsV.Cell(rV, 7).Value = v.Cliente;
+                wsV.Cell(rV, 8).Value = v.Recorrido;
+                wsV.Cell(rV, 9).Value = v.Pax;
+                wsV.Cell(rV, 10).Value = v.Estado;
+                if (v.Interno.HasValue) wsV.Cell(rV, 11).Value = v.Interno.Value;
+                wsV.Cell(rV, 12).Value = v.Chofer;
+                wsV.Cell(rV, 13).Value = v.Grupo;
+                wsV.Cell(rV, 14).Value = v.Origen == "P" ? "Plantilla" : "Transportación";
+                rV++;
+            }
+            wsV.Row(1).Style.Font.Bold = true;
+            wsV.SheetView.FreezeRows(1);
+            wsV.Columns().AdjustToContents(1, Math.Min(viajes.Count + 1, 500));
+        }
 
         using var ms = new MemoryStream();
         wb.SaveAs(ms);

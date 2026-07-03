@@ -13,7 +13,7 @@ public static class NorturClaims
 /// <summary>
 /// Permisos del usuario logueado — equivalente a los chequeos `"X" $ cAcceso` y
 /// `"2" $ cNivel` del Metrocar. Mapa completo de letras: skill seguridad-nortur
-/// y docs/logica-foxpro/USUARIO_ACCESOS.md.
+/// y docs/PlanoFoxPro/sistema/USUARIO_ACCESOS.md.
 /// </summary>
 public interface IPermissionService
 {

@@ -3,6 +3,12 @@
 > Extraído del binario DBF/SCT con lector Python custom.  
 > Fuente: `C:\MetroCarSys\Forms\trafico_zoom.scx` — 135 objetos, 29 controles con código.  
 > Referencia directa para construir el ABM de reservas en Blazor.
+>
+> ⚠️ **Nombres de campo:** este doc cita los nombres del DBF FoxPro (`estado_viaje`,
+> `hs_presentacion`, `nombre_cliente`, `id_vehiculo_tipo`…). La réplica SQL los **trunca a
+> 10 chars** (`estado_via`, `hs_present`, `nombre_cli`, `id_vehicu2`…). Mapa de truncados en
+> `TRAFICO2_FILTROS.md` y `ESCRITURA_CIRCUITO.md` (skill `modulo-trafico`) — verificar
+> SIEMPRE contra `sys.columns` antes de escribir SQL nuevo.
 
 ---
 
@@ -373,173 +379,28 @@ hs_fin_aprox = hs_inicio
 
 ---
 
-## Grilla principal de Tráfico (`trafico.scx`)
+## La pantalla contenedora (grilla de Tráfico) — ver docs dedicados
 
-> Contexto extraído de capturas de pantalla del sistema productivo (08/05/2026).  
-> Esta sección documenta la pantalla contenedora que lista los viajes del día y desde la que se abre `trafico_zoom.scx`.
+> Acá había un análisis preliminar hecho por capturas de pantalla (mayo 2026) del form
+> contenedor. Quedó **superado por las extracciones reales del binario** y se eliminó para
+> evitar contradicciones (p. ej. afirmaba que el botón "Libe" equivalía a "Pasar a Sin
+> Asignar", cuando la extracción demostró que **Libe = FINALIZAR el viaje**; que "S/C" era
+> "sin cargo", cuando es el filtro *sin cronograma*; y que "Comb" combinaba rutas, cuando
+> abre el módulo Combustible).
 
-## Título y encabezado
+La referencia vigente sobre `trafico2.scx` (el form productivo — `trafico.scx` es una
+versión vieja) es:
 
-```
-Trafico del VIERNES 08/05/2026 - Cantidad de Servicios : 330
-```
-
-El título cambia dinámicamente con la fecha seleccionada y muestra la cantidad total de servicios del día. Ambos datos deben replicarse en el reporte Blazor.
-
----
-
-## Columnas de la grilla
-
-La grilla tiene **dos paneles**: el panel principal (izquierda/centro) y un panel lateral fijo (derecha) con la asignación de chofer.
-
-### Panel principal
-
-| Columna | Campo probable en `viaje` | Observaciones |
-|---|---|---|
-| **Reserva** | `f_reserva` | Fecha de la reserva (dd/mm/yyyy) |
-| **H. Pre** | `hs_presentacion` | Hora de presentación (HH:mm) — offset antes de salida |
-| **H. Ini** | `hs_inicio` | Hora de inicio del servicio |
-| **H. Fin** | `hs_fin` / `hs_fin_aprox` | Hora fin real o aproximada |
-| **Tur** | `turno` o derivado de `hs_inicio` | Turno (no confirmado) |
-| **Ref** | `id_viaje` o `n_referencia` | Número de referencia interno |
-| **Emp** | `id_empresa` / `id_operador` | Empresa u operador |
-| **UI/Pr** | interno o externo | Unidad Interna / Propia (?) |
-| **U/Cb** | `id_vehiculo` | Unidad / Código de vehículo |
-| **Chq** | `chequeo` | Flag de chequeo (0/1) |
-| **Ag** | ¿`id_agencia`? | Agencia (a confirmar en schema) |
-| **Recorrido** | `d_destino` + `h_destino` | Texto "Origen a Destino" — concatenado en UI |
-| **Fletero** | `fletero` | Nombre del fletero externo (si aplica) |
-| **Chofer** | `nombre_chofer` | Nombre del chofer asignado |
-| **Veh** | `id_vehiculo_tipo` | Tipo de vehículo (BUS, VAN, MNI, AUTO) |
-| **Cliente** | `id_cliente` / abreviado | Código o abreviatura del cliente |
-| **Pax** | `pax` | Cantidad de pasajeros |
-| **Agua** | `agua` | Flag agua (0/1 o cantidad) |
-| **Adj** | `id_adjunto` o similar | Adjunto vinculado (?) |
-| **Comentario** | `comentario` | Texto libre de comentario |
-| **Grupo** | `grupo` | Nombre del grupo (o "SIN GRUPO") |
-| **Vuelo** | `vuelo` | Número de vuelo |
-
-### Panel lateral derecho (asignación)
-
-Este panel parece ser una vista separada de asignación de chofer, scrolleable independientemente:
-
-| Columna | Descripción |
+| Tema | Doc |
 |---|---|
-| **Fletero** | Empresa fletero (ej: "NORTUR") |
-| **Interno** | Número interno del vehículo (ej: 1, 2, 3…) |
-| **Chofer** | Apellido del chofer asignado |
-| **2° Chofer** | Segundo chofer (si aplica) |
-| **Franco** | Flag de franco / descanso |
+| Filtros: combos U/Pr y U/Cb, S/C, Cxl (cancelados), Emp/Tur, panel Buses, colores, menú contextual, "Aplicar Filtros" | `TRAFICO2_FILTROS.md` |
+| Botones de ESCRITURA de la toolbar: Chequeo, Asig U/P, Otra Unidad, Reas, **Libe (=FINALIZAR)**, Frc (francos) | `TRAFICO2_TOOLBAR.md` |
+| Bitácora ("Historia del viaje", `viaje_log`) | `TRAFICO_HISTORIAL.md` |
+| Matriz consolidada operación → tablas → campos → log | `.claude/skills/modulo-trafico/references/ESCRITURA_CIRCUITO.md` |
 
----
+Datos que aquel análisis dejaba "a investigar", ya resueltos:
 
-## Colores de fila (código visual de estado)
-
-Los colores identifican visualmente el estado de cada viaje sin abrir el zoom:
-
-| Color | Estado probable | Notas |
-|---|---|---|
-| **Rosa / fucsia** | CANCELADO | Filas claramente canceladas |
-| **Fondo blanco** | SIN ASIGNAR o ASIGNADO | Estado normal/pendiente |
-| **Amarillo / oro** | Seleccionado / fila activa | Fila sobre la que está el cursor |
-| **Verde** | FINALIZADO o GPS activo | A confirmar — puede ser "en curso con GPS" |
-| **Azul claro** | (a confirmar) | Posiblemente CHEQUEO o CURSO |
-
-> Regla para Blazor: implementar columna de color de fondo en la `MudTable` con `RowClass` o `RowStyle` basado en `estado_viaje`.
-
----
-
-## Toolbar de botones (barra superior)
-
-Botones de acción rápida sin abrir el zoom. Muchos operan sobre el viaje seleccionado en la grilla:
-
-| Botón | Acción probable |
-|---|---|
-| **S/C** | Sin cargo — marcar viaje como sin cargo |
-| **Ref** | Refresh / actualizar grilla |
-| **Emp** | Empresa — filtrar o asignar empresa |
-| **Tur** | Turno — filtrar por turno |
-| **<<** / **>>** | Día anterior / día siguiente |
-| **Cql** | (a investigar — posiblemente "Cancelar/Limpiar" o filtro) |
-| **Chequeo** | Marcar viaje como chequeado |
-| **Asig U/P** | Asignar Unidad Propia |
-| **Otra Unidad** | Asignar unidad de terceros / fletero |
-| **Reas** | Reasignar chofer/vehículo |
-| **Libe** | Liberar — equivale a "Pasar a Sin Asignar" |
-| **Erc** | (a investigar) |
-| **Comb** | Combinar viajes (rutas) |
-| **GPS** | Abrir panel / vista GPS |
-
-### Filtros / checkboxes de la toolbar
-
-| Checkbox | Efecto |
-|---|---|
-| **GPS** (toggle botón) | Activa modo GPS en la grilla |
-| **Chequeo** | Muestra solo viajes marcados para chequeo |
-| **NORTUR** | Filtra solo viajes de flota propia NORTUR (excluye fleteros) |
-| **Buses** | Filtra solo vehículos tipo BUS |
-
----
-
-## Menú contextual (clic derecho sobre fila)
-
-Disponible al hacer clic derecho sobre cualquier viaje de la grilla. Acciones:
-
-### Nivel 1
-
-| Opción | Descripción |
-|---|---|
-| **Ubicar en GPS** | Submenú — ver ubicación del vehículo en mapa GPS |
-| **Refresh** | Refresca los datos del viaje seleccionado |
-| **Novedad sobre el viaje** | Registra una novedad/incidencia sobre el viaje |
-| **Aplicar Filtros s/viaje** | Submenú — aplica filtros basados en datos del viaje seleccionado |
-| **Aplicar Filtros** | Submenú — filtros generales de la grilla |
-| **Imprimir** | Submenú — opciones de impresión |
-| **Exportar a Excel** | Submenú — exporta la grilla o el viaje a Excel |
-| **Mantenimiento Viajes** | Submenú — operaciones de mantenimiento admin |
-| **Lista de pasajeros** | Abre/imprime la lista de pasajeros del viaje |
-| **Historia del viaje** | Abre el log de auditoría del viaje (`viaje_log`) |
-| **Copiar Cronogramas** | Copia el cronograma de un viaje a otro |
-| **Ver Datos Extras** | Submenú — accesos rápidos a datos relacionados |
-
-### Submenú "Ver Datos Extras"
-
-| Opción | Qué muestra |
-|---|---|
-| **Ver Datos Operador** | Datos del operador/agencia asignada al viaje |
-| **Ver Datos Vehículo** | Ficha del vehículo asignado (de tabla `vehiculo`) |
-| **Ver Datos Chofer** | Ficha del chofer asignado (de tabla `chofer`) |
-| **Ver Datos Cliente** | Ficha del cliente (de tabla `cliente`) |
-| **Ver Adjunto** | Abre adjunto vinculado al viaje |
-| **Ver Recorrido** | Muestra el recorrido detallado del viaje |
-| **Ver Adicionales** | Lista los adicionales del viaje (`viaje_adicional`) |
-
----
-
-## Relevancia para el ABM en Blazor
-
-### Qué replicar en el Informe de Tráfico
-
-1. **Título dinámico** con fecha y cantidad de servicios del día.
-2. **Grilla con todas las columnas** listadas arriba — usar `MudTable` con columnas fijas.
-3. **Colores de fila por estado** — `RowStyle` o `RowClass` condicional en MudBlazor.
-4. **Panel lateral de asignación** — puede ser una segunda tabla sincronizada o columnas adicionales visibles solo con scroll horizontal.
-5. **Filtros de toolbar** — NORTUR / Buses / Chequeo como `MudCheckBox` o `MudToggleIconButton`.
-6. **Navegación día anterior/siguiente** — botones `<<` / `>>` que modifican la fecha y recargan.
-
-### Qué replicar en el ABM (Zoom del Viaje)
-
-1. **Acceso a "Historia del viaje"** → leer `viaje_log` y mostrar en modal o página separada.
-2. **"Ver Datos Extras"** → navegación a fichas de vehículo, chofer, cliente (links a sus propios ABM).
-3. **"Novedad sobre el viaje"** → formulario para registrar incidencia (tabla a investigar: `viaje_novedad`?).
-4. **"Lista de pasajeros"** → leer `viaje_pasajero` y mostrar en modal.
-
-### Tablas adicionales a investigar (no estaban en el MD original)
-
-| Tabla probable | Para qué |
-|---|---|
-| `viaje_novedad` | Novedades/incidencias sobre un viaje |
-| `viaje_pasajero` | Lista de pasajeros por viaje |
-| `motivo_cancela` | Catálogo de motivos de cancelación |
-| `operador` | Datos del operador/agencia |
-| `agencia` | Agencias vinculadas a reservas |
+- **"Novedad sobre el viaje"** → tabla `libro_novedad` (48.160 filas) — migrado solo lectura.
+- **"Lista de pasajeros"** → `viaje_pasajero` + `viaje_pasajero_detalle` (casi vacías) — migrado solo lectura.
+- **Motivos de cancelación** → tabla `viaje_motivo_cancela` (no "motivo_cancela").
+- **"Ver Datos Extras"** (7 ítems), operador → `cliente_operador` (no `cliente`) — migrado solo lectura.

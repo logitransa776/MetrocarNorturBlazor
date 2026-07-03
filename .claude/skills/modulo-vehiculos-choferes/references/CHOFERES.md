@@ -1,7 +1,7 @@
 # Choferes — `chofer.scx` + `chofer_abm.scx` ("ABM de Conductores")
 
 **Migrado a Blazor en SOLO LECTURA** (15/06/2026). Doc completa y oficial del form:
-`docs/logica-foxpro/CHOFER_ABM.md`. Acá solo el resumen para decisión rápida.
+`docs/PlanoFoxPro/vehiculos-choferes/CHOFER_ABM.md`. Acá solo el resumen para decisión rápida.
 
 - **Tabla:** `chofer` (707 filas: 249 activos / 458 egresados). PK `id_chofer` (texto, tipeada).
 - **Relacionadas:** `vehiculo_chofer` (N:N, vacía en réplica), `lista_precio_modelo_chofer`

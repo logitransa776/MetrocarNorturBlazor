@@ -20,7 +20,7 @@ Los viajes referencian el grupo de dos maneras (ambas conviven):
   WHERE del FoxPro (`id_cliente + grupo = …`).
 
 Los grupos **se crean normalmente desde la carga de reservas** ("Grupo Nuevo" en
-`reserva_transportacion_con_adicional` — ver `RESERVA_TRANSPORTACION.md`); esta pantalla
+`reserva_transportacion_con_adicional` — ver `../reservas/RESERVA_TRANSPORTACION.md`); esta pantalla
 es para administrarlos.
 
 ---

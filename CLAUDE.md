@@ -1,10 +1,21 @@
-# Metrocar Nortur — Informes y Reportes (Blazor)
+# BUSLINK (Metrocar Nortur) — migración FoxPro → Blazor
+
+> **Naming (02/07/2026):** el sistema pasa a llamarse **Buslink**. Es el mismo sistema
+> Blazor de este repo (el código sigue siendo `MetroCarSysBlazor`, misma base
+> `replicaVPF`) — el renombre aplica a docs, skills y comunicación con el cliente.
 
 ## Objetivo del proyecto
 
-Migrar **gradualmente los informes y reportes** del sistema viejo **Metrocar (FoxPro)** a una plataforma nueva y moderna, leyendo los datos directamente desde la base **SQL Server `replicaVPF`**.
+**Etapa actual (jul 2026): migración masiva de los ABMs** — que la operación de tráfico
+de NORTUR (cargar internos, asignar choferes, estados, cancelaciones, alta de reservas,
+grabar liquidaciones) se maneje desde Buslink, con **un día D** en que el circuito
+`viaje` cambia de dueño y FoxPro queda de consulta.
 
-Se va **reporte por reporte**: se toma un informe que hoy existe en FoxPro, se entiende qué hace, y se reconstruye como un **dashboard interactivo moderno** (no se copia el Excel viejo al pie de la letra — se mejora).
+- **Plan de migración completo (fases 0-8, día D, riesgos, DoD):** `docs/buslink/PLAN_MIGRACION_BUSLINK.md`
+- **Análisis del estado del sistema (para seguimiento, con versión Word):** `docs/buslink/ANALISIS_SISTEMA_BUSLINK.md` (+ `.docx`)
+
+Etapa anterior (completada en lo esencial): migrar los informes/reportes leyendo desde
+**SQL Server `replicaVPF`**, reporte por reporte, mejorando sobre el FoxPro.
 
 **Empresa:** NORTUR (Metrocar) — transporte / transfers / turismo (combis, traslados aeropuerto, city tours, cenas show, etc.).
 
@@ -67,7 +78,7 @@ TrustServerCertificate = True
 > incluye `Pooling=True;Min Pool Size=2;Max Pool Size=50`. `Encrypt=True` se mantiene (con
 > pool, el TLS se amortiza). Al arrancar, `DbWarmupService` precalienta el pool (verás
 > "Pool de conexiones SQL calentado: N conexiones en NNN ms" en el log). Detalle completo:
-> `docs/PERFORMANCE_GRILLAS_Y_CONEXION.md`.
+> `docs/performance/PERFORMANCE_GRILLAS_Y_CONEXION.md`.
 
 ---
 
@@ -103,10 +114,12 @@ MetroCarSysBlazor/
     NorturTheme.cs                    → Paleta MudBlazor corporativa NORTUR
   wwwroot/                            → Assets estáticos (CSS, JS, Bootstrap)
     app.css                           → Estilos globales + sistema del drawer CSS
-docs/
-  INFORME_TECNICO.md                  → Documentación técnica completa
-  INFORME_TECNICO_NORTUR.pdf          → PDF del informe técnico
-  PERFORMANCE_GRILLAS_Y_CONEXION.md   → Por qué/cómo se resolvió el lag de grillas grandes (pooling + Virtualize)
+docs/                                 → biblioteca de documentación por tema (índice: docs/README.md)
+  general/INFORME_TECNICO.md          → Documentación técnica completa
+  pdfs/INFORME_TECNICO_NORTUR.pdf     → PDF del informe técnico
+  performance/PERFORMANCE_GRILLAS_Y_CONEXION.md → lag de grillas grandes (pooling + Virtualize)
+  buslink/                            → PLAN_MIGRACION + ANALISIS_SISTEMA + INFORME_AVANCE (.md + .docx)
+  PlanoFoxPro/                        → "planos" del FoxPro por módulo (índice: PlanoFoxPro/README.md)
 .claude/
   settings.json                       → Registra las skills locales del proyecto
   skills/
@@ -274,7 +287,7 @@ Las 6 bandas: `00:00-00:01`, `00:02-06:29`, `06:30-08:29`, `08:30-14:00`, `14:01
    ~100-150 filas DEBE usar `<Virtualize>` (el servidor genera solo las filas visibles, no
    todas) + memoizar el filtrado en un campo (no recalcular en cada render). El connection
    string SIEMPRE con `Pooling=True`. El síntoma "lento solo con muchos registros" es render
-   de Blazor, no SQL. Patrón completo y trampas: `docs/PERFORMANCE_GRILLAS_Y_CONEXION.md`.
+   de Blazor, no SQL. Patrón completo y trampas: `docs/performance/PERFORMANCE_GRILLAS_Y_CONEXION.md`.
    Referencia viva ya optimizada: `PlanillaTrafico.razor`.
 
 ---
@@ -295,15 +308,54 @@ Las 6 bandas: `00:00-00:01`, `00:02-06:29`, `06:30-08:29`, `08:30-14:00`, `14:01
 - Servicio registrado en `Program.cs`, JS cargado en `App.razor`.
 - **Listo para usar en reportes nuevos** — agregar `@using ApexCharts` al inicio de cada `.razor` que lo use.
 
-### ✅ Informe 1: "Reservas por fecha y servicio" — HECHO
+### ✅ Informe 1: "Reservas por fecha y servicio" — REARMADO (02/07/2026)
 
-Componente `Components/Pages/ReservasFechaServicio.razor`.
+Componente `Components/Pages/ReservasFechaServicio.razor`. Rediseño completo validado
+contra la base al dígito (smoke tests 15/15).
 
-- **Filtros:** período, servicios (multiselect), incluir/excluir canceladas, métrica (Reservas / Pax).
-- **KPIs:** total reservas, total pax, canceladas (+%), servicios distintos.
-- **Gráficos:** barras (top 10 servicios) + donut (distribución top 12) con `MudChart` (pendiente migrar a ApexCharts).
-- **Tabla pivote** fecha × servicio con totales.
-- **Botón Descargar Excel** (ClosedXML).
+- **Barra de filtros horizontal compacta** (CSS `rfs-*` en `app.css`): período (datepickers
+  en `PickerVariant.Dialog` + CSS `.mud-picker-paper.mud-dialog{min-width:310px}` porque si no
+  el panel hereda el ancho del input=135px y recorta el header/días), servicios (multiselect
+  con "Todos"), **estados** (multiselect de los 5 `estado_via`), switches **Internos** y
+  **Cabeceras**, métrica (Reservas / Pax — cambia sin re-query, recálculo en memoria).
+- **Cliente interno NORTUR excluido por defecto** (`parametro.id_cliente`), como todos los
+  informes FoxPro — era ~6,8% de infle. Switch "Internos" para sumarlo.
+- **Cabeceras excluidas por defecto:** `CABECERA_KM`/`CABECERA_SERV` NO son servicios reales,
+  son **modos de facturación** (por km / por servicio; el destino real está en d_destino/
+  h_destino). Eran ~90% del volumen y aplastaban el desglose por servicio. Se excluyen por
+  defecto (switch "Cabeceras" para sumarlas), se sacan del dropdown de Servicios, y su volumen
+  se muestra en un **KPI "Viajes cabecera"** aparte (transparencia). Constante
+  `ReportService.ServiciosCabecera`; conteo `GetVolumenCabecerasAsync`.
+- **KPIs** (fila flex `.rfs-kpis`, 4 o 5 tarjetas parejas): total reservas, total pax,
+  canceladas (+% — muestra "—" si CANCELADO quedó fuera del filtro), servicios distintos, y
+  "Viajes cabecera" (solo cuando están excluidas). Verificado por SQL: excluyendo cabeceras el
+  período 02/05–02/07/2026 da 1.111 res / 31.010 pax / 24 serv; incluyéndolas 10.587 / 26.
+- **Gráficos ApexCharts** (animaciones off — con animación, las capturas/vistas agarran el
+  donut a medio dibujar): evolución diaria (área), barras top 10, donut top 8 + "Otros"
+  (paleta categórica validada con dataviz; azul de serie `#2058D0`, el corporativo es
+  demasiado oscuro para marcas de gráfico).
+- **Tabla pivote** fecha × servicio: columna fecha fija + header/footer sticky, día de
+  semana (finde en ámbar), ceros como `·`, fila TOTAL por columna, `<Virtualize>` en tbody.
+- **Drill-down**: click en una **celda** o en el **total de fila** abre `ReservasFsDetalleDialog`
+  (las reservas una por una, pill de estado; click en fila → Zoom del Viaje). El detalle se
+  trae lazy 1 vez por filtro (`GetReservasFechaServicioDetalleAsync`).
+- **Colores unificados por servicio (03/07/2026):** cada servicio tiene un color único, el
+  MISMO en el gráfico de barras y en el donut (color por entidad, no por posición). Ver skill
+  `blazor-nortur` § Colores unificados.
+- **Cross-filter estilo Power BI (03/07/2026):** clic en un servicio (barra, porción del donut
+  o **header/total de columna** de la tabla) enfoca todo el tablero en ese servicio — KPIs,
+  evolución y tabla se recalculan en memoria (sin re-query) y los gráficos resaltan el servicio
+  atenuando el resto. Chip "Filtrado por: X ✕" para quitar; reclic togglea. Ver skill
+  `blazor-nortur` § Cross-filter. Sin librerías nuevas (ApexCharts `OnDataPointSelection`).
+- **Switch "Cabeceras" eliminado (03/07/2026):** las cabeceras se excluyen SIEMPRE del desglose
+  (comportamiento fijo, ya no configurable); el KPI "Viajes cabecera" sigue mostrando su volumen.
+- **Excel** (ClosedXML): hojas Detalle + Pivote + Ranking + **Reservas** (una por una).
+
+> **Lógica FoxPro (trampa):** el informe original del EXE productivo se llama "Reservas por
+> Fecha en estado **SIN ASIGNAR O ASIGNADO**" — es demanda pendiente, NO histórico. Su form
+> no existe en el fuente en disco (el ítem tampoco está en `MENU_PRINCIPAL.MPR`; ese popup
+> solo tiene banda horaria). Para reproducir su número en Blazor: Estados = SIN ASIGNAR +
+> ASIGNADO.
 
 ### ✅ Vistas de solo lectura migradas (lista + ficha) — HECHO
 
@@ -363,7 +415,7 @@ en vivo (22/06/2026):** `ValorizarGrupoAsync` + `CalcularTotalesLiquidacionAsync
 la cascada `arma_servicio`/`arma_liquidacion` (convenido→sin cargo→cabecera→servicio modo
 S/H/K + horas extra + desc/incr) — **cálculo en vivo de solo lectura, NO graba** (strangler).
 Validado al peso: 99,4% de 8.656 viajes históricos + grupo #2890197 (142807.34 / 38057.59 /
-180864.93 exactos). Trampas finas en `docs/logica-foxpro/FACTURACION_LIQUIDACION.md` §3.2 y
+180864.93 exactos). Trampas finas en `docs/PlanoFoxPro/facturacion/FACTURACION_LIQUIDACION.md` §3.2 y
 skill `modulo-facturacion-liquidacion` (bug minutos modo H, fracción 25, precio propio de
 adicional que pisa la tarifa, tarifa retroactiva). Falta solo el **Graba** (escritura
 transaccional + puente inverso). **Trampas resueltas:**
@@ -380,12 +432,46 @@ Todas las secciones del menú lateral inician **colapsadas** para cualquier usua
 (flags `_*Expanded = false` en `MainLayout.razor`). Hay un aviso "Tocá una sección para
 abrirla" (`.nav-hint`) al inicio del `<nav>`. El usuario abre la sección que necesite.
 
-### Pendiente / próximos
+### ✅ ABM de Usuarios y Permisos — HECHO (01/07/2026) · PRIMER ABM DE ESCRITURA
 
-- **Informe 3:** Tráfico / Operación (cliente / chofer / vehículo).
-- **Liquidación choferes** (nómina por hora), **Control pre-liquidación**.
-- **Cuenta Corriente** (`ctacte`): programada en FoxPro pero sin uso en producción.
-- Migrar gráficos del Informe 1 de MudChart a ApexCharts.
+El **primer ABM con escritura real** (alta/baja/modificación) del proyecto — hasta acá todo era
+solo lectura. Estrena la estrategia "SQL dueño tabla por tabla": la tabla `usuario` migró de dueño
+a SQL (ABM salido de FoxPro, sync DBF→SQL apagada) y Blazor la escribe en el **server local**.
+Permiso `'S'` (solo supervisor). Menú: sección **Sistema** del drawer.
+
+| Pieza | Archivo |
+| --- | --- |
+| Capa de escritura (nueva, plantilla) | `Services/AbmService.cs` — INSERT/UPDATE con `SqlParameter` + transacción, `AbmResult` |
+| Catálogo de permisos | `Services/PermisosCatalogo.cs` — 16 letras en orden `S R T C D V L F A E U B H X N M` + reglas |
+| Lectura | `ReportService.GetUsuariosAsync` / `GetUsuarioDetalleAsync` |
+| Lista | `Components/Pages/UsuariosAbm.razor` (`/usuarios-abm`) |
+| Dialog | `Components/Shared/UsuarioEditorDialog.razor` — un solo dialog, 4 modos ver/alta/modifica/baja |
+
+Trampas resueltas: `usuario.id` **no es identity** (alta con `MAX(id)+1`); `password`/`acceso`
+son `nvarchar(15)` (password plano; validar acceso ≤15 aunque haya 16 letras); baja lógica =
+`f_delete` (no `_deleted`); `nivel` fijo `"12345"`; reglas en vivo C→T y X→SUPERVISOR; defensa
+anti-autobloqueo. Validado con `ZZTEST01` (dos señales) + capturas. Detalle: skill
+`abm-metrocar` (§ Primer ABM de escritura). **Pendiente producción real:** bloquear ABM en FoxPro
++ confirmar sync apagada antes de escribir en el server nuevo.
+
+### Pendiente / próximos — el plan Buslink (02/07/2026)
+
+El roadmap vigente es **`docs/buslink/PLAN_MIGRACION_BUSLINK.md`** (fases, día D, riesgos, DoD).
+Resumen del orden:
+
+- **Fase 0** (en curso): decisión `gps_xlm`, interruptor de sync, bloqueo FoxPro, mapeo
+  de las 12 tablas del circuito, **regla del permiso `F`** (primera entrega de código).
+  `TRAFICO2_TOOLBAR.md` ✅ hecho.
+- **Fase 1:** catálogos con cutover temprano (`viaje_motivo_cancela` → `feriado` →
+  `destino` → `cliente_operador` → `cliente`) + grupo B que corta el día D.
+- **Fase 2:** motor `ViajeAbmService` (primitivas compartidas del circuito).
+- **Fase 3:** **Tráfico en escritura** (chequeo → asignar → … → Zoom edición) — la prioridad.
+- **Fase 4:** Reservas (alta manual, plantillas, importa Excel).
+- **Fase 5:** Facturación Graba + Revertir corregido.
+- **Fases 6-8:** ensayo general → **día D** → estabilización y siguientes anillos.
+
+Secundarios (post día D): liquidación choferes, control pre-liquidación, cuenta
+corriente (sin uso en producción).
 
 ---
 
@@ -393,29 +479,30 @@ abrirla" (`.nav-hint`) al inicio del `<nav>`. El usuario abre la sección que ne
 
 Metodología: antes de construir cualquier ABM en Blazor, extraer y documentar la lógica del form FoxPro correspondiente.
 
+**La biblioteca está organizada por carpetas de módulo (reorganizada 02/07/2026).
+Índice maestro con estado de migración de cada doc: `docs/PlanoFoxPro/README.md`.**
+
 ```text
 docs/
-  logica-foxpro/    ← un .md por cada form ABM documentado
-  pdfs/             ← PDFs del proyecto
+  PlanoFoxPro/           ← biblioteca de "planos" del FoxPro (21 docs), por módulo:
+    README.md              ← ÍNDICE MAESTRO (leer primero)
+    trafico/               ZOOM, FILTROS, TOOLBAR (spec Fase 3), HISTORIAL, GPS_XLM
+    reservas/              TRANSPORTACION, PLANTILLAS, IMPORTA_EXCEL, BANDA_HORARIA
+    catalogos/             los ABMs de Fase 1: CLIENTE, GRUPO, OPERADOR, DESTINO,
+                           VIAJE_MOTIVO_CANCELA, FERIADO, GUIA, VIAJE_MOTIVO_CAMBIO
+    facturacion/           FACTURACION_LIQUIDACION (módulo completo)
+    combustible/           COMBUSTIBLE (módulo completo)
+    vehiculos-choferes/    CHOFER_ABM (los otros 9 docs: skill modulo-vehiculos-choferes/references/)
+    sistema/               USUARIO_ACCESOS
+  pdfs/                    ← PDFs del proyecto
   INFORME_TECNICO.md
 ```
 
-| Archivo | Form FoxPro | Descripción |
-| --- | --- | --- |
-| `docs/logica-foxpro/TRAFICO_ZOOM.md` | `trafico_zoom.scx` | Zoom del Viaje: máquina de estados, validaciones, tablas tocadas, reglas no obvias |
-| `docs/logica-foxpro/TRAFICO_HISTORIAL.md` | `trafico_historial.scx` | Historial del viaje ("Historia del viaje" del menú contextual): bitácora `viaje_log` (9 columnas, nombres truncados) + cabecera de auditoría de `viaje`, botón "Zoon Motivo". Migrado solo lectura 29/06/2026 |
-| `docs/logica-foxpro/TRAFICO2_FILTROS.md` | `trafico2.scx` | Toolbar de Tráfico: combos de unidades (U/Pr `cronogram2`, U/Cb `cronograma`), botón S/C, botón Cxl (cancelados con motivo), mapeo de columnas en la réplica |
-| `docs/logica-foxpro/RESERVA_TRANSPORTACION.md` | `reserva_transportacion_con_adicional.scx` + 4 subdialogs | Alta manual de reservas: validaciones, multiplicación días×servicios, modo ruta, grupos, valor especial (permiso "F"), adicionales, INSERT completo |
-| `docs/logica-foxpro/RESERVA_PLANTILLAS.md` | `reserva_plantilla_crear/_mantenimiento/_mantenimiento_abm/_nombre/_armar.scx` | Ciclo completo de plantillas: crear, mantener, armar (generación masiva por días+feriados), cabecera 16 posiciones, lotes |
-| `docs/logica-foxpro/CLIENTE_ABM.md` | `cliente.scx` + `cliente_abm.scx` | Catálogo cliente: CUIT, esquema de precios, flags operativos, rubros excluidos, baja lógica con fecha |
-| `docs/logica-foxpro/CHOFER_ABM.md` | `chofer.scx` + `chofer_abm.scx` | ABM de Conductores: grilla (filtro Fletero/Nombre/Egresados), ficha de 5 pestañas, mapa de columnas truncadas, vehiculo_chofer, `chofer_log` no replicada |
-| `docs/logica-foxpro/CLIENTE_GRUPO_ABM.md` | `cliente_grupo.scx` + `cliente_grupo_abm.scx` | Grupos: candado `f_grupo_fc`, baja = cancelación masiva de viajes con motivo, renombre con arrastre |
-| `docs/logica-foxpro/CLIENTE_OPERADOR_ABM.md` | `cliente_operador*.scx` | Operadores por cliente (id global, baja física) |
-| `docs/logica-foxpro/DESTINO_ABM.md` | `destino*.scx` | Destinos: autocomplete de Desde/Hasta, `mas100km`, distrito |
-| `docs/logica-foxpro/IMPORTA_EXCEL_VIAJE.md` | `importa_excel_viaje.scx` | Importación masiva: 28 columnas, 3 etapas de validación, transaccional, adicionales inline |
-| `docs/logica-foxpro/RESERVAS_INFORME_BANDA_HORARIA.md` | `trafico_resumen_horario*.scx` | Informe 2: conteo fecha×banda×vehículo, SQL listo para Blazor |
-| `docs/logica-foxpro/FACTURACION_LIQUIDACION.md` | `facturacion_cliente_nueva.scx`, `liquidacion_fletero_nueva.scx`, `liquidacion_cliente.scx`, `liquidacion_chofer_por_hora.scx`, `ctacte_*.scx`, `lista_precio_*.scx` | Módulo completo Facturación/Liquidación: valorización, cascadas de precios, grabado, revertir, tarifarios, cta. cte. (sin uso), tablas SQL reales |
-| `docs/logica-foxpro/COMBUSTIBLE.md` | `vehiculo_combustible_mant_sobre_lote.scx`, `vehiculo_combustible_carga_sobre(_trafico).scx`, `vehiculo_combustible_consumo.scx`, `trafico_vehiculo_combustible.scx`, `vehiculo_estacion_saldo*.scx`, `estacion*.scx` | Módulo completo Combustible: las 2 eras (tabla viva `vehiculo_sobre` NO replicada), conciliación por sobre/lote, promedio de consumos, saldos/depósitos, catálogo de proveedores, trampas y candidatos Blazor |
+Hallazgos clave de la extracción de catálogos (02/07/2026): `gps_xlm()` **hoy es no-op**
+(`parametro.xml_envia = 0` y `sql_gps = 0` — evidencia para la decisión GPS de Fase 0.2,
+ver `trafico/GPS_XLM.md`); **0 feriados de 2026 cargados** (alerta de Fase 1);
+`viaje_motivo_cambio_abm` tiene el Modificar ROTO en el fuente (pega a la tabla equivocada
+— no copiar).
 
 ---
 
@@ -465,8 +552,8 @@ de Anthropic: cada corrección aprendida se guarda en la skill correspondiente, 
 | `seguridad-nortur` | horizontal | permisos: `acceso` (letras), `nivel` (dígitos ABM), claims en Blazor |
 | `modulo-trafico` | vertical | conocimiento del módulo Tráfico |
 | `modulo-reservas` | vertical | conocimiento del módulo Reservas (12/06/2026) — alta manual, plantillas, grupos, catálogos, importa Excel; base para los ABMs futuros |
-| `modulo-facturacion-liquidacion` | vertical | conocimiento del módulo Facturación/Liquidación (12/06/2026) — liquidación a clientes/fleteros/choferes, tarifarios, ctacte (sin uso). Doc detallado: `docs/logica-foxpro/FACTURACION_LIQUIDACION.md` |
-| `modulo-combustible` | vertical | conocimiento del módulo Combustible (12/06/2026) — cargas de la flota (tabla viva `vehiculo_sobre`, **NO replicada a SQL**), conciliación por lote, consumos l/100km, saldos de estaciones (sin uso desde 2017). Doc detallado: `docs/logica-foxpro/COMBUSTIBLE.md` |
+| `modulo-facturacion-liquidacion` | vertical | conocimiento del módulo Facturación/Liquidación (12/06/2026) — liquidación a clientes/fleteros/choferes, tarifarios, ctacte (sin uso). Doc detallado: `docs/PlanoFoxPro/facturacion/FACTURACION_LIQUIDACION.md` |
+| `modulo-combustible` | vertical | conocimiento del módulo Combustible (12/06/2026) — cargas de la flota (tabla viva `vehiculo_sobre`, **NO replicada a SQL**), conciliación por lote, consumos l/100km, saldos de estaciones (sin uso desde 2017). Doc detallado: `docs/PlanoFoxPro/combustible/COMBUSTIBLE.md` |
 | `modulo-vehiculos-choferes` | vertical | conocimiento del módulo Vehículos y Choferes (15/06/2026) — flota (`vehiculo`) y personal de conducción (`chofer`, `fletero`), tipos de vehículo, odómetros, siniestros, apercibimientos, capacitaciones, agenda de vencimientos. Una referencia por pantalla en `references/`. Trampas: `vehiculo_chofer` vacía, `chofer_log` no replicada, columnas truncadas. Choferes y Vehículos-Flota ya migrados (solo lectura) |
 | `blazor-performance` | horizontal | optimización de rendimiento en Blazor (16/06/2026) — lentitud, re-renders, `MudDataGrid`/`MudTable`/`Virtualize<T>`, memory leaks, paginación, `StateHasChanged` excesivo. Referencias: `mudblazor-performance.md`, `apexcharts-blazor.md` |
 | `testing-nortur` | horizontal | cómo testear/validar la app (29/06/2026) — smoke tests Playwright, capturas a demanda (`captura()` en `tests/helpers.ts`), validación de escritura de ABMs con **dos señales** (UI + `SELECT`), **protocolo de datos de prueba `ZZTEST`** sobre el servidor local (no ensuciar `replicaVPF`), dónde viven los errores en Blazor Server (lógica→server log, no browser). Complementa `abm-metrocar` (construir↔validar). Decisión registrada: `browser-tools-mcp` y la skill `browser-automation` descartadas |

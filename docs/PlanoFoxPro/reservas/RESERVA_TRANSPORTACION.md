@@ -25,7 +25,7 @@ Si "Servicio de varios días" está activo, en cambio, genera **una fila por dí
 (ida → vuelta) que comparten un mismo `id_viaje_i` (número interno de servicio de ruta).
 
 **No hay modo modificación en este form**: solo alta. La modificación de una reserva ya
-grabada se hace desde Tráfico (`trafico_zoom.scx`, ver `TRAFICO_ZOOM.md`).
+grabada se hace desde Tráfico (`trafico_zoom.scx`, ver `../trafico/TRAFICO_ZOOM.md`).
 
 ---
 

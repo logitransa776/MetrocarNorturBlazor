@@ -9,7 +9,7 @@ Registra las **cargas de combustible de la flota propia** (~8.000/año desde 201
 las concilia en **lotes/sobres** numerados contra los resúmenes de las estaciones, y calcula el
 **promedio de consumo** (litros cada 100 km) por vehículo vía odómetro.
 
-**Doc detallado (leer ANTES de codear):** `docs/logica-foxpro/COMBUSTIBLE.md`
+**Doc detallado (leer ANTES de codear):** `docs/PlanoFoxPro/combustible/COMBUSTIBLE.md`
 — menú completo, lógica método por método, validaciones, datos reales y trampas.
 
 ## ✅ vehiculo_sobre está replicada en el servidor activo (confirmado 12/06/2026)

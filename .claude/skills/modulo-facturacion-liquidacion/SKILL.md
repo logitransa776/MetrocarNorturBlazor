@@ -10,7 +10,7 @@ arma la liquidación (pre-factura interna), y marca los viajes como FACTURADO (v
 LIQUIDADO (pago a fletero). La factura fiscal real se hace FUERA del sistema y se anota
 a mano sobre la liquidación.
 
-**Doc detallado (leer ANTES de codear):** `docs/logica-foxpro/FACTURACION_LIQUIDACION.md`
+**Doc detallado (leer ANTES de codear):** `docs/PlanoFoxPro/facturacion/FACTURACION_LIQUIDACION.md`
 — menús completos, lógica método por método, validaciones, SQL real y datos de uso.
 
 ## Los 3 circuitos (y cuánto se usan — réplica 12/06/2026)
@@ -97,6 +97,12 @@ Catálogos con nombre cruzado: form "Bancos" (`ctacte_banco`) escribe **`liquida
    `liquidacion_resumen(_chofer)`, `liquidacion_chofer_mixto*`, `*_bk` — lista en doc §11.
 9. Strangler (skill `abm-metrocar`): todas las tablas del módulo tienen dueño FoxPro →
    **solo lectura desde Blazor** hasta migrar el ABM con puente inverso.
+10. **`CABECERA_KM` / `CABECERA_SERV` NO son servicios de transporte, son MODOS de
+    facturación** (por km / por servicio de cabecera; el destino real está en
+    `viaje.d_destino`/`h_destino`). Son ~90% del volumen de reservas. En cualquier informe
+    agrupado por servicio aplastan a los servicios reales → excluir por default (con opción
+    reversible). Ver memoria `cabeceras-no-son-servicios` y skill `blazor-nortur`
+    (§ Patrón de informe analítico → Trampa de negocio).
 
 ## Reportes FoxPro de referencia
 
@@ -184,13 +190,19 @@ Liquidación). DTOs `ViajeValorizadoRow` / `LiquidacionTotalesRow`.
   viajes PENDIENTES con la tarifa de hoy es correcto.
 
 **Pendiente del motor:** servicios 2º/3º, rutas (`id_viaje_i`), ajuste global manual (motivo),
-y el **Graba** real (requiere migrar la tabla con puente inverso + apagar el ABM FoxPro).
+y el **Graba** real — **programado como FASE 5 del plan Buslink**
+(`docs/buslink/PLAN_MIGRACION_BUSLINK.md`): `liquidacion`/`liquidacion_detalle` cambian de dueño el
+**día D** junto con el circuito `viaje` (NO antes — Facturación escribe `viaje.estado_via`
+y `cliente_grupo.f_grupo_fc`, es parte del circuito).
 
 ## Informes candidatos pendientes (orden sugerido)
 
 1. **Control pre-liquidación** — viajes FINALIZADOS con grupo vencido sin liquidar +
    errores de tarifa (con el motor ya migrado, ahora se pueden listar los S/TARIFA antes
    de liquidar — la info ya la devuelve `ValorizarGrupoAsync`).
-2. **Liquidación a clientes — modo escritura (Graba)** — la valorización en vivo YA está.
-   Falta solo el Graba: INSERT liquidacion+detalle, UPDATE viaje→FACTURADO, cierra el grupo,
-   en una transacción. Requiere migrar la tabla con puente inverso (regla strangler).
+2. **Liquidación a clientes — modo escritura (Graba)** — **Fase 5 del plan Buslink.**
+   La valorización en vivo YA está. El Graba: INSERT liquidacion+detalle, UPDATE
+   viaje→FACTURADO (todos los tramos si es ruta), cierra el grupo (`f_grupo_fc`), TODO en
+   una transacción (FoxPro no la tiene — mejora). Incluye el **Revertir corregido**
+   (limpiar `viaje.liquidacio` + reabrir grupo — asimetría del FoxPro que NO se replica) y
+   el test de cuadre con las últimas 3 liquidaciones reales.

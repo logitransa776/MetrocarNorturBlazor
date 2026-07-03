@@ -13,6 +13,14 @@ description: >
 # Blazor Performance Optimization Skill
 ## Stack objetivo: Blazor (.NET 10) + MudBlazor + ApexCharts + ApiWeb10 REST
 
+> **Referencias profundas incluidas en esta skill** (leer cuando el problema lo requiera):
+> - `references/mudblazor-performance.md` — MudDataGrid/MudTable avanzado, ServerData, virtualización
+> - `references/apexcharts-blazor.md` — configuración avanzada y updates eficientes de ApexCharts
+> - `references/apihttp-patterns.md` — patrones HTTP/caché para consumir APIs
+>
+> Casos reales resueltos en ESTE proyecto: `docs/performance/PERFORMANCE_GRILLAS_Y_CONEXION.md` (pooling +
+> Virtualize) y skill `modulo-trafico` §Performance (índices de `viaje`, `content-visibility`).
+
 ---
 
 ## 1. DIAGNÓSTICO RÁPIDO — Identificar el tipo de problema

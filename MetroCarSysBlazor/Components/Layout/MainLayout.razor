@@ -1080,6 +1080,31 @@
                 </div>
                 }
 
+                @if (Permisos.Tiene('S'))
+                {
+                @* ── SISTEMA ── (Sistema → Accesos del FoxPro: ABM de Usuarios y Permisos) *@
+                <div class="nav-section">
+                    <button class="nav-section__title @(_sistemaExpanded ? "nav-section__title--open" : "")"
+                            @onclick="() => _sistemaExpanded = !_sistemaExpanded">
+                        <MudIcon Icon="@Icons.Material.Filled.AdminPanelSettings" Size="Size.Small" Class="nav-section__icon" />
+                        <span>Sistema</span>
+                        <MudIcon Icon="@(_sistemaExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                 Size="Size.Small" Class="nav-section__chevron" />
+                    </button>
+                    @if (_sistemaExpanded)
+                    {
+                        <div class="nav-section__items">
+                            <a href="/usuarios-abm"
+                               class="nav-item @(Nav.Uri.Contains("usuarios-abm") ? "nav-item--active" : "")"
+                               @onclick="ToggleDrawer">
+                                <MudIcon Icon="@Icons.Material.Filled.ManageAccounts" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Usuarios y Permisos</span>
+                            </a>
+                        </div>
+                    }
+                </div>
+                }
+
             </nav>
         </div>
 
@@ -1157,6 +1182,7 @@
     private bool _combustibleExpanded = false;
     private bool _abmExpanded = false;
     private bool _utilitariosExpanded = false;
+    private bool _sistemaExpanded = false;
 
     // Submenús nivel 3 — Reservas
     private bool _plantillasExpanded = false;

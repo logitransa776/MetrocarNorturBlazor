@@ -1,0 +1,111 @@
+@inject IDialogService DialogService
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Drill-down del informe "Reservas por fecha y servicio": lista una-por-una las
+   reservas detrás de una celda (fecha × servicio) o de un día completo de la
+   tabla pivote. Solo lectura. Click en una fila → Zoom del Viaje (reuso).
+   Los datos llegan ya filtrados desde la página (sin query propia).
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.ManageSearch" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Detalle de reservas</span>
+            <span class="zoom-title-bar__nro">@Subtitulo</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <div class="d-flex align-center flex-wrap mb-2" style="gap:16px;">
+            <MudText Typo="Typo.body2" Style="color:#5B7290;">
+                <b style="color:#112F5B;">@Items.Count.ToString("#,0", _ar)</b> reservas ·
+                <b style="color:#112F5B;">@Items.Sum(i => i.Pax).ToString("#,0", _ar)</b> pax
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                Click en una fila para abrir el Zoom del Viaje
+            </MudText>
+        </div>
+
+        <MudTable Items="@Items" Dense="true" Hover="true" Striped="true"
+                  Virtualize="true" FixedHeader="true" Height="58vh"
+                  T="ReservaFsDetalleRow" OnRowClick="AbrirZoom"
+                  RowStyle="cursor:pointer;">
+            <HeaderContent>
+                <MudTh Style="white-space:nowrap;">Nº</MudTh>
+                <MudTh>Hora</MudTh>
+                <MudTh>Servicio</MudTh>
+                <MudTh>Cliente</MudTh>
+                <MudTh>Recorrido</MudTh>
+                <MudTh Style="text-align:right;">Pax</MudTh>
+                <MudTh>Estado</MudTh>
+                <MudTh Style="text-align:right;">Interno</MudTh>
+                <MudTh>Chofer</MudTh>
+                <MudTh>Grupo</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd Style="white-space:nowrap; color:#5B7290;">@context.IdViaje</MudTd>
+                <MudTd Style="white-space:nowrap;">@context.Hora</MudTd>
+                <MudTd Style="white-space:nowrap;">@context.Servicio</MudTd>
+                <MudTd Style="white-space:nowrap;">@context.Cliente</MudTd>
+                <MudTd>@context.Recorrido</MudTd>
+                <MudTd Style="text-align:right;">@(context.Pax == 0 ? "—" : context.Pax.ToString())</MudTd>
+                <MudTd>
+                    <span class="rfs-estado" style="@EstiloEstado(context.Estado)">@context.Estado</span>
+                </MudTd>
+                <MudTd Style="text-align:right;">@(context.Interno?.ToString() ?? "")</MudTd>
+                <MudTd Style="white-space:nowrap;">@context.Chofer</MudTd>
+                <MudTd Style="white-space:nowrap;">@context.Grupo</MudTd>
+            </RowTemplate>
+        </MudTable>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Subtitulo { get; set; } = "";
+    [Parameter] public List<ReservaFsDetalleRow> Items { get; set; } = new();
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    // Pill de estado: mismos semáforos que usa el resto del sistema
+    // (pendientes en ámbar/azul, cerrados en verde/azul noche, canceladas en rojo).
+    private static string EstiloEstado(string estado) => estado switch
+    {
+        "SIN ASIGNAR" => "background:#FEF3C7; color:#92400E;",
+        "ASIGNADO"    => "background:#DBEAFE; color:#1E40AF;",
+        "FINALIZADO"  => "background:#DCFCE7; color:#166534;",
+        "FACTURADO"   => "background:#E8EFF9; color:#112F5B;",
+        "CANCELADO"   => "background:#FEE2E2; color:#991B1B;",
+        _             => "background:#F1F5F9; color:#475569;"
+    };
+
+    private async Task AbrirZoom(TableRowClickEventArgs<ReservaFsDetalleRow> args)
+    {
+        if (args.Item is null) return;
+        var parametros = new DialogParameters<ZoomViajeDialog>
+        {
+            { x => x.IdViaje, args.Item.IdViaje },
+            { x => x.FReserva, args.Item.Fecha }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<ZoomViajeDialog>("Zoom del Viaje", parametros, opciones);
+    }
+
+    private void Cerrar() => MudDialog.Close();
+}

@@ -1364,6 +1364,51 @@ h1:focus {
 /* Ancho máximo */
 .zoom-viaje-dialog { max-width: 920px; }
 
+/* ── GPS embebido (Ubicar unidad / Recorrido en WEB en modal con iframe) ──
+   El mapa GPS (metrocar.nortur.ar) se muestra en un iframe a pantalla casi completa.
+   Sobreescribe el max-width chico del shell zoom y deja que el iframe llene el alto. */
+.gps-mapa-dialog.zoom-viaje-dialog { max-width: 70vw; }   /* ~30% más chico que pantalla completa */
+.gps-mapa-dialog .mud-dialog-content {
+    padding: 0 !important;            /* el iframe va pegado a los bordes */
+    overflow: hidden !important;
+}
+.gps-mapa-dialog__frame-wrap {
+    width: 100%;
+    height: 67vh;                     /* alto del mapa (+10% respecto de 57vh) */
+    background: #e8eaed;              /* gris suave mientras carga el mapa */
+}
+.gps-mapa-dialog__frame {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    display: block;
+}
+/* Barra azul compacta en UNA línea: recorrido del servicio + horario inline tras la unidad. */
+.gps-titlebar { width: 100%; }
+/* Borde azul más finito: menos padding arriba/abajo del título del modal GPS. */
+.gps-mapa-dialog .mud-dialog-title { padding: 2px 18px !important; }
+.gps-titlebar__sub-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: #ffffff;
+    font-size: 0.86rem;
+    font-weight: 700;                 /* negrita para que se lea mejor */
+}
+.gps-titlebar__sub-icon { font-size: 0.95rem !important; color: #F99410; }
+.gps-titlebar__sub-sep { color: rgba(255, 255, 255, 0.55); margin: 0 6px; }
+
+/* Botón ✕ de cerrar resaltado en naranja NORTUR (única forma de cerrar — ya no hay botón abajo). */
+.gps-titlebar__close {
+    color: #F99410 !important;
+    background: rgba(0, 0, 0, 0.28) !important;
+    margin: -4px -6px -4px 0;
+}
+.gps-titlebar__close:hover {
+    color: #ffb347 !important;
+    background: rgba(0, 0, 0, 0.5) !important;
+}
+
 /* ── Barra de título (fondo azul NORTUR) ── */
 .zoom-title-bar {
     display: flex;
@@ -2571,4 +2616,336 @@ h1:focus {
 @media print {
     .liq-comp, .liq-comp * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .liq-comp { font-size: 11px; }
+}
+
+/* ── ABM de Usuarios: botonera inferior más grande y destacada ── */
+.usr-toolbar {
+    gap: 10px;
+    padding: 10px 14px;
+}
+
+.usr-toolbar__btn {
+    font-weight: 700;
+    font-size: 0.86rem;
+    text-transform: none;
+    padding: 6px 18px;
+    border-radius: 8px;
+    letter-spacing: 0.2px;
+}
+
+.usr-toolbar__btn .mud-button-label {
+    font-weight: 700;
+}
+
+/* que los íconos acompañen el tamaño del texto */
+.usr-toolbar__btn .mud-icon-root {
+    font-size: 1.2rem;
+}
+
+/* ── ABM de Usuarios: grilla de los 16 permisos (UsuarioEditorDialog) ── */
+.usr-dialog { max-width: 760px; }
+
+.usr-perms {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2px 18px;
+}
+
+@media (max-width: 640px) {
+    .usr-perms { grid-template-columns: 1fr; }
+}
+
+.usr-perm {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 6px;
+    color: #5A6A88;
+}
+
+.usr-perm--on {
+    color: #112F5B;
+    font-weight: 600;
+    background: #EEF3FB;
+}
+
+.usr-perm__label { flex: 1; font-size: 0.82rem; }
+
+.usr-perm__letra {
+    font-family: monospace;
+    font-size: 0.72rem;
+    color: #9AA9C0;
+    background: #F1F5FB;
+    border: 1px solid #E2E9F4;
+    border-radius: 4px;
+    padding: 0 5px;
+    min-width: 18px;
+    text-align: center;
+}
+
+.usr-perm--on .usr-perm__letra {
+    color: #003AA0;
+    background: #DBEAFE;
+    border-color: #B9D2F5;
+}
+
+.usr-perms__hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.72rem;
+    color: #7A90AD;
+    font-style: italic;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Informe "Reservas por fecha y servicio" (rfs-*)
+   Barra de filtros horizontal compacta + tabla pivote con columna de fecha
+   fija, encabezado/pie pegajosos y celdas clickeables (drill-down).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.rfs-filtros {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    padding: 10px 16px 4px 16px;
+    border-radius: 14px;
+    border-left: 4px solid #003AA0;
+}
+
+/* Los inputs dense de MudBlazor traen margen top; en la barra los alineamos al centro */
+.rfs-filtros .mud-input-control {
+    margin-top: 0;
+}
+
+/* Desde/Hasta como par: gap chico entre ellos (el gap general de la barra es 14px) */
+.rfs-fechas {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.rfs-metrica .mud-radio-group,
+.rfs-metrica {
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+}
+
+/* Fila de KPIs: las tarjetas se reparten el ancho por igual, sean 4 o 5.
+   min-width:0 permite que el contenido con white-space:nowrap se ajuste sin desbordar. */
+.rfs-kpis {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.rfs-kpis > * {
+    flex: 1 1 0;
+    min-width: 180px;
+}
+
+/* El panel del calendario (modo Dialog) NO debe heredar el ancho del input (135px):
+   el .mud-picker-paper queda limitado a 135px y recorta el header + solo muestra 3 días.
+   Le damos su ancho natural (la calendar-container pide 310px). */
+.mud-picker-paper.mud-dialog {
+    min-width: 310px;
+    width: auto;
+}
+
+.mud-picker-paper.mud-dialog .mud-picker-datepicker-toolbar {
+    min-width: auto;
+    width: auto;
+}
+
+/* ── Tabla pivote ── */
+.rfs-tabla-wrap {
+    overflow: auto;
+    max-height: 560px;
+    border: 1px solid #E2E9F4;
+    border-radius: 10px;
+}
+
+.rfs-tabla {
+    border-collapse: separate;
+    border-spacing: 0;
+    width: 100%;
+    font-size: 0.78rem;
+    color: #2A3B52;
+}
+
+.rfs-tabla th,
+.rfs-tabla td {
+    padding: 5px 10px;
+    white-space: nowrap;
+    border-bottom: 1px solid #EDF2F9;
+    height: 30px;
+    box-sizing: border-box;
+}
+
+.rfs-tabla thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #F4F7FB;
+    color: #112F5B;
+    font-weight: 700;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+    text-align: right;
+    border-bottom: 2px solid #D7E2F2;
+}
+
+.rfs-tabla tbody tr:hover td {
+    background: #F0F5FC;
+}
+
+.rfs-col-fecha {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: #fff;
+    font-weight: 600;
+    color: #112F5B;
+    text-align: left !important;
+    border-right: 1px solid #E2E9F4;
+}
+
+.rfs-tabla thead th.rfs-col-fecha,
+.rfs-tabla thead th:first-child {
+    left: 0;
+    z-index: 3;
+    background: #F4F7FB;
+    text-align: left;
+}
+
+.rfs-tabla tbody tr:hover td.rfs-col-fecha {
+    background: #F0F5FC;
+}
+
+.rfs-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.rfs-cero {
+    color: #C6D2E2;
+    text-align: center;
+}
+
+.rfs-finde {
+    color: #B45309;
+}
+
+.rfs-click {
+    cursor: pointer;
+}
+
+.rfs-tabla td.rfs-click:hover {
+    background: #DBEAFE;
+    color: #003AA0;
+    font-weight: 700;
+}
+
+.rfs-tabla th.rfs-click:hover {
+    background: #E3ECF8;
+    color: #003AA0;
+}
+
+.rfs-th-total,
+.rfs-tot {
+    font-weight: 800;
+    color: #112F5B;
+}
+
+.rfs-tabla tfoot td {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    background: #EEF3FA;
+    border-top: 2px solid #D7E2F2;
+    border-bottom: none;
+}
+
+.rfs-tabla tfoot td.rfs-col-fecha {
+    z-index: 3;
+    background: #EEF3FA;
+}
+
+.rfs-grantot {
+    color: #003AA0;
+    font-size: 0.85rem;
+}
+
+/* ── Pill de estado (drill-down) ── */
+.rfs-estado {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+/* ── Cross-filter / foco (estilo Power BI) ── */
+/* Chip que anuncia el servicio enfocado + botón para quitarlo. */
+.rfs-focus {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px 6px 12px;
+    background: #EFF5FF;
+    border: 1px solid #CBDCF5;
+    border-left: 4px solid #003AA0;
+    border-radius: 10px;
+}
+
+.rfs-focus__lbl {
+    font-size: 0.8rem;
+    color: #4A6280;
+    font-weight: 600;
+}
+
+.rfs-focus__val {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 8px;
+    color: #fff;
+    font-weight: 800;
+    font-size: 0.8rem;
+    letter-spacing: 0.01em;
+    /* el background lo pone inline el color del servicio */
+}
+
+/* Columna enfocada de la tabla: header y total resaltados. */
+.rfs-tabla th.rfs-th-foco {
+    background: #003AA0;
+    color: #fff;
+}
+
+.rfs-tabla tfoot td.rfs-col-foco {
+    background: #DBEAFE;
+    color: #003AA0;
+}
+
+/* Celdas de columnas NO enfocadas: atenuadas cuando hay un foco activo. */
+.rfs-tabla td.rfs-atenua {
+    opacity: 0.32;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Informe "Reservas por banda horaria" (rbh-*)
+   Reusa toda la maquinaria de la tabla pivote de rfs-*; solo agrega el punto de
+   color de cada banda en el encabezado de columna (mismo color que el gráfico).
+   ═══════════════════════════════════════════════════════════════════════════ */
+.rbh-legend-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    margin-right: 5px;
+    vertical-align: baseline;
 }

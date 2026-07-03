@@ -355,7 +355,7 @@ dependen del combustible.
 
 | Tabla | Filas (DBF vivo) | Réplica SQL | Notas / trampas |
 | --- | --- | --- | --- |
-| **`vehiculo_sobre`** | 108.957 | ❌ **FALTA** | La tabla viva. `n_sobre` = lote (0 = sin conciliar), `idrubro`, `f_pago` C(30) texto libre, `lleno` L, `dos_carga`, `hora` C(5) "HH:mm", auditoría `u_create/f_create/u_modify/f_modify`. `p_x_ltr` derivado = importe/litros |
+| **`vehiculo_sobre`** | 108.957 | ✅ **SÍ en 172.25.69.217** (109.624 filas, confirmado 12/06/2026 — el gap era solo del servidor viejo) | La tabla viva. `n_sobre` = lote (0 = sin conciliar), `idrubro`, `f_pago` C(30) texto libre, `lleno` L, `dos_carga`, `hora` C(5) "HH:mm", auditoría `u_create/f_create/u_modify/f_modify`. `p_x_ltr` derivado = importe/litros |
 | `vehiculo_combustible` | 37.123 | ✅ 36.142 | Congelada 2016 (era 1). `n_sobre` existe pero casi sin uso; `lleno` C(1); sin auditoría |
 | `vehiculo_estacion_saldo` | 961 (787 SQL) | ✅ | Depósitos 2013–2017. Egresos = importe negativo. `empresa` (histórico NORTUR; el fuente actual hardcodea "PATAGONIA") |
 | `vehiculo_combustible_precio` | 376 (363 SQL) | ✅ | Precio × estación × `tipo_comb` × vigencia (2013–2017, sin uso) |
@@ -370,8 +370,9 @@ dependen del combustible.
 
 ## 10. Reglas de oro y trampas para la migración
 
-1. **Paso 0: replicar `vehiculo_sobre`** — sin eso no hay ningún informe de combustible
-   posible en Blazor. Pedir que se agregue al job de réplica DBF→SQL.
+1. ~~Paso 0: replicar `vehiculo_sobre`~~ — ✅ **RESUELTO (12/06/2026)**: la tabla ya está
+   replicada en el servidor nuevo (172.25.69.217) con datos al día. El gap era solo del
+   servidor viejo (DESKTOP-CV6LF0O). Los informes se pueden construir ya (ver §0).
 2. **No mezclar eras**: histórico ≤2013 en `vehiculo_combustible` (replicada), 2013+ en
    `vehiculo_sobre`. Un dashboard histórico completo debe unir las dos con cuidado
    (campos distintos: `lleno` C/L, `hora` T/C, sin/con auditoría).
@@ -411,7 +412,7 @@ conciliador), `vehiculo_combustible_consumo.frx` (promedio de consumos, también
 
 ## 12. Candidatos a informes Blazor (orden sugerido)
 
-0. **Replicar `vehiculo_sobre` a SQL** (prerrequisito de todo lo demás).
+0. ~~Replicar `vehiculo_sobre` a SQL~~ ✅ hecho (ya está en el servidor nuevo, ver §0).
 1. **Dashboard de Consumos**: litros/100 km por vehículo (entre cargas LLENO), ranking de
    la flota, evolución mensual, costo por km — mejora directa del Promedio de Consumos.
 2. **Control de cargas**: días sin cargar por vehículo activo (réplica de

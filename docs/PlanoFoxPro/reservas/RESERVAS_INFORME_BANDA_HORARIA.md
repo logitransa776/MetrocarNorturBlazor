@@ -49,7 +49,34 @@ cursor `trafico_informe`; el botón **análisis** agrupa
 ABM mínimo (`trafico_resumen_horario_banda*.scx`): alta y baja de bandas
 (dhorario/hhorario char(5)). Sin validación de solapamiento.
 
-## Para la versión Blazor (Informe 2)
+## ✅ Migrado a Blazor (02/07/2026) — `ReservasBandaHoraria.razor`
+
+Rearmado con el mismo formato que **Reservas por fecha y servicio** (barra de filtros
+horizontal arriba, KPIs flex, gráficos ApexCharts sin animación, tabla pivote sticky +
+`Virtualize` + drill-down + Excel multi-hoja). Decisiones tomadas con el usuario:
+
+- **Filtro de Estados** (multiselect de los 5, igual que fecha/servicio). **Default = todos
+  MENOS CANCELADO** (así el número por defecto reproduce el FoxPro, que hardcodea
+  `estado <> CANCELADO`, pero el usuario puede sumar cancelados o acotar a SIN ASIGNAR/ASIGNADO).
+  Corrige el subtítulo viejo, que decía "SIN ASIGNAR / ASIGNADO" pero contaba todo lo no cancelado.
+- **Toggle Viajes / Pax** (recálculo en memoria, sin re-query — la query agregada trae
+  `COUNT(*)` y `SUM(pax)` juntos).
+- **Drill-down**: click en celda / total de fila / encabezado o total de columna abre
+  `ReservasFsDetalleDialog` (reuso del informe de fecha/servicio) con los viajes uno por uno →
+  click en fila → Zoom del Viaje.
+- **Origen** sigue fijo en `'T'` (transportación), como el FoxPro. El 'P' (plantilla) queda
+  afuera — no se implementó el combo muerto (decisión: no agrega valor operativo hoy).
+- Clasificación de banda por `CAST(hs_inicio AS TIME)` con `BETWEEN` de strings "HH:mm"
+  (bordes inclusivos) — idéntica al FoxPro. Fragmento SQL compartido (`BandaCaseSql`) entre la
+  vista agregada (`GetReservasPorBandaHorariaAsync`) y el detalle (`GetReservasBandaHorariaDetalleAsync`)
+  para que ambas den la misma banda.
+
+Validado al dígito (período 02/06–02/07/2026, todos menos cancelado): 339 viajes / 8.755 pax;
+por banda 15/17/54/145/33/75 viajes.
+
+---
+
+## Lógica original FoxPro (referencia)
 
 1. Replicar el conteo con un solo GROUP BY:
    ```sql

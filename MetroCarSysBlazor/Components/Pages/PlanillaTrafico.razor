@@ -621,11 +621,14 @@ else
         <MudMenuItem Icon="@Icons.Material.Filled.MyLocation"
                      Disabled="@(_filaCtx is null || UnidadGps(_filaCtx) is null)"
                      OnClick="UbicarUnidadGps">Ubicar unidad</MudMenuItem>
+        @* "Recorrido en WEB" — solo habilitado para viajes de los últimos 45 días Y con unidad
+           de la flota NORTUR (código NT####), que son las que tienen GPS propio con histórico
+           de recorrido. Fuera de ese rango / fletero externo → el GPS no tiene el dato. *@
         <MudMenuItem Icon="@Icons.Material.Filled.Map"
-                     Disabled="@(_filaCtx is null || UnidadGps(_filaCtx) is null)"
+                     Disabled="@(_filaCtx is null || !RecorridoWebHabilitado(_filaCtx))"
                      OnClick="RecorridoWebGps">Recorrido en WEB</MudMenuItem>
         <MudDivider />
-        <MudMenuItem Icon="@Icons.Material.Filled.Refresh" Disabled="true">Refresh</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.Refresh" Disabled="true" style="display:none">Refresh</MudMenuItem>
         @* "Novedad sobre el viaje" — SOLO LECTURA: el FoxPro daba de alta una novedad en
            `libro_novedad`; acá listamos las novedades ya cargadas de ese viaje (la escritura
            sigue en FoxPro). Diálogo NovedadViajeDialog. *@
@@ -652,8 +655,8 @@ else
             <MudMenuItem Icon="@Icons.Material.Filled.AltRoute" OnClick="@(() => FiltrarReservaRuta())">Nº Reserva En Ruta</MudMenuItem>
         </MudMenu>
         <MudDivider />
-        <MudMenuItem Icon="@Icons.Material.Filled.Print" Disabled="true">Imprimir ▸</MudMenuItem>
-        <MudMenuItem Icon="@Icons.Material.Filled.GridOn" Disabled="true">Exportar a Excel ▸</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.Print" Disabled="true" style="display:none">Imprimir ▸</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.GridOn" Disabled="true" style="display:none">Exportar a Excel ▸</MudMenuItem>
         <MudDivider />
         <MudMenuItem Icon="@Icons.Material.Filled.EditNote" Disabled="true">Mantenimiento Viajes ▸</MudMenuItem>
         @* "Lista de pasajeros" — SOLO LECTURA: muestra la planilla CNRT del viaje si está
@@ -661,7 +664,7 @@ else
            ListaPasajerosDialog. La carga/impresión sigue en FoxPro. *@
         <MudMenuItem Icon="@Icons.Material.Filled.People" OnClick="VerListaPasajerosContexto">Lista de pasajeros</MudMenuItem>
         <MudMenuItem Icon="@Icons.Material.Filled.History" OnClick="VerHistorialContexto">Historia del viaje</MudMenuItem>
-        <MudMenuItem Icon="@Icons.Material.Filled.ContentCopy" Disabled="true">Copiar Cronogramas</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.ContentCopy" Disabled="true" style="display:none">Copiar Cronogramas</MudMenuItem>
         @* Ver Datos Extras — submenú anidado (réplica del popup "verdatosex" de trafico2.scx).
            Abre la ficha de solo lectura del Vehículo / Cliente / Chofer de la fila clickeada,
            reusando los diálogos que ya existen (VehiculoDetalleDialog / ClienteDetalleDialog /
@@ -1445,26 +1448,46 @@ else
     }
 
     // Ubicar unidad → movil.aspx (cTipo_consulta = "UBICAR" en el FoxPro).
+    // Antes abría una pestaña nueva (AbrirGps); ahora muestra el GPS embebido en un modal
+    // (GpsMapaDialog) dentro de la misma app, sin salir a otra pestaña.
     private async Task UbicarUnidadGps()
     {
         if (_filaCtx is null) return;
         var unidad = UnidadGps(_filaCtx);
         if (unidad is null) { await AvisarSinGps(); return; }
         var url = $"{GpsBaseUrl}/movil.aspx?cod={GpsCod}&int={Uri.EscapeDataString(unidad)}";
-        await AbrirGps(url);
+        await AbrirGpsEnDialog(url, "Ubicación de la unidad", unidad, Icons.Material.Filled.LocationOn);
+    }
+
+    // Ventana de días hacia atrás en que el GPS conserva el histórico de recorrido de la unidad.
+    private const int RecorridoWebDiasAtras = 45;
+
+    // "Recorrido en WEB" se habilita solo si la fila cumple las dos condiciones:
+    //   1) la fecha del viaje está dentro de los últimos 45 días (el GPS no guarda más histórico);
+    //   2) la unidad es de la flota NORTUR (código NT####) — las únicas con GPS propio.
+    private static bool RecorridoWebHabilitado(PlanillaTraficoRow f)
+    {
+        var unidad = UnidadGps(f);
+        if (unidad is null) return false;
+        if (!unidad.StartsWith("NT", StringComparison.OrdinalIgnoreCase)) return false;
+        var hoy = DateOnly.FromDateTime(DateTime.Today);
+        return f.Fecha >= hoy.AddDays(-RecorridoWebDiasAtras) && f.Fecha <= hoy;
     }
 
     // Recorrido en WEB → Maps.aspx (cTipo_consulta = "RECORRIDO"). Pasa desde/hasta como
     // hs_inicio/hs_fin en formato YYYYMMDDHHMMSS (Ttoc(...,1) del FoxPro); hs_fin vacío → ahora.
+    // Igual que Ubicar unidad, ahora se muestra embebido en un modal (no abre pestaña nueva).
     private async Task RecorridoWebGps()
     {
         if (_filaCtx is null) return;
+        if (!RecorridoWebHabilitado(_filaCtx)) return;   // guarda: el menú ya lo deshabilita
         var unidad = UnidadGps(_filaCtx);
         if (unidad is null) { await AvisarSinGps(); return; }
         var desde = FmtGps(_filaCtx.HsInicio ?? DateTime.Now);
         var hasta = FmtGps(_filaCtx.HsFin ?? DateTime.Now);
         var url = $"{GpsBaseUrl}/Maps.aspx?cod={GpsCod}&int={Uri.EscapeDataString(unidad)}&desde={desde}&hasta={hasta}";
-        await AbrirGps(url);
+        await AbrirGpsEnDialog(url, "Unidad", unidad, Icons.Material.Filled.Map,
+            recorrido: _filaCtx.Recorrido, hsInicio: _filaCtx.HsInicio, hsFin: _filaCtx.HsFin);
     }
 
     // Formato de fecha/hora que espera el sitio GPS (igual a Ttoc(dt,1) de FoxPro): YYYYMMDDHHMMSS.
@@ -1477,6 +1500,36 @@ else
         if (!ok)
             await JS.InvokeVoidAsync("alert",
                 "El navegador bloqueó la ventana del GPS. Habilitá las ventanas emergentes para este sitio e intentá de nuevo.");
+    }
+
+    // Opciones del modal del GPS: ancho extra grande, casi pantalla completa, para que el
+    // mapa embebido se vea cómodo. Se cierra con Esc o con el botón ✕ de la barra.
+    private static readonly DialogOptions GpsDialogOptions = new()
+    {
+        MaxWidth = MaxWidth.ExtraExtraLarge,
+        FullWidth = true,
+        CloseButton = false,
+        CloseOnEscapeKey = true
+    };
+
+    // Muestra el GPS embebido en un modal (iframe) dentro de la misma app, en vez de abrir
+    // una pestaña nueva. La URL ya viene armada y validada por quien llama. Recorrido/horarios
+    // son opcionales: solo "Recorrido en WEB" los pasa (se ven en la sublínea de la barra azul);
+    // "Ubicar unidad" los deja en null y la barra queda en una sola línea.
+    private async Task AbrirGpsEnDialog(string url, string titulo, string? unidad, string icono,
+        string? recorrido = null, DateTime? hsInicio = null, DateTime? hsFin = null)
+    {
+        var parametros = new DialogParameters<GpsMapaDialog>
+        {
+            { x => x.Url, url },
+            { x => x.Titulo, titulo },
+            { x => x.Unidad, unidad },
+            { x => x.Icono, icono },
+            { x => x.Recorrido, recorrido },
+            { x => x.HsInicio, hsInicio },
+            { x => x.HsFin, hsFin }
+        };
+        await DialogService.ShowAsync<GpsMapaDialog>(titulo, parametros, GpsDialogOptions);
     }
 
     // Réplica del MessageBox del FoxPro cuando el servicio no tiene unidad/cronograma válidos.

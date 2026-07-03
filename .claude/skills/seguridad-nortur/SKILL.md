@@ -12,7 +12,7 @@ description: >
 # Seguridad NORTUR — permisos del Metrocar en Blazor
 
 > Fuente primaria: `login.scx`, `usuario_abm.scx`, `MENU_PRINCIPAL.MPR` (código FoxPro real).
-> Doc completa: `docs/logica-foxpro/USUARIO_ACCESOS.md`.
+> Doc completa: `docs/PlanoFoxPro/sistema/USUARIO_ACCESOS.md`.
 > Extraído: 11/06/2026.
 
 ## Los 3 mecanismos de permisos
@@ -179,12 +179,16 @@ Las letras disponibles no usadas en el fuente: `E` (estadísticas, muerto), `P`,
 - [x] `TableroAlertas` (vencimientos) solo con letra `V` — como el post-login FoxPro
 - [x] Guards de ruta: `/planilla-trafico` exige `T`, `/reservas-*` exigen `R`;
       sin módulo → redirect a `/` (Home muestra aviso si no tiene ninguno)
-- [ ] **Regla `F` — ocultar columnas de importe** (pendiente implementar)
+- [ ] **Regla `F` — ocultar columnas de importe** — 🔴 **AHORA ES PRERREQUISITO DE FASE 0
+      del plan Buslink** (`docs/buslink/PLAN_MIGRACION_BUSLINK.md`): hoy el Zoom muestra precios a
+      TODOS, y el Zoom en edición + el "Valor Especial" de Reservas dependen de este permiso.
+      Primera entrega de código de la migración (chica e independiente).
       En cualquier componente con columnas de importe/precio/moneda/sin cargo/porcentaje,
       envolver en `@if (Permisos.Tiene('F')) { ... }`. Afecta:
       - Zoom del Viaje (campos importe, moneda, sin_cargo, porcentaje)
       - Reportes de reservas con columna de importe/precio
       - Cualquier grilla que muestre datos financieros
+      Matriz de prueba: DAMIAN (`TCVLA`, sin F) y LUCIO (`TVM`, sin F) no deben ver importes.
       **Patrón exacto:**
       ```razor
       @inject IPermissionService Permisos
@@ -193,7 +197,13 @@ Las letras disponibles no usadas en el fuente: `E` (estadísticas, muerto), `P`,
           <MudTableColumn T="ViajeDto" Field="@nameof(ViajeDto.Importe)" Title="Importe" />
       }
       ```
-- [ ] ABM de usuarios en Blazor (prioridad baja — FoxPro lo maneja)
+- [x] **ABM de usuarios en Blazor — HECHO (01/07/2026), primer ABM de escritura del proyecto.**
+      Página `UsuariosAbm.razor` (`/usuarios-abm`, guard `'S'`) + dialog `UsuarioEditorDialog.razor`
+      (4 modos) + `AbmService` (escritura) + `PermisosCatalogo` (las 16 letras en orden fijo con sus
+      reglas). Menú: sección **Sistema** en el drawer, solo con `'S'`. Escribe en el server local
+      (sync de `usuario` apagada). El mapa checkbox→letra de esta skill quedó materializado en
+      `Services/PermisosCatalogo.cs` (fuente única). Reglas C→T y X→SUPERVISOR implementadas en vivo.
+      Detalle completo y trampas: skill `abm-metrocar` (§ Primer ABM de escritura).
 
 > **Al crear una página nueva (checklist de seguridad):**
 > 1. Inyectar `@inject IPermissionService Permisos`

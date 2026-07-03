@@ -28,7 +28,7 @@ La réplica actual es **unidireccional**: FoxPro escribe DBF → un proceso sinc
 ## El patrón FoxPro (los 73 `*_abm.scx` son TODOS iguales)
 
 Dos forms por entidad — extraer siempre el real con la skill `foxpro-extract` y documentarlo
-en `docs/logica-foxpro/<FORM>_ABM.md` antes de codear, pero la estructura es:
+en `docs/PlanoFoxPro/<FORM>_ABM.md` antes de codear, pero la estructura es:
 
 **Form lista** (`zona.scx`): grilla + botones con permiso por dígito de `cNivel`:
 `"2" $ cNivel` → Agregar, `"3"` → Modificar, `"4"` → Eliminar; sin permiso →
@@ -68,7 +68,7 @@ Detalles que no son negociables (los datos históricos y FoxPro dependen de esto
 
 ## Checklist por cada ABM nuevo (en orden)
 
-1. Extraer la lógica FoxPro (`foxpro-extract`) → `docs/logica-foxpro/<FORM>_ABM.md`.
+1. Extraer la lógica FoxPro (`foxpro-extract`) → `docs/PlanoFoxPro/<FORM>_ABM.md`.
 2. Métodos en `AbmService` (alta con chequeo duplicado / modifica / baja lógica).
 3. Página lista + MudDialog de edición.
 4. Permisos por usuario (niveles 2/3/4).
@@ -80,10 +80,73 @@ Detalles que no son negociables (los datos históricos y FoxPro dependen de esto
 
 ## Estado
 
-- **Ningún ABM de escritura implementado todavía.** Al construir el primero (sugerido:
-  `zona`, el más simple), guardar la página y el dialog resultantes como plantillas en
-  `assets/` de esta skill y anotar acá las lecciones — esta skill mejora con cada ABM
-  (principio: cada corrección se guarda en la skill, no se repite en el chat).
+### ✅ Primer ABM de escritura: USUARIOS Y PERMISOS (01/07/2026)
+
+El **primer ABM con escritura real** del proyecto (alta/baja/modificación en la tabla
+`usuario` de `replicaVPF` local). Estrenó la capa de escritura. **Plantilla para los ABMs siguientes.**
+
+| Pieza | Archivo |
+|---|---|
+| Capa de escritura (nueva) | `Services/AbmService.cs` — INSERT/UPDATE con `SqlParameter` + transacción |
+| Catálogo de permisos | `Services/PermisosCatalogo.cs` — 16 letras en orden fijo + `Construir()`/`Tiene()` |
+| Lectura | `ReportService.GetUsuariosAsync` / `GetUsuarioDetalleAsync` + DTOs `UsuarioListaRow`/`UsuarioDetalleDto` |
+| Página lista | `Components/Pages/UsuariosAbm.razor` (`/usuarios-abm`) — botonera Agregar/Modificar/Eliminar/Ver **habilitada** |
+| Dialog editor | `Components/Shared/UsuarioEditorDialog.razor` — **un solo dialog, 4 modos** `ver`/`alta`/`modifica`/`baja` (calca `usuario_abm.scx`) |
+| Menú | `MainLayout.razor` → sección **Sistema** (guard `Permisos.Tiene('S')`) |
+| CSS | `usr-*` en `app.css` (grilla de permisos del dialog) |
+
+**Patrón `AbmService` (calcar):** ctor recibe `IDbContextFactory<NorturDbContext>` + `ReportService`.
+Cada op: abre `SqlConnection`, `BeginTransactionAsync`, valida (duplicado dentro de la tx),
+ejecuta con `SqlParameter`, `CommitAsync`, y al final `_reports.InvalidarCacheAbm()`. Devuelve un
+`record AbmResult(bool Ok, string? Error, int? Id)`. El dialog cierra con `MudDialog.Close(DialogResult.Ok(true))`
+si grabó; la lista recarga si `res.Data is bool grabo && grabo`.
+
+**Dialog multi-modo (calcar):** params `[Parameter] Modo` (string) + `[Parameter] Id` (int).
+Propiedades `EsAlta/EsModifica/EsBaja/SoloLectura/SoloEscritura` derivadas del modo. En `alta` la
+PK es editable; en el resto solo lectura. El botón de grabar cambia según modo.
+
+**Lecciones (trampas resueltas):**
+- **`usuario.id` NO es identity** → el alta calcula `SELECT ISNULL(MAX(id),0)+1`. Verificar
+  `COLUMNPROPERTY(OBJECT_ID('tabla'),'id','IsIdentity')` antes de asumir identity en cualquier tabla.
+- **`password` es `nvarchar(15)`** → texto plano, un hash no entra. Se mantiene plano (consistente
+  con el login FoxPro y el Blazor actual). En modifica, password en blanco = "no cambiar".
+- **`acceso` es `nvarchar(15)`** pero hay 16 letras posibles → validar longitud ≤ 15 al grabar.
+- **Doble capa de borrado**: la baja lógica toca `f_delete` (negocio → amarillo), NO `_deleted`
+  (metadata réplica). El INSERT setea `_deleted=0` explícito.
+- **`nivel` fijo `"12345"`** en el INSERT (no se expone en la UI).
+- **Reglas de permisos en vivo** (del `usuario_abm.scx`): 'C' (Avisos) se deshabilita si no está
+  'T'; al destildar 'T' cae 'C'. 'X' (Tablero) solo lo tilda el SUPERVISOR. Modeladas como flags
+  en `PermisosCatalogo.Permiso` (`DependeDeTrafico`, `SoloSupervisor`).
+- **Defensa anti-autobloqueo** (valor sobre FoxPro): no quitarse 'S' a uno mismo, no darse de baja
+  a uno mismo; no dar de baja a SUPERVISOR (esto último ya en FoxPro).
+- **Validación sin poder invocar el AbmService desde afuera**: se ejecutó el MISMO SQL que genera
+  el service sobre `ZZTEST01` (alta/modifica/baja/anti-dup) con dos señales y DELETE físico al
+  final. El orden del string `acceso` se validó aparte (entrada desordenada → orden fijo `SRTCDVLFAEUBHXNM`).
+- **Label largo en `zoom-field--1` se solapa** con el campo contiguo → dar `--2` o acortar el label.
+
+**Falta para producción real:** hoy escribe en el server local (sync de `usuario` apagada).
+`CambiarPasswordAsync` existe en `AbmService` pero sin UI dedicada (se cambia dentro de "modifica").
+Antes de ir al server nuevo: bloquear el ABM de usuarios en FoxPro + confirmar sync apagada allá.
+
+### Roadmap de ABMs — lo fija el plan Buslink (02/07/2026)
+
+El orden de los ABMs ya NO se decide ad-hoc: está definido en **`docs/buslink/PLAN_MIGRACION_BUSLINK.md`**
+(el plan de migración del circuito `viaje` hacia Buslink, nombre nuevo del sistema).
+
+- **Grupo A — catálogos con cutover temprano** (bloqueo FoxPro + sync off al terminar cada uno):
+  `viaje_motivo_cancela` → `feriado` → `destino` → `cliente_operador` → `cliente`.
+  Cada uno calca `UsuariosAbm.razor` + `UsuarioEditorDialog.razor` + métodos en `AbmService`.
+- **Grupo B — se CONSTRUYEN antes pero cambian de dueño el día D** (el circuito FoxPro las
+  escribe hasta el corte — apagar su sync antes perdería escrituras): `guia`, `cliente_grupo`,
+  `chofer_franco`, `reserva_plantilla`.
+- **El circuito `viaje`** (Reservas alta + Tráfico operación + Facturación Graba) NO es CRUD:
+  es workflow → motor `ViajeAbmService` + día D único. Ver el plan y la skill `modulo-trafico`
+  (`references/ESCRITURA_CIRCUITO.md`).
+
+Regla operativa del grupo A: desde su cutover, las altas nuevas viven SOLO en SQL y FoxPro no
+las ve → cortar `cliente`/`destino` lo más cerca posible del día D.
+
+Anotar acá las lecciones de cada ABM nuevo — esta skill mejora con cada uno.
 
 ### Vistas de solo lectura ya migradas (plantilla para los ABMs futuros)
 

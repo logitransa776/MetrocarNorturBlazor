@@ -19,16 +19,18 @@ Las tres insertan con `estado_viaje = 'SIN ASIGNAR'` y `cronograma = cronogram2 
 
 ## Documentación detallada por pantalla (leer ANTES de codear cada ABM)
 
-| Doc en `docs/logica-foxpro/` | Cubre | Form FoxPro |
+| Doc en `docs/PlanoFoxPro/` (carpetas por módulo desde 02/07/2026; índice: `README.md`) | Cubre | Form FoxPro |
 | --- | --- | --- |
-| `RESERVA_TRANSPORTACION.md` | alta manual: validaciones, multiplicación días×servicios, varios días (ruta), grupos, guías, valor especial (permiso "F"), adicionales, INSERT completo | `reserva_transportacion_con_adicional.scx` + 4 subdialogs |
-| `RESERVA_PLANTILLAS.md` | ciclo completo de plantillas: crear, mantener (ABM/renombrar/duplicar), **armar** (generación por días+feriados+lote), cabecera de 16 posiciones, E/S | `reserva_plantilla_crear/_mantenimiento/_mantenimiento_abm/_mantenimiento_nombre/_armar.scx` |
-| `CLIENTE_ABM.md` | catálogo cliente: CUIT, precios (ob_precio/lista/tarifa), flags operativos (pide_pax, voucher, bus24, GPS), rubros excluidos, baja lógica con fecha | `cliente.scx` + `cliente_abm.scx` |
-| `CLIENTE_GRUPO_ABM.md` | grupos: candado f_grupo_fc, baja = cancelación masiva con motivo, renombre/cambio de cliente con arrastre a viaje | `cliente_grupo.scx` + `cliente_grupo_abm.scx` |
-| `CLIENTE_OPERADOR_ABM.md` | operadores por cliente (baja física, id global) | `cliente_operador*.scx` |
-| `DESTINO_ABM.md` | destinos: autocomplete, mas100km, distrito, bug del contacto | `destino*.scx` |
-| `IMPORTA_EXCEL_VIAJE.md` | importación: 28 columnas, 3 etapas de validación, transacción, adicionales INLINE | `importa_excel_viaje.scx` |
-| `RESERVAS_INFORME_BANDA_HORARIA.md` | Informe 2 (pendiente en Blazor): conteo por fecha×banda×vehículo, SQL listo | `trafico_resumen_horario*.scx` |
+| `reservas/RESERVA_TRANSPORTACION.md` | alta manual: validaciones, multiplicación días×servicios, varios días (ruta), grupos, guías, valor especial (permiso "F"), adicionales, INSERT completo | `reserva_transportacion_con_adicional.scx` + 4 subdialogs |
+| `reservas/RESERVA_PLANTILLAS.md` | ciclo completo de plantillas: crear, mantener (ABM/renombrar/duplicar), **armar** (generación por días+feriados+lote), cabecera de 16 posiciones, E/S | `reserva_plantilla_crear/_mantenimiento/_mantenimiento_abm/_mantenimiento_nombre/_armar.scx` |
+| `catalogos/CLIENTE_ABM.md` | catálogo cliente: CUIT, precios (ob_precio/lista/tarifa), flags operativos (pide_pax, voucher, bus24, GPS), rubros excluidos, baja lógica con fecha | `cliente.scx` + `cliente_abm.scx` |
+| `catalogos/CLIENTE_GRUPO_ABM.md` | grupos: candado f_grupo_fc, baja = cancelación masiva con motivo, renombre/cambio de cliente con arrastre a viaje | `cliente_grupo.scx` + `cliente_grupo_abm.scx` |
+| `catalogos/CLIENTE_OPERADOR_ABM.md` | operadores por cliente (baja física, id global) | `cliente_operador*.scx` |
+| `catalogos/DESTINO_ABM.md` | destinos: autocomplete, mas100km, distrito, bug del contacto | `destino*.scx` |
+| `catalogos/GUIA_ABM.md` (02/07/2026) | guías: ABM manual + upsert automático desde reservas; baja FÍSICA pese a `f_delete`; el alta no graba `f_create` ni `id_guia` | `guia.scx` + `guia_abm.scx` |
+| `catalogos/FERIADO_ABM.md` (02/07/2026) | feriados: ABM inline, baja física por fecha; 🚨 hoy 0 feriados 2026 cargados | `feriado.scx` + `feriado_ver.scx` |
+| `reservas/IMPORTA_EXCEL_VIAJE.md` | importación: 28 columnas, 3 etapas de validación, transacción, adicionales INLINE | `importa_excel_viaje.scx` |
+| `reservas/RESERVAS_INFORME_BANDA_HORARIA.md` | Informe 2 (✅ migrado — `ReservasBandaHoraria.razor`): conteo por fecha×banda×vehículo | `trafico_resumen_horario*.scx` |
 
 ## Tablas del módulo (nombres SQL reales — truncados a 10 chars)
 
@@ -84,23 +86,27 @@ Las tres insertan con `estado_viaje = 'SIN ASIGNAR'` y `cronograma = cronogram2 
 ## Qué ya está migrado en Blazor (NO rehacer)
 
 - **Informe 1** Reservas por fecha y servicio: `ReservasFechaServicio.razor`.
-- **Informe 2** banda horaria: página `ReservasBandaHoraria.razor` (en curso — la lógica
-  FoxPro exacta está en `RESERVAS_INFORME_BANDA_HORARIA.md` con el SQL listo).
+- **Informe 2** banda horaria: `ReservasBandaHoraria.razor` — **ACTIVO** en
+  `/reservas-banda-horaria` (link vivo en el drawer; lógica en `RESERVAS_INFORME_BANDA_HORARIA.md`).
 - Lectura de viajes (Planilla de Tráfico, Zoom) — skill `modulo-trafico`.
 
-## Qué falta (los ABMs futuros — en orden sugerido de riesgo creciente)
+## Qué falta — el roadmap lo fija el plan Buslink (02/07/2026)
 
-1. **Destinos** (catálogo simple, sin cascadas — ideal primer ABM del módulo)
-2. **Operadores** (simple; agregar validación de huérfanos que FoxPro no tiene)
-3. **Clientes** (mediano: muchos campos + flags; sin cascadas peligrosas)
-4. **Grupos** (delicado: cancela viajes en cascada)
-5. **Plantillas** crear/mantener (mediano) y **Armar plantilla** (generador masivo)
-6. **Reserva de Transportación** (el más grande: el form completo + subdialogs)
-7. **Importa Excel** (reemplazable por upload + validador en Blazor)
+El orden ya NO es "sugerido": está definido en **`docs/buslink/PLAN_MIGRACION_BUSLINK.md`**.
+Las 3 puertas de alta son parte del **circuito `viaje`** → se construyen en la **Fase 4**
+del plan (contra el server local, detrás del flag `EscrituraViaje`) y cambian de dueño
+el **día D** junto con Tráfico y el Graba de Facturación:
 
-**Antes de construir CUALQUIERA**: leer skill `abm-metrocar` (regla SQL-dueño tabla por
-tabla — mientras la réplica DBF→SQL siga activa, estas tablas son SOLO LECTURA desde
-Blazor) + el doc `docs/logica-foxpro/` de la pantalla.
+| Pieza | Fase del plan | Nota |
+| --- | --- | --- |
+| Destinos, Operadores, Clientes (ABMs catálogo) | **Fase 1 grupo A** — cutover temprano | patrón `UsuariosAbm` |
+| Grupos, Guías, Plantillas (`reserva_plantilla`) | **Fase 1 grupo B** — se construyen antes, cortan el día D | el circuito FoxPro las escribe hasta el corte |
+| Alta manual (7 sub-tajadas: simple → multiplicación → ruta → grupos → guías → adicionales → Valor Especial con `F`) | **Fase 4.1** | CON transacción (mejora sobre FoxPro) |
+| Plantillas: mantener + **Armar** (con **dry-run** + transacción por lote + **deshacer lote**) | **Fase 4.2** | el deshacer-lote es el botón de emergencia del día 1 |
+| Importa Excel (upload + validador) | **Fase 4.3** | candidato explícito a descope si aprieta |
+
+**Antes de construir CUALQUIERA**: leer skill `abm-metrocar` + el doc de la pantalla +
+la matriz `modulo-trafico/references/ESCRITURA_CIRCUITO.md` (operación → tablas → campos).
 
 ## Reglas de oro al escribir (cuando llegue el cutover)
 

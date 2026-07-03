@@ -49,14 +49,68 @@ public class ReportService
         }) ?? new();
     }
 
-    public async Task<List<ReservaFechaServicioRow>> GetReservasPorFechaServicioAsync(
+    /// <summary>Los 5 estados posibles de `viaje.estado_via`, en orden de ciclo de vida.</summary>
+    public static readonly IReadOnlyList<string> EstadosViaje =
+        new[] { "SIN ASIGNAR", "ASIGNADO", "FINALIZADO", "FACTURADO", "CANCELADO" };
+
+    // Los dos "servicios" CABECERA_KM / CABECERA_SERV NO son servicios reales: son MODOS de
+    // facturación (por km / por servicio de cabecera). El destino real del viaje vive en
+    // d_destino/h_destino, no en id_servici. Son ~90% del volumen y aplastan el informe por
+    // servicio real, así que el informe los excluye por defecto (switch reversible en la UI).
+    public static readonly IReadOnlyList<string> ServiciosCabecera =
+        new[] { "CABECERA_KM", "CABECERA_SERV" };
+
+    private static string ListaCabecerasSql =>
+        string.Join(",", ServiciosCabecera.Select(s => $"'{s}'"));
+
+    // WHERE compartido del informe "Reservas por fecha y servicio" (vista agregada y detalle).
+    // Convención: lista de servicios/estados vacía = sin filtro (todos).
+    // excluirInterno replica los informes FoxPro: afuera el cliente de prueba de
+    // `parametro.id_cliente` (hoy 'NORTUR' — guardias y viajes internos).
+    // excluirCabeceras: deja fuera CABECERA_KM/SERV (modos de facturación, no servicios).
+    private static string WhereReservasFechaServicio(
         DateOnly desde,
         DateOnly hasta,
         IReadOnlyCollection<string> serviciosSel,
-        bool incluirCanceladas)
+        IReadOnlyCollection<string> estadosSel,
+        bool excluirInterno,
+        bool excluirCabeceras)
     {
-        var servKey = serviciosSel.Count == 0 ? "all" : string.Join(",", serviciosSel.OrderBy(x => x));
-        var key = $"rfs|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{incluirCanceladas}|{servKey}";
+        var where = new List<string>
+        {
+            "v._deleted = 0",
+            $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'"
+        };
+        if (serviciosSel.Count > 0)
+        {
+            var lista = string.Join(",", serviciosSel.Select(s => $"'{s.Replace("'", "''")}'"));
+            where.Add($"v.id_servici IN ({lista})");
+        }
+        if (estadosSel.Count > 0 && estadosSel.Count < EstadosViaje.Count)
+        {
+            var lista = string.Join(",", estadosSel.Select(s => $"'{s.Replace("'", "''")}'"));
+            where.Add($"v.estado_via IN ({lista})");
+        }
+        if (excluirInterno)
+            where.Add("v.id_cliente <> (SELECT TOP 1 RTRIM(ISNULL(id_cliente, '')) FROM parametro)");
+        if (excluirCabeceras)
+            where.Add($"v.id_servici NOT IN ({ListaCabecerasSql})");
+        return string.Join(" AND ", where);
+    }
+
+    /// <summary>
+    /// Conteo de los viajes CABECERA (modos de facturación) que el informe deja fuera cuando
+    /// se excluyen. Alimenta el KPI "Viajes cabecera". Respeta el resto de los filtros salvo
+    /// el de servicios (las cabeceras no están en la selección de servicios reales).
+    /// </summary>
+    public async Task<(int Reservas, int Pax)> GetVolumenCabecerasAsync(
+        DateOnly desde,
+        DateOnly hasta,
+        IReadOnlyCollection<string> estadosSel,
+        bool excluirInterno)
+    {
+        var estKey = estadosSel.Count == 0 ? "all" : string.Join(",", estadosSel.OrderBy(x => x));
+        var key = $"rfscab|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{excluirInterno}|{estKey}";
 
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
@@ -65,19 +119,41 @@ public class ReportService
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
 
-            // Construimos el WHERE dinámico igual que data.py
-            var where = new List<string>
-            {
-                "v._deleted = 0",
-                $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'"
-            };
-            if (!incluirCanceladas)
-                where.Add("v.estado_via <> 'CANCELADO'");
-            if (serviciosSel.Count > 0)
-            {
-                var lista = string.Join(",", serviciosSel.Select(s => $"'{s.Replace("'", "''")}'"));
-                where.Add($"v.id_servici IN ({lista})");
-            }
+            // Mismo WHERE, pero fijando servicios = solo cabeceras y sin excluirlas.
+            var where = WhereReservasFechaServicio(desde, hasta, ServiciosCabecera, estadosSel, excluirInterno, excluirCabeceras: false);
+            var sql = $"""
+                SELECT COUNT(*) AS Reservas, SUM(COALESCE(v.pax, 0)) AS Pax
+                FROM viaje v
+                WHERE {where}
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            using var reader = await cmd.ExecuteReaderAsync();
+            if (await reader.ReadAsync() && !reader.IsDBNull(0))
+                return (reader.GetInt32(0), reader.IsDBNull(1) ? 0 : reader.GetInt32(1));
+            return (0, 0);
+        });
+    }
+
+    public async Task<List<ReservaFechaServicioRow>> GetReservasPorFechaServicioAsync(
+        DateOnly desde,
+        DateOnly hasta,
+        IReadOnlyCollection<string> serviciosSel,
+        IReadOnlyCollection<string> estadosSel,
+        bool excluirInterno,
+        bool excluirCabeceras)
+    {
+        var servKey = serviciosSel.Count == 0 ? "all" : string.Join(",", serviciosSel.OrderBy(x => x));
+        var estKey = estadosSel.Count == 0 ? "all" : string.Join(",", estadosSel.OrderBy(x => x));
+        var key = $"rfs|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{excluirInterno}|{excluirCabeceras}|{estKey}|{servKey}";
+
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
 
             var sql = $"""
                 SELECT
@@ -89,7 +165,7 @@ public class ReportService
                     SUM(COALESCE(v.pax, 0))                  AS Pax
                 FROM viaje v
                 LEFT JOIN servicio s ON v.id_servici = s.id_servici
-                WHERE {string.Join(" AND ", where)}
+                WHERE {WhereReservasFechaServicio(desde, hasta, serviciosSel, estadosSel, excluirInterno, excluirCabeceras)}
                 GROUP BY v.f_reserva, v.id_servici, s.nombre
                 ORDER BY v.f_reserva, Servicio
                 """;
@@ -109,6 +185,80 @@ public class ReportService
                     reader.GetInt32(4),
                     reader.GetInt32(5)
                 ));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>
+    /// Detalle una-por-una de las reservas del informe "Reservas por fecha y servicio"
+    /// (mismos filtros que la vista agregada). Alimenta el drill-down por celda/día
+    /// y la hoja "Reservas" del Excel.
+    /// </summary>
+    public async Task<List<ReservaFsDetalleRow>> GetReservasFechaServicioDetalleAsync(
+        DateOnly desde,
+        DateOnly hasta,
+        IReadOnlyCollection<string> serviciosSel,
+        IReadOnlyCollection<string> estadosSel,
+        bool excluirInterno,
+        bool excluirCabeceras)
+    {
+        var servKey = serviciosSel.Count == 0 ? "all" : string.Join(",", serviciosSel.OrderBy(x => x));
+        var estKey = estadosSel.Count == 0 ? "all" : string.Join(",", estadosSel.OrderBy(x => x));
+        var key = $"rfsdet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{excluirInterno}|{excluirCabeceras}|{estKey}|{servKey}";
+
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            // viaje.id_viaje y viaje.pax son int (no bigint) — leer con GetInt32.
+            var sql = $"""
+                SELECT
+                    v.id_viaje                                            AS IdViaje,
+                    v.f_reserva                                           AS Fecha,
+                    COALESCE(CONVERT(varchar(5), v.hs_inicio, 108), '')   AS Hora,
+                    COALESCE(v.id_servici, '')                            AS CodServicio,
+                    COALESCE(s.nombre, v.id_servici, '')                  AS Servicio,
+                    COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cli)), ''), v.id_cliente, '') AS Cliente,
+                    LTRIM(RTRIM(COALESCE(v.d_destino, ''))) +
+                        CASE WHEN LTRIM(RTRIM(COALESCE(v.h_destino, ''))) <> ''
+                             THEN ' a ' + LTRIM(RTRIM(v.h_destino)) ELSE '' END AS Recorrido,
+                    COALESCE(v.pax, 0)                                    AS Pax,
+                    COALESCE(v.estado_via, '')                            AS Estado,
+                    COALESCE(v.nombre_cho, '')                            AS Chofer,
+                    v.interno                                             AS Interno,
+                    COALESCE(v.origen, '')                                AS Origen,
+                    COALESCE(v.grupo, '')                                 AS Grupo
+                FROM viaje v
+                LEFT JOIN servicio s ON v.id_servici = s.id_servici
+                WHERE {WhereReservasFechaServicio(desde, hasta, serviciosSel, estadosSel, excluirInterno, excluirCabeceras)}
+                ORDER BY v.f_reserva, v.hs_inicio, v.id_viaje
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+
+            var result = new List<ReservaFsDetalleRow>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                result.Add(new ReservaFsDetalleRow(
+                    IdViaje: reader.GetInt32(0),
+                    Fecha: DateOnly.FromDateTime(reader.GetDateTime(1)),
+                    Hora: reader.GetString(2),
+                    CodServicio: reader.GetString(3).Trim(),
+                    Servicio: reader.GetString(4).Trim(),
+                    Cliente: reader.GetString(5).Trim(),
+                    Recorrido: reader.GetString(6).Trim(),
+                    Pax: reader.GetInt32(7),
+                    Estado: reader.GetString(8).Trim(),
+                    Chofer: reader.GetString(9).Trim(),
+                    Interno: reader.IsDBNull(10) ? null : Convert.ToInt32(reader.GetValue(10)),
+                    Origen: reader.GetString(11).Trim(),
+                    Grupo: reader.GetString(12).Trim()));
             }
             return result;
         }) ?? new();
@@ -567,6 +717,98 @@ public class ReportService
         _cache.Remove("choferes-lista");
         _cache.Remove("clientes-lista");
         _cache.Remove("vehiculos-lista");
+        _cache.Remove("usuarios-lista");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  ABM DE USUARIOS Y PERMISOS (Sistema → Accesos del FoxPro: usuario.scx / usuario_abm.scx)
+    //  Tabla `usuario`: id (int, PK física NO identity), usuario (nvarchar 15, PK lógica),
+    //  password (nvarchar 15, TEXTO PLANO), nivel (nvarchar 5, "12345"), acceso (nvarchar 15,
+    //  string de letras S R T C D V L F A E U B H X N M), f_create/f_modify/f_delete (date),
+    //  operador (bit). f_delete cargado = inhabilitado (amarillo). La escritura vive en AbmService.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Lista de usuarios del sistema (réplica de la grilla de usuario.scx). "Inhabilitado" =
+    /// f_delete con valor (se muestra en amarillo, no se oculta). Ordenada por nombre como el FoxPro.
+    /// </summary>
+    public async Task<List<UsuarioListaRow>> GetUsuariosAsync()
+    {
+        return await _cache.GetOrCreateAsync("usuarios-lista", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    id,
+                    RTRIM(ISNULL(usuario, '')) AS Usuario,
+                    RTRIM(ISNULL(nivel,   '')) AS Nivel,
+                    RTRIM(ISNULL(acceso,  '')) AS Acceso,
+                    ISNULL(operador, 0)        AS Operador,
+                    f_delete                    AS FInhabilitacion
+                FROM usuario
+                WHERE _deleted = 0
+                ORDER BY usuario
+                """;
+            var result = new List<UsuarioListaRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                result.Add(new UsuarioListaRow(
+                    rd.GetInt32(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+                    rd.GetBoolean(4),
+                    rd.IsDBNull(5) ? null : DateOnly.FromDateTime(rd.GetDateTime(5))));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>
+    /// Ficha de un usuario por su id (para la ficha/edición del ABM). Devuelve null si no existe.
+    /// El string `acceso` se decodifica en la UI a los 16 checkboxes de permisos.
+    /// </summary>
+    public async Task<UsuarioDetalleDto?> GetUsuarioDetalleAsync(int id)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT TOP 1
+                id,
+                RTRIM(ISNULL(usuario,  '')) AS Usuario,
+                RTRIM(ISNULL(password, '')) AS Password,
+                RTRIM(ISNULL(nivel,    '')) AS Nivel,
+                RTRIM(ISNULL(acceso,   '')) AS Acceso,
+                ISNULL(operador, 0)         AS Operador,
+                f_create, f_modify, f_delete
+            FROM usuario
+            WHERE id = @id AND _deleted = 0
+            """;
+        var pId = cmd.CreateParameter();
+        pId.ParameterName = "@id";
+        pId.Value = id;
+        cmd.Parameters.Add(pId);
+
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync())
+            return null;
+
+        return new UsuarioDetalleDto
+        {
+            Id = rd.GetInt32(0),
+            Usuario = rd.GetString(1),
+            Password = rd.GetString(2),
+            Nivel = rd.GetString(3),
+            Acceso = rd.GetString(4),
+            Operador = rd.GetBoolean(5),
+            FCreate = rd.IsDBNull(6) ? null : DateOnly.FromDateTime(rd.GetDateTime(6)),
+            FModify = rd.IsDBNull(7) ? null : DateOnly.FromDateTime(rd.GetDateTime(7)),
+            FDelete = rd.IsDBNull(8) ? null : DateOnly.FromDateTime(rd.GetDateTime(8)),
+        };
     }
 
     /// <summary>
@@ -1184,13 +1426,69 @@ public class ReportService
         }) ?? new();
     }
 
+    // Las 6 bandas horarias (idénticas a viaje_horario del FoxPro). Orden fijo — se usa para
+    // el orden de columnas del pivote y de las series del gráfico apilado.
+    public static readonly IReadOnlyList<string> BandasHorarias =
+        new[] { "00:00-00:01", "00:02-06:29", "06:30-08:29", "08:30-14:00", "14:01-18:00", "18:01-23:59" };
+
+    // Expresión SQL que clasifica un viaje en su banda por CAST(hs_inicio AS TIME).
+    // Comparación por strings "HH:mm" (bordes inclusivos) para reproducir el FoxPro al dígito.
+    // Se comparte entre la vista agregada y el detalle para que ambas den la MISMA banda.
+    private const string BandaCaseSql = """
+        CASE
+            WHEN CAST(v.hs_inicio AS TIME) BETWEEN '00:00' AND '00:01' THEN '00:00-00:01'
+            WHEN CAST(v.hs_inicio AS TIME) BETWEEN '00:02' AND '06:29' THEN '00:02-06:29'
+            WHEN CAST(v.hs_inicio AS TIME) BETWEEN '06:30' AND '08:29' THEN '06:30-08:29'
+            WHEN CAST(v.hs_inicio AS TIME) BETWEEN '08:30' AND '14:00' THEN '08:30-14:00'
+            WHEN CAST(v.hs_inicio AS TIME) BETWEEN '14:01' AND '18:00' THEN '14:01-18:00'
+            WHEN CAST(v.hs_inicio AS TIME) BETWEEN '18:01' AND '23:59' THEN '18:01-23:59'
+            ELSE NULL
+        END
+        """;
+
+    // WHERE compartido del informe "Reservas por banda horaria" (agregado + detalle).
+    // Fiel al FoxPro: solo origen='T', excluye el cliente interno (parametro.id_cliente),
+    // exige hs_inicio no nula. Los estados se pasan como parámetro (default de la UI = todos
+    // menos CANCELADO); si vienen todos (5) o vacío, no se filtra por estado.
+    private static string WhereBandaHoraria(
+        DateOnly desde,
+        DateOnly hasta,
+        IReadOnlyCollection<string> vehiculosSel,
+        IReadOnlyCollection<string> estadosSel)
+    {
+        var where = new List<string>
+        {
+            "v._deleted = 0",
+            $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'",
+            "v.origen = 'T'",
+            "v.id_cliente <> (SELECT TOP 1 RTRIM(ISNULL(id_cliente, '')) FROM parametro)",
+            "v.hs_inicio IS NOT NULL"
+        };
+        if (estadosSel.Count > 0 && estadosSel.Count < EstadosViaje.Count)
+        {
+            var lista = string.Join(",", estadosSel.Select(s => $"'{s.Replace("'", "''")}'"));
+            where.Add($"v.estado_via IN ({lista})");
+        }
+        if (vehiculosSel.Count > 0)
+        {
+            var lista = string.Join(",", vehiculosSel.Select(v => $"'{v.Replace("'", "''")}'"));
+            where.Add($"v.id_vehicul IN ({lista})");
+        }
+        return string.Join(" AND ", where);
+    }
+
+    // Vista agregada: conteo de viajes + suma de pax por fecha × tipo de vehículo × banda.
+    // Trae Reservas y Pax juntos para que el toggle de métrica en la UI recalcule en memoria
+    // (sin re-query), igual que el informe de fecha/servicio.
     public async Task<List<BandaHorariaRow>> GetReservasPorBandaHorariaAsync(
         DateOnly desde,
         DateOnly hasta,
-        IReadOnlyCollection<string> vehiculosSel)
+        IReadOnlyCollection<string> vehiculosSel,
+        IReadOnlyCollection<string> estadosSel)
     {
         var vehKey = vehiculosSel.Count == 0 ? "all" : string.Join(",", vehiculosSel.OrderBy(x => x));
-        var key = $"rbh|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{vehKey}";
+        var estKey = estadosSel.Count == 0 ? "all" : string.Join(",", estadosSel.OrderBy(x => x));
+        var key = $"rbh|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{vehKey}|{estKey}";
 
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
@@ -1199,39 +1497,16 @@ public class ReportService
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
 
-            var vehWhere = "";
-            if (vehiculosSel.Count > 0)
-            {
-                var lista = string.Join(",", vehiculosSel.Select(v => $"'{v.Replace("'", "''")}'"));
-                vehWhere = $"AND v.id_vehicul IN ({lista})";
-            }
-
-            // Clasifica cada viaje en su banda horaria usando CASE sobre CAST(hs_inicio AS TIME).
-            // Fiel al FoxPro: excluye CANCELADO, excluye cliente NORTUR, solo origen='T'.
             var sql = $"""
                 SELECT
-                    v.f_reserva                         AS Fecha,
-                    v.id_vehicul                        AS TipoVehiculo,
-                    CAST(v.hs_inicio AS TIME)           AS HsInicio,
-                    CASE
-                        WHEN CAST(v.hs_inicio AS TIME) BETWEEN '00:00' AND '00:01' THEN '00:00-00:01'
-                        WHEN CAST(v.hs_inicio AS TIME) BETWEEN '00:02' AND '06:29' THEN '00:02-06:29'
-                        WHEN CAST(v.hs_inicio AS TIME) BETWEEN '06:30' AND '08:29' THEN '06:30-08:29'
-                        WHEN CAST(v.hs_inicio AS TIME) BETWEEN '08:30' AND '14:00' THEN '08:30-14:00'
-                        WHEN CAST(v.hs_inicio AS TIME) BETWEEN '14:01' AND '18:00' THEN '14:01-18:00'
-                        WHEN CAST(v.hs_inicio AS TIME) BETWEEN '18:01' AND '23:59' THEN '18:01-23:59'
-                        ELSE NULL
-                    END                                 AS Banda,
-                    COUNT(*)                            AS Reservas
+                    v.f_reserva                       AS Fecha,
+                    v.id_vehicul                      AS TipoVehiculo,
+                    {BandaCaseSql}                    AS Banda,
+                    COUNT(*)                          AS Reservas,
+                    SUM(COALESCE(v.pax, 0))           AS Pax
                 FROM viaje v
-                WHERE v._deleted = 0
-                  AND v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'
-                  AND v.origen = 'T'
-                  AND v.estado_via <> 'CANCELADO'
-                  AND v.id_cliente <> 'NORTUR'
-                  AND v.hs_inicio IS NOT NULL
-                  {vehWhere}
-                GROUP BY v.f_reserva, v.id_vehicul, CAST(v.hs_inicio AS TIME)
+                WHERE {WhereBandaHoraria(desde, hasta, vehiculosSel, estadosSel)}
+                GROUP BY v.f_reserva, v.id_vehicul, {BandaCaseSql}
                 ORDER BY v.f_reserva, v.id_vehicul
                 """;
 
@@ -1242,14 +1517,93 @@ public class ReportService
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
             {
-                var banda = reader.IsDBNull(3) ? null : reader.GetString(3);
-                if (banda is null) continue;
+                var banda = reader.IsDBNull(2) ? null : reader.GetString(2);
+                if (banda is null) continue;   // hs_inicio fuera de toda banda (raro): se descarta
                 result.Add(new BandaHorariaRow(
                     DateOnly.FromDateTime(reader.GetDateTime(0)),
                     reader.IsDBNull(1) ? "" : reader.GetString(1).Trim(),
                     banda,
-                    reader.GetInt32(4)
+                    reader.GetInt32(3),
+                    reader.IsDBNull(4) ? 0 : reader.GetInt32(4)
                 ));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    // Detalle uno-por-uno para el drill-down (click en celda/fila/columna del pivote).
+    // Reusa el mismo DTO que el informe de fecha/servicio (ReservaFsDetalleRow) para poder
+    // reusar también ReservasFsDetalleDialog + el Zoom del Viaje. Trae la banda de cada viaje
+    // (con el mismo CASE) para poder filtrar en memoria por (fecha × banda). Se cachea 1 vez
+    // por combinación de filtros; se pide recién al primer click/Excel.
+    public async Task<List<BandaHorariaDetalleRow>> GetReservasBandaHorariaDetalleAsync(
+        DateOnly desde,
+        DateOnly hasta,
+        IReadOnlyCollection<string> vehiculosSel,
+        IReadOnlyCollection<string> estadosSel)
+    {
+        var vehKey = vehiculosSel.Count == 0 ? "all" : string.Join(",", vehiculosSel.OrderBy(x => x));
+        var estKey = estadosSel.Count == 0 ? "all" : string.Join(",", estadosSel.OrderBy(x => x));
+        var key = $"rbhdet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{vehKey}|{estKey}";
+
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            // viaje.id_viaje y viaje.pax son int (no bigint) — leer con GetInt32.
+            var sql = $"""
+                SELECT
+                    v.id_viaje                                            AS IdViaje,
+                    v.f_reserva                                           AS Fecha,
+                    {BandaCaseSql}                                        AS Banda,
+                    RTRIM(ISNULL(v.id_vehicul, ''))                       AS TipoVehiculo,
+                    COALESCE(CONVERT(varchar(5), v.hs_inicio, 108), '')   AS Hora,
+                    COALESCE(s.nombre, v.id_servici, '')                  AS Servicio,
+                    COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cli)), ''), v.id_cliente, '') AS Cliente,
+                    LTRIM(RTRIM(COALESCE(v.d_destino, ''))) +
+                        CASE WHEN LTRIM(RTRIM(COALESCE(v.h_destino, ''))) <> ''
+                             THEN ' a ' + LTRIM(RTRIM(v.h_destino)) ELSE '' END AS Recorrido,
+                    COALESCE(v.pax, 0)                                    AS Pax,
+                    COALESCE(v.estado_via, '')                            AS Estado,
+                    COALESCE(v.nombre_cho, '')                            AS Chofer,
+                    v.interno                                             AS Interno,
+                    COALESCE(v.origen, '')                                AS Origen,
+                    COALESCE(v.grupo, '')                                 AS Grupo
+                FROM viaje v
+                LEFT JOIN servicio s ON v.id_servici = s.id_servici
+                WHERE {WhereBandaHoraria(desde, hasta, vehiculosSel, estadosSel)}
+                ORDER BY v.f_reserva, v.hs_inicio, v.id_viaje
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+
+            var result = new List<BandaHorariaDetalleRow>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var banda = reader.IsDBNull(2) ? null : reader.GetString(2);
+                if (banda is null) continue;
+                result.Add(new BandaHorariaDetalleRow(
+                    Banda: banda,
+                    TipoVehiculo: reader.GetString(3).Trim(),
+                    Reserva: new ReservaFsDetalleRow(
+                        IdViaje: reader.GetInt32(0),
+                        Fecha: DateOnly.FromDateTime(reader.GetDateTime(1)),
+                        Hora: reader.GetString(4),
+                        CodServicio: "",
+                        Servicio: reader.GetString(5).Trim(),
+                        Cliente: reader.GetString(6).Trim(),
+                        Recorrido: reader.GetString(7).Trim(),
+                        Pax: reader.GetInt32(8),
+                        Estado: reader.GetString(9).Trim(),
+                        Chofer: reader.GetString(10).Trim(),
+                        Interno: reader.IsDBNull(11) ? null : Convert.ToInt32(reader.GetValue(11)),
+                        Origen: reader.GetString(12).Trim(),
+                        Grupo: reader.GetString(13).Trim())));
             }
             return result;
         }) ?? new();
@@ -1523,7 +1877,7 @@ public class ReportService
     // ════════════════════════════════════════════════════════════════════
     //  CHOFERES — ABM (solo lectura). Réplica de chofer.scx + chofer_abm.scx.
     //  Tabla `chofer` con dueño FoxPro: SOLO LECTURA desde Blazor (strangler).
-    //  Mapa de columnas truncadas → docs/logica-foxpro/CHOFER_ABM.md
+    //  Mapa de columnas truncadas → docs/PlanoFoxPro/vehiculos-choferes/CHOFER_ABM.md
     // ════════════════════════════════════════════════════════════════════
 
     /// <summary>
@@ -2334,7 +2688,7 @@ public class ReportService
     //  Validado contra 8.656 viajes históricos de liquidaciones reales: 99,4% al
     //  peso (el resto = servicios cuya tarifa fue cambiada retroactivamente; para
     //  viajes PENDIENTES con la tarifa actual ese caso no aplica). Detalle del
-    //  relevamiento en docs/logica-foxpro/FACTURACION_LIQUIDACION.md §3.2.
+    //  relevamiento en docs/PlanoFoxPro/facturacion/FACTURACION_LIQUIDACION.md §3.2.
     //
     //  Cascada de precio por viaje (gana el primero) — arma_servicio:
     //    1. importe_co > 0  → ese importe (× descuento_ % si lo hay)
@@ -2926,6 +3280,20 @@ public record LoginResultDto(
     public static LoginResultDto Fallo(string error) => new(false, error, "", "", "", false);
 }
 
+// ── ABM de Usuarios y Permisos ──────────────────────────────────────────────
+/// <summary>Fila de la grilla de usuarios (usuario.scx). FInhabilitacion con valor = amarillo.</summary>
+public record UsuarioListaRow(
+    int Id, string Usuario, string Nivel, string Acceso, bool Operador, DateOnly? FInhabilitacion);
+
+/// <summary>Ficha/edición de un usuario. El string `acceso` se decodifica en la UI a checkboxes.</summary>
+public class UsuarioDetalleDto
+{
+    public int Id;
+    public string Usuario = "", Password = "", Nivel = "", Acceso = "";
+    public bool Operador;
+    public DateOnly? FCreate, FModify, FDelete;
+}
+
 public class TableroDto
 {
     // Días de la ventana de aviso (de la tabla `parametro`), para el tooltip de cada chip.
@@ -3088,7 +3456,12 @@ public class ChoferDetalleDto
     }
 }
 
-public record BandaHorariaRow(DateOnly Fecha, string TipoVehiculo, string Banda, int Reservas);
+public record BandaHorariaRow(DateOnly Fecha, string TipoVehiculo, string Banda, int Reservas, int Pax);
+
+// Una fila de detalle del informe de banda horaria (drill-down). Lleva la banda y el tipo de
+// vehículo para poder filtrar en memoria; el resto reusa el DTO del informe de fecha/servicio
+// para reusar ReservasFsDetalleDialog + Zoom del Viaje.
+public record BandaHorariaDetalleRow(string Banda, string TipoVehiculo, ReservaFsDetalleRow Reserva);
 
 public record ReservaFechaServicioRow(
     DateOnly Fecha,
@@ -3097,6 +3470,22 @@ public record ReservaFechaServicioRow(
     int Reservas,
     int Canceladas,
     int Pax);
+
+/// <summary>Una reserva individual del informe "Reservas por fecha y servicio" (drill-down + Excel).</summary>
+public record ReservaFsDetalleRow(
+    int IdViaje,
+    DateOnly Fecha,
+    string Hora,
+    string CodServicio,
+    string Servicio,
+    string Cliente,
+    string Recorrido,
+    int Pax,
+    string Estado,
+    string Chofer,
+    int? Interno,
+    string Origen,
+    string Grupo);
 
 /// <summary>
 /// Una fila de la planilla de servicios del día (Operación de Tráfico).

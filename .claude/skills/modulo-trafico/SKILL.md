@@ -45,7 +45,7 @@ SIN ASIGNAR ──asignar──► ASIGNADO ──fin──► FINALIZADO ──
 | Vista cancelados (Cxl) con motivo | ídem + `GetTraficoCanceladosAsync` |
 | **Panel Buses** (grid2: flota viva, franco, colores) | ídem + `GetPanelBusesAsync` |
 | Zoom del Viaje (solo lectura) | `Components/Shared/ZoomViajeDialog.razor` |
-| **Historial del viaje** (bitácora `viaje_log` + auditoría, solo lectura) | `Components/Shared/HistorialViajeDialog.razor` (+ `TextoZoomDialog.razor` = el "Zoon Motivo") · doc: `docs/logica-foxpro/TRAFICO_HISTORIAL.md` |
+| **Historial del viaje** (bitácora `viaje_log` + auditoría, solo lectura) | `Components/Shared/HistorialViajeDialog.razor` (+ `TextoZoomDialog.razor` = el "Zoon Motivo") · doc: `docs/PlanoFoxPro/trafico/TRAFICO_HISTORIAL.md` |
 | **Novedad sobre el viaje** (libro de novedades del viaje, solo lectura) | `Components/Shared/NovedadViajeDialog.razor` · `GetNovedadesViajeAsync` · tabla `libro_novedad` · doc: `TRAFICO2_FILTROS.md` |
 | **Lista de pasajeros** (planilla CNRT del viaje, solo lectura) | `Components/Shared/ListaPasajerosDialog.razor` · `GetPasajerosViajeAsync` · tablas `viaje_pasajero`/`viaje_pasajero_detalle` · doc: `TRAFICO2_FILTROS.md` |
 | **Menú contextual completo "Ver Datos Extras"** (los 7 ítems del popup `verdatosex`) | ver tabla abajo |
@@ -162,33 +162,76 @@ navegador re-pintaba toda la tabla detrás → 6-7s en máquinas modestas.
 
 ## Documentación de lógica FoxPro (leer cuando se necesite el detalle)
 
-- `docs/logica-foxpro/TRAFICO2_FILTROS.md` — toolbar completa de `trafico2.scx`: combos,
+- `docs/PlanoFoxPro/trafico/TRAFICO2_FILTROS.md` — toolbar completa de `trafico2.scx`: combos,
   S/C, Cxl, **panel Buses (arma_grid_vehiculo)**, post-procesamiento del cursor.
-- `docs/logica-foxpro/TRAFICO_ZOOM.md` — Zoom del Viaje: máquina de estados, validaciones,
-  tablas tocadas.
+- `docs/PlanoFoxPro/trafico/TRAFICO_ZOOM.md` — Zoom del Viaje: máquina de estados, validaciones,
+  tablas tocadas (Modificar/Cancelar/SinAsignar/Duplicar/ValorServicio).
+- `docs/PlanoFoxPro/trafico/TRAFICO_HISTORIAL.md` — bitácora `viaje_log` (9 columnas, truncados).
+- **`docs/PlanoFoxPro/trafico/TRAFICO2_TOOLBAR.md`** (02/07/2026) — **la especificación de ESCRITURA
+  de la toolbar**: Chequeo, Asig U/P, Otra Unidad, Reas, Libe, Frc — SQL exacto, validaciones,
+  forms `trafico_asigna`/`trafico_reasigna`/`trafico_liberar`/`chofer_franco*`. **Leer ANTES
+  de codear cualquier operación de despacho.**
+- **`docs/PlanoFoxPro/trafico/GPS_XLM.md`** (02/07/2026) — la integración GPS (`gps_xlm()` en
+  `procesos.prg`, llamada en ASIGNO/RE-ASIGNO/FINALIZO/CANCELO/armar plantillas): 2 vías
+  (XML file-drop + SQL Server externo, tabla `Servicios`). **Hoy es NO-OP** —
+  `parametro.xml_envia = 0` y `sql_gps = 0` (verificado 02/07/2026); decisión final del
+  dueño pendiente (Fase 0.2). El motivo de Reasignar es el catálogo
+  `docs/PlanoFoxPro/catalogos/VIAJE_MOTIVO_CAMBIO_ABM.md`.
 
-## Qué falta (el "ABM de Tráfico" = workflow de asignación, NO CRUD)
+## ESCRITURA — el circuito de despacho (extraído 02/07/2026, listo para migrar)
 
-Botones de `trafico2.scx` pendientes — cada uno **escribe en `viaje` Y actualiza el estado
-vivo en `vehiculo`**, y el FoxPro rearma la grilla y el panel tras cada operación:
+El "ABM de Tráfico" es un **workflow de asignación, NO un CRUD**. La especificación completa
+con SQL exacto está en `TRAFICO2_TOOLBAR.md` + `TRAFICO_ZOOM.md`; la matriz consolidada
+operación → tablas → campos → log en **`references/ESCRITURA_CIRCUITO.md`** de esta skill.
+El roadmap de cuándo/cómo migrar: `docs/buslink/PLAN_MIGRACION_BUSLINK.md` (Fase 3).
 
-| Botón | Qué hace |
-| --- | --- |
-| Asig U/P | asigna unidad programada al viaje |
-| Otra Unidad / Reas | reasigna unidad (pide motivo — `viaje_motivo_cambio`) |
-| Libe | libera la unidad (vehiculo.estado = LIBERADO, id_viaje = 0) |
-| Chequeo | incrementa `viaje.chequeo`; SIN ASIGNAR → muestra CHEQUEO |
-| Cxl (cancelar un viaje) | estado CANCELADO + `id_motivo` |
-| Franco | alta en `chofer_franco` (form `chofer_franco_abm.scx`) |
-| Frc / Comb / GPS | franco rápido / combustible / modo GPS |
+### Alcance día 1 (confirmado por el usuario, 02/07/2026)
 
-**Antes de construir cualquiera de estos:** son ESCRITURA → aplicar la skill `abm-metrocar`
-(regla: SQL dueño tabla por tabla; `viaje`/`vehiculo` siguen siendo de FoxPro hasta que se
-decida el cutover de Tráfico — el más delicado del sistema). Extraer la lógica exacta del
-botón con `foxpro-extract` desde `trafico2.scx` y documentarla antes de codear.
+Asignar/cambiar interno y chofer · estados del viaje · cancelar con motivo · Zoom del Viaje
+en edición completa. Orden interno de construcción (por riesgo/valor, ver plan): 1-Chequeo →
+2-Asignar → 3-Liberar → 4-Reasignar → 5-Finalizar → 6-Cancelar → 7-Reactivar → 8-Franco →
+9-Zoom edición → 10-Duplicar/valor servicio.
+
+### Descubrimientos de la extracción (no obvios — no violar)
+
+1. **`gps_xlm(id_viaje)` se llama en ASIGNO, RE-ASIGNO, FINALIZO y CANCELO** — cada cambio
+   operativo notifica al GPS. Resolver la "decisión GPS" (Fase 0 del plan) antes de codear.
+2. **"Libe" (toolbar) = FINALIZAR** el viaje (hs_fin + duración + pax real + voucher +
+   odómetros + km) y liberar la unidad **con zona nueva** (`vehiculo.id_zona`). Volver a
+   SIN ASIGNAR es OTRO botón (Zoom → "Sin Asignar"). Solo se libera una unidad EN CURSO.
+3. **Asignar también escribe `vehiculo_km`** (primer odómetro del mes → INSERT + cierra
+   km_fin del mes anterior) **y puede escribir `chofer_franco`** (sub-flujo franco trabajado:
+   "Cbia. Franco" mueve la fecha / "Trabaja Franco" marca `codigo='FT'`).
+4. **Anti-doble-asignación optimista**: relee el viaje antes del UPDATE — si `id_chofer` ya
+   está cargado → "ya fue asignado por otro usuario". En Buslink: `UPDLOCK` en la transacción.
+5. **Reasignar resetea `chequeo = 0`** y loguea motivo **'RE-ASIGNO'** (interno Y cronograma
+   ori→new en columnas dedicadas). La unidad viaje: nueva → ASIGNADO, vieja → LIBERADO.
+6. **Rutas (`id_viaje_int > 0`)**: toda operación pega a TODOS los tramos y loguea/gps por
+   tramo; asignar exige tramos anteriores FINALIZADOS; liberar solo desde el último tramo;
+   tramos intermedios finalizan `hs_fin=23:59`.
+7. El **Cxl de la toolbar es solo un filtro** — cancelar vive en el Zoom (con motivo de
+   `viaje_motivo_cancela` + cascada DELETE de `cliente_grupo` si todo el grupo quedó cancelado).
+8. Al finalizar se generan **adicionales con precio** en `viaje_adicional` (agua =
+   `parametro.adic_agua` × `viaje.agua`, horas extra con motivo obligatorio, stock).
+9. **FoxPro no usa transacciones en nada de esto** — Buslink DEBE envolver viaje+vehiculo+log
+   en una transacción única (mejora obligatoria, patrón `AbmService`).
+10. Estados de `vehiculo.estado`: ASIGNADO / LIBERADO / TALLER / GUARDIA (+ CURSO display);
+    `vehiculo.trabaja` ≠ vacío = chofer de franco/licencia (bloquea asignación).
+
+### Reglas de la regla-madre (abm-metrocar)
+
+`viaje`/`vehiculo`/`viaje_log`/`cliente_grupo` siguen siendo de FoxPro **hasta el día D**
+(plan Buslink): las pantallas de escritura se construyen y prueban contra el server LOCAL
+detrás del feature flag `EscrituraViaje`, y cambian de dueño todas juntas en el corte.
+Toda escritura: `SqlParameter` + transacción + WHERE con `f_reserva` además de `id_viaje`
+(no hay índice por `id_viaje`).
 
 ## Forms FoxPro del módulo
 
 `trafico2.scx` (productivo — el menú abre este), `trafico3.scx` (copia), `trafico.scx`
-(viejo), `trafico_zoom.scx`, `trafico_guardia_servicio.scx`, `trafico_resumen_horario.scx`
-(banda horaria), `chofer_franco_abm.scx`.
+(viejo), `trafico_zoom.scx`, **`trafico_asigna.scx`** (asignación, modos SIN/CON),
+**`trafico_reasigna.scx`**, **`trafico_liberar.scx`** (finalización + hora adicional),
+`trafico_liberar_hora_adicional.scx`, `trafico_guardia_servicio.scx`,
+`trafico_resumen_horario.scx` (banda horaria), `chofer_franco.scx` (lista/baja),
+`chofer_franco_abm.scx` (alta masiva), `chofer_franco_modifica.scx`,
+`chofer_franco_auditoria.scx`.

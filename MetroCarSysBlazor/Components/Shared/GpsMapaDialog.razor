@@ -1,0 +1,102 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   GPS embebido — réplica del "Ubicar unidad" / "Recorrido en WEB" de trafico2.scx, pero
+   SIN abrir una pestaña nueva: el sitio GPS (metrocar.nortur.ar) se muestra dentro de un
+   <iframe> en este modal, igual que la app intranet.nortur.ar.
+
+   El servidor GPS (IIS) NO manda X-Frame-Options ni CSP → es embebible en iframe ajeno
+   (verificado contra movil.aspx / Maps.aspx, ambos 200 sin cabeceras de bloqueo).
+
+   ⚠️ El GPS sirve por HTTP (no tiene HTTPS). Si esta app corre en HTTPS (producción IIS),
+   el navegador bloqueará el iframe por "mixed content" y el mapa quedará en blanco. En local
+   (http://localhost) funciona sin problema. Si se bloquea en prod → proxy del GPS por HTTPS.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog gps-mapa-dialog">
+    <TitleContent>
+        @* Barra azul compacta en UNA sola línea: título + unidad + recorrido + horario + cerrar. *@
+        <div class="zoom-title-bar gps-titlebar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@Titulo</span>
+            @if (!string.IsNullOrWhiteSpace(Unidad))
+            {
+                <span class="zoom-title-bar__nro">@Unidad</span>
+            }
+            @if (!string.IsNullOrWhiteSpace(Recorrido))
+            {
+                <span class="gps-titlebar__sub-sep">·</span>
+                <span class="gps-titlebar__sub-item">
+                    <MudIcon Icon="@Icons.Material.Filled.Route" Class="gps-titlebar__sub-icon" />
+                    @Recorrido
+                </span>
+            }
+            @if (!string.IsNullOrWhiteSpace(HorarioTexto))
+            {
+                <span class="gps-titlebar__sub-sep">·</span>
+                <span class="gps-titlebar__sub-item">
+                    <MudIcon Icon="@Icons.Material.Filled.Schedule" Class="gps-titlebar__sub-icon" />
+                    @HorarioTexto
+                </span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Medium"
+                           Class="gps-titlebar__close"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <div class="gps-mapa-dialog__frame-wrap">
+            @* El src va directo a la URL ya armada y validada en PlanillaTrafico. *@
+            <iframe class="gps-mapa-dialog__frame"
+                    src="@Url"
+                    title="@Titulo"
+                    loading="lazy"
+                    referrerpolicy="no-referrer"></iframe>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>URL del sitio GPS ya armada (movil.aspx o Maps.aspx con sus parámetros).</summary>
+    [Parameter] public string Url { get; set; } = "";
+
+    /// <summary>Título del modal (ej. "Ubicación de la unidad").</summary>
+    [Parameter] public string Titulo { get; set; } = "GPS";
+
+    /// <summary>Código de unidad mostrado junto al título (ej. "NT0042").</summary>
+    [Parameter] public string? Unidad { get; set; }
+
+    /// <summary>Ícono del encabezado.</summary>
+    [Parameter] public string Icono { get; set; } = Icons.Material.Filled.LocationOn;
+
+    /// <summary>Recorrido del servicio (ej. "LOMAS DE ZAMORA a EZEIZA"). Si está vacío, no se muestra.</summary>
+    [Parameter] public string? Recorrido { get; set; }
+
+    /// <summary>Horario de inicio del viaje (viaje.hs_inicio).</summary>
+    [Parameter] public DateTime? HsInicio { get; set; }
+
+    /// <summary>Horario de fin del viaje (viaje.hs_fin).</summary>
+    [Parameter] public DateTime? HsFin { get; set; }
+
+    // Texto del horario inicio/fin para la sublínea. Formato "dd/MM HH:mm – HH:mm";
+    // si fin cae otro día, repite la fecha. Vacío si no hay inicio.
+    private string HorarioTexto
+    {
+        get
+        {
+            if (HsInicio is null) return "";
+            var ini = HsInicio.Value;
+            if (HsFin is null) return ini.ToString("dd/MM HH:mm");
+            var fin = HsFin.Value;
+            return fin.Date == ini.Date
+                ? $"{ini:dd/MM HH:mm} – {fin:HH:mm}"
+                : $"{ini:dd/MM HH:mm} – {fin:dd/MM HH:mm}";
+        }
+    }
+
+    private void Cerrar() => MudDialog.Close();
+}

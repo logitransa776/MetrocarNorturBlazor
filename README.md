@@ -103,11 +103,11 @@ MetroCarSysBlazor/
   wwwroot/
     app.css                         → Estilos globales + sistema del drawer CSS
 
-docs/
-  INFORME_TECNICO.md                → Documentación técnica completa
-  logica-foxpro/
-    TRAFICO_ZOOM.md                 → Lógica del form trafico_zoom.scx (FoxPro)
-    TRAFICO2_FILTROS.md             → Lógica del form trafico2.scx (toolbar tráfico)
+docs/                               → biblioteca de documentación (por tema, ver docs/README.md)
+  general/INFORME_TECNICO.md        → Documentación técnica completa
+  buslink/                          → plan de migración + análisis + informe de avance
+  performance/ trafico/ facturacion/ combustible/ seguridad/ testing/
+  PlanoFoxPro/                    → "planos" del FoxPro por módulo (ver su README.md)
 ```
 
 ---
@@ -166,7 +166,7 @@ Solución: agregar `@using ApexCharts` solo al inicio del archivo `.razor` que l
 ## Sistema legacy FoxPro
 
 Las fuentes originales están en `C:\MetroCarSys` (forms `.scx`, reportes `.frx`, programas `.prg`).
-Antes de construir un informe nuevo, revisar si el form FoxPro correspondiente está disponible en disco y documentar su lógica en `docs/logica-foxpro/`.
+Antes de construir un informe nuevo, revisar si el form FoxPro correspondiente está disponible en disco y documentar su lógica en `docs/PlanoFoxPro/`.
 
 ---
 
