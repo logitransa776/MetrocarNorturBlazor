@@ -385,6 +385,17 @@ handler pero ApexCharts no pinta nada por su cuenta; manda solo `ColorFoco`.
 **Cursor pointer sobre las marcas** (para señalar que son clickeables): por CSS en
 `.apexcharts-bar-area, .apexcharts-pie-area, .apexcharts-slice, .apexcharts-legend-series { cursor: pointer; }`.
 
+**Selector "Mostrar Top N" en las barras (03/07/2026).** Cuando hay muchas categorías (24
+servicios) y el gráfico solo muestra el top 10, el resto queda invisible. Solución: un
+`MudSelect` "Mostrar" (Top 10/15/20/Todos=999) que controla `_barItems = ranking.Take(_topN)`.
+Claves: (1) el **donut se deja fijo en top 10 + Otros** — 24 tajadas son ilegibles; solo las
+barras crecen (tienen etiqueta por barra). (2) **Alto dinámico**: `Height="@_altoBarras"` con
+`_altoBarras = Math.Max(360, _barItems.Count * 30)` para que no se apelotonen. (3) Cambiar N
+cambia la FORMA del gráfico → remontar con `_chartsKey` nuevo (como el cambio de métrica), no
+`UpdateOptions`. (4) Las barras #11+ salen en gris (solo 10 hues) — OK en barras porque cada una
+tiene su etiqueta; el gris solo dice "fuera del top 10". (5) La tabla pivote ya muestra TODOS los
+servicios en columnas, así que el detalle completo siempre está disponible ahí.
+
 **Trampas resueltas:**
 - **Resetear el foco al Aplicar filtros** (`_servicioFocus = null` en `Cargar()`): un nuevo
   dataset puede no contener el servicio enfocado.

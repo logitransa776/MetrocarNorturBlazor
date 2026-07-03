@@ -127,8 +127,19 @@ else
             <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
                     @* Título + chip de foco (cross-filter) a la derecha, dentro del panel del gráfico. *@
-                    @CabeceraFoco($"{_metrica} por servicio — top 10")
-                    <ApexChart TItem="BarItem" Options="_optsBar" Height="360" @ref="_barChart"
+                    @CabeceraFoco($"{_metrica} por servicio — {TituloTopN}")
+                    @* Selector: cuántos servicios mostrar en las barras (Top 10/15/20/Todos). *@
+                    <div class="rfs-bar-head mb-2">
+                        <MudSelect T="int" Value="_topN" ValueChanged="CambiarTopN"
+                                   Label="Mostrar" Dense="true" Margin="Margin.Dense"
+                                   Variant="Variant.Outlined" Style="width:160px;">
+                            <MudSelectItem T="int" Value="10">Top 10</MudSelectItem>
+                            <MudSelectItem T="int" Value="15">Top 15</MudSelectItem>
+                            <MudSelectItem T="int" Value="20">Top 20</MudSelectItem>
+                            <MudSelectItem T="int" Value="999">Todos (@_pivTotCol.Count)</MudSelectItem>
+                        </MudSelect>
+                    </div>
+                    <ApexChart TItem="BarItem" Options="_optsBar" Height="@_altoBarras" @ref="_barChart"
                                OnDataPointSelection="OnBarSelection">
                         <ApexPointSeries TItem="BarItem"
                                          Items="_barItems"
@@ -417,6 +428,16 @@ else
     // o "Alfabetico" (A–Z). Cambia en memoria, sin re-query.
     private string _ordenColumnas = "PorTotal";
 
+    // Cuántos servicios muestra el gráfico de BARRAS (selector "Mostrar"): 10/15/20 o 999=Todos.
+    // El donut siempre queda en top 10 + Otros (24 tajadas serían ilegibles). Sin re-query.
+    private int _topN = 10;
+    // Título dinámico del panel de barras según cuántos muestra.
+    private string TituloTopN => _topN >= 999
+        ? $"todos ({_barItems.Count})"
+        : $"top {Math.Min(_topN, _barItems.Count)}";
+    // Alto del gráfico de barras: ~30px por barra (mín. 360). Con "Todos" (24) crece a ~720.
+    private int _altoBarras = 360;
+
     private static readonly string[] _dias = { "dom", "lun", "mar", "mié", "jue", "vie", "sáb" };
     private static string FmtFecha(DateOnly f) => $"{_dias[(int)f.DayOfWeek]} {f:dd/MM/yyyy}";
     private static bool EsFinde(DateOnly f) => f.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
@@ -508,9 +529,14 @@ else
             .Select((x, i) => (x.Servicio, i))
             .ToDictionary(t => t.Servicio, t => t.i < _palette.Count ? _palette[t.i] : _colorOtros);
 
-        _barItems = ranking.Take(10)
+        // Barras: los N servicios elegidos en el selector "Mostrar" (Top 10/15/20 o Todos=999).
+        // A diferencia del donut, las barras SÍ pueden mostrar más de 10 (se leen bien apiladas).
+        _barItems = ranking.Take(_topN)
             .Select(x => new BarItem(x.Servicio, (decimal)x.Valor))
             .ToList();
+        // Alto dinámico: ~30px por barra, mínimo 360 (el de siempre para 10). Así con "Todos"
+        // (más barras) el gráfico crece y no se apelotonan.
+        _altoBarras = Math.Max(360, _barItems.Count * 30);
 
         // Donut: top 10 con hue fijo + el resto plegado en "Otros" (gris neutro). Top 10 (no 8)
         // para que los mismos servicios de las barras top 10 tengan color propio también acá →
@@ -573,6 +599,18 @@ else
     {
         _ordenColumnas = orden;
         OrdenarPivServicios();
+    }
+
+    // Cambio de "Mostrar Top N" en las barras: recalcula _barItems y el alto, sin re-query.
+    // Cambia la cantidad de barras y la altura (la FORMA del gráfico) → se remonta con key nuevo.
+    private void CambiarTopN(int topN)
+    {
+        _topN = topN;
+        if (_detalle.Count > 0)
+        {
+            Recalcular();
+            _chartsKey = Guid.NewGuid();
+        }
     }
 
     // Actualiza los gráficos en su lugar (sin remontar → sin parpadeo). Blazor-ApexCharts
