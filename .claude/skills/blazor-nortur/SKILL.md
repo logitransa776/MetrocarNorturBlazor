@@ -366,6 +366,25 @@ los dos paneles** (barras y donut) — la cabecera se extrajo a un `RenderFragme
 para no repetir el markup (el título va por parámetro porque el de barras es dinámico con la
 métrica). La ✕ de cualquiera de los dos chips limpia el foco de todo el tablero.
 
+**Doble-resaltado — DESACTIVAR el realce interno de ApexCharts (03/07/2026) — CLAVE.** Al usar
+`OnDataPointSelection`, ApexCharts marca por su cuenta la porción/barra clickeada con su estado
+`active` (además de nuestro highlight por color) → se veían DOS porciones resaltadas en el donut
+y una barra extra en gris oscuro. Fix: en las `Options` de barras Y donut, desactivar los
+estados internos:
+```csharp
+States = new()
+{
+    Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+    Hover  = new() { Filter = new() { Type = StatesFilterType.none } },
+};
+```
+OJO: los valores del enum `StatesFilterType` en Blazor-ApexCharts 6.1.0 son **minúscula**
+(`none`, `lighten`, `darken`) — `StatesFilterType.None` NO compila. Así el clic dispara nuestro
+handler pero ApexCharts no pinta nada por su cuenta; manda solo `ColorFoco`.
+
+**Cursor pointer sobre las marcas** (para señalar que son clickeables): por CSS en
+`.apexcharts-bar-area, .apexcharts-pie-area, .apexcharts-slice, .apexcharts-legend-series { cursor: pointer; }`.
+
 **Trampas resueltas:**
 - **Resetear el foco al Aplicar filtros** (`_servicioFocus = null` en `Cargar()`): un nuevo
   dataset puede no contener el servicio enfocado.

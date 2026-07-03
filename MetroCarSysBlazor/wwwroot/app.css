@@ -2952,6 +2952,16 @@ h1:focus {
     opacity: 0.32;
 }
 
+/* Cursor pointer sobre las marcas clickeables de los gráficos (barras y porciones del donut),
+   para señalar que se pueden seleccionar (cross-filter). */
+.apexcharts-bar-area,
+.apexcharts-pie-area,
+.apexcharts-slice,
+.apexcharts-datalabels,
+.apexcharts-legend-series {
+    cursor: pointer;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Informe "Reservas por banda horaria" (rbh-*)
    Reusa toda la maquinaria de la tabla pivote de rfs-*; solo agrega el punto de

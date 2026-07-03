@@ -159,30 +159,30 @@ else
 
     @* ── Tabla pivote fecha × servicio ── *@
     <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
-        <div class="d-flex justify-space-between align-center flex-wrap mb-3" style="gap:8px;">
-            <div>
-                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
-                    Detalle: @_metrica.ToLower() por fecha y servicio
-                </MudText>
-                <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
-                    Click en una celda para ver las reservas una por una
-                </MudText>
-            </div>
-            <div class="d-flex align-center flex-wrap" style="gap:12px;">
-                @* Orden de las columnas de servicio — cambia al instante, sin re-query. *@
+        <div class="d-flex justify-space-between align-center flex-wrap mb-3" style="gap:16px;">
+            <div class="d-flex align-center flex-wrap" style="gap:16px;">
+                <div>
+                    <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                        Detalle: @_metrica.ToLower() por fecha y servicio
+                    </MudText>
+                    <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                        Click en una celda para ver las reservas una por una
+                    </MudText>
+                </div>
+                @* Orden de las columnas de servicio — al lado del título; cambia al instante, sin re-query. *@
                 <MudSelect T="string" Value="_ordenColumnas" ValueChanged="CambiarOrdenColumnas"
                            Label="Ordenar columnas" Dense="true" Margin="Margin.Dense"
-                           Variant="Variant.Outlined" Style="width:190px;">
-                    <MudSelectItem T="string" Value="@("Alfabetico")">Alfabético (A–Z)</MudSelectItem>
+                           Variant="Variant.Outlined" Style="width:240px;">
                     <MudSelectItem T="string" Value="@("PorTotal")">Por total (mayor primero)</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("Alfabetico")">Alfabético (A–Z)</MudSelectItem>
                 </MudSelect>
-                <MudButton Variant="Variant.Filled" Color="MudColor.Success"
-                           StartIcon="@Icons.Material.Filled.Download"
-                           OnClick="DescargarExcel" Disabled="_cargandoDet"
-                           Style="border-radius:8px; text-transform:none;">
-                    Descargar Excel
-                </MudButton>
             </div>
+            <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                       StartIcon="@Icons.Material.Filled.Download"
+                       OnClick="DescargarExcel" Disabled="_cargandoDet"
+                       Style="border-radius:8px; text-transform:none;">
+                Descargar Excel
+            </MudButton>
         </div>
         @if (_cargandoDet)
         {
@@ -381,6 +381,13 @@ else
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
         Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
         Theme = new() { Mode = Mode.Light },
+        // Sin realce interno de ApexCharts (selección/hover): el highlight del foco es por color
+        // (ver nota en _optsPie). Evita la barra extra pintada en gris oscuro al clickear.
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
     };
 
     private ApexChartOptions<PieItem> _optsPie = new()
@@ -389,6 +396,14 @@ else
         Colors = _palette,
         Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px" },
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        // Desactivar el realce INTERNO de ApexCharts (selección/hover): el highlight del foco lo
+        // manejamos nosotros por color. Sin esto, ApexCharts marca además la porción clickeada
+        // (se veían DOS resaltadas). Filter.Type = None → solo manda nuestro color.
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
     };
 
     // ── Pivote ──
@@ -398,9 +413,9 @@ else
     private Dictionary<DateOnly, int> _pivTotFila = new();
     private Dictionary<string, int> _pivTotCol = new();
     private int _granTotal;
-    // Orden de las columnas de servicio de la tabla: "Alfabetico" (A–Z, default) o
-    // "PorTotal" (mayor total primero). Cambia en memoria, sin re-query.
-    private string _ordenColumnas = "Alfabetico";
+    // Orden de las columnas de servicio de la tabla: "PorTotal" (mayor total primero, default)
+    // o "Alfabetico" (A–Z). Cambia en memoria, sin re-query.
+    private string _ordenColumnas = "PorTotal";
 
     private static readonly string[] _dias = { "dom", "lun", "mar", "mié", "jue", "vie", "sáb" };
     private static string FmtFecha(DateOnly f) => $"{_dias[(int)f.DayOfWeek]} {f:dd/MM/yyyy}";
