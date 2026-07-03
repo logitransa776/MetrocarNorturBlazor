@@ -2891,20 +2891,29 @@ h1:focus {
 }
 
 /* ── Cross-filter / foco (estilo Power BI) ── */
-/* Chip que anuncia el servicio enfocado + botón para quitarlo. */
-.rfs-focus {
+/* Cabecera del panel de barras: título a la izquierda, chip/hint de foco a la derecha. */
+.rfs-bar-head {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 10px 6px 12px;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    min-height: 32px;
+}
+
+/* Chip compacto que anuncia el servicio enfocado + botón (X) para quitarlo. */
+.rfs-focus {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 4px 3px 10px;
     background: #EFF5FF;
     border: 1px solid #CBDCF5;
-    border-left: 4px solid #003AA0;
-    border-radius: 10px;
+    border-radius: 999px;
 }
 
 .rfs-focus__lbl {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     color: #4A6280;
     font-weight: 600;
 }
@@ -2912,12 +2921,19 @@ h1:focus {
 .rfs-focus__val {
     display: inline-block;
     padding: 2px 10px;
-    border-radius: 8px;
+    border-radius: 999px;
     color: #fff;
     font-weight: 800;
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     letter-spacing: 0.01em;
     /* el background lo pone inline el color del servicio */
+}
+
+/* Hint discreto cuando no hay foco activo (mismo lugar que el chip). */
+.rfs-focus-hint {
+    font-size: 0.72rem;
+    color: #A6B6CC;
+    white-space: nowrap;
 }
 
 /* Columna enfocada de la tabla: header y total resaltados. */

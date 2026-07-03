@@ -346,6 +346,20 @@ private void OnBarSelection(SelectedData<BarItem> e) {
 `SelectedData<T>` expone: `Chart`, `Series`, `DataPoint`, `IsSelected`, `DataPointIndex`,
 `SeriesIndex`. `DataPoint<T>` expone: `X`, `Y`, `Items`, `FillColor`, `Goals`, `Extra`.
 
+**Sin parpadeo al cambiar de foco (03/07/2026) — CLAVE.** El `<div @key="_chartsKey">` que
+envuelve los charts **desmonta y remonta** los ApexChart cuando el key cambia → eso PARPADEA.
+Regenerar el key SOLO cuando cambian los datos de verdad (Aplicar filtros, cambio de métrica),
+**NUNCA** en un cambio de foco. Para el foco, actualizar los charts **en su lugar** con `@ref`
++ `UpdateOptionsAsync(true, true, false)` (barras/donut) y `UpdateSeriesAsync(true)` (área) —
+es el update suave de ApexCharts, sin remontar. Sacar `_chartsKey = Guid.NewGuid()` de
+`Recalcular()` y ponerlo en `Cargar()` y `CambiarMetrica()`; `ToggleFoco` es async y llama a un
+`ActualizarGraficos()` tras `Recalcular()`. (Verificable en test: marcar el MudPaper del panel
+con un atributo y comprobar que sobrevive al foco → no remontó.)
+
+**Ubicación del chip de foco:** vive al lado del título del gráfico de barras (`.rfs-bar-head`:
+título a la izquierda, chip/hint a la derecha), NO como barra ancha sobre los KPIs. Pedido del
+usuario y queda más integrado.
+
 **Trampas resueltas:**
 - **Resetear el foco al Aplicar filtros** (`_servicioFocus = null` en `Cargar()`): un nuevo
   dataset puede no contener el servicio enfocado.

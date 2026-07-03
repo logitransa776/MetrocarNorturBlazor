@@ -90,27 +90,6 @@ else if (_detalle.Count == 0)
 }
 else
 {
-    @* ── Foco (cross-filter estilo Power BI): chip que indica el servicio enfocado ── *@
-    @if (_servicioFocus is not null)
-    {
-        <div class="rfs-focus mb-3">
-            <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudSize.Small" Style="color:#003AA0;" />
-            <span class="rfs-focus__lbl">Filtrado por servicio:</span>
-            <span class="rfs-focus__val" style="@($"background:{ColorDe(_servicioFocus)};")">@_servicioFocus</span>
-            <MudButton Variant="Variant.Text" Size="MudSize.Small" OnClick="LimpiarFoco"
-                       StartIcon="@Icons.Material.Filled.Close"
-                       Style="text-transform:none; color:#64748B; min-width:0;">
-                Quitar filtro
-            </MudButton>
-        </div>
-    }
-    else
-    {
-        <MudText Typo="Typo.caption" Class="rfs-focus-hint mb-2" Style="display:block; color:#8FA3BC;">
-            💡 Clic en un servicio (barra, porción del donut o columna de la tabla) para enfocar todo el tablero en ese servicio.
-        </MudText>
-    }
-
     @* ── KPIs ── (flex: las tarjetas se reparten parejo, sean 4 o 5) *@
     <div class="rfs-kpis mb-3">
         <KpiCard Label="Total reservas" Value="@Fmt(_totalRes)" Sub="@PeriodoTxt" Color="@NorturColors.Azul" />
@@ -133,7 +112,7 @@ else
             <MudText Typo="Typo.subtitle2" Class="mb-2" Style="font-weight:700; color:#112F5B;">
                 Evolución diaria — @_metrica
             </MudText>
-            <ApexChart TItem="SerieDia" Options="_optsArea" Height="230">
+            <ApexChart TItem="SerieDia" Options="_optsArea" Height="230" @ref="_areaChart">
                 <ApexPointSeries TItem="SerieDia"
                                  Items="_serieDias"
                                  Name="@_metrica"
@@ -147,10 +126,27 @@ else
         <MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
             <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
-                    <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:700; color:#112F5B;">
-                        @_metrica por servicio — top 10
-                    </MudText>
-                    <ApexChart TItem="BarItem" Options="_optsBar" Height="360"
+                    @* Título + chip de foco (cross-filter) a la derecha, dentro del panel del gráfico. *@
+                    <div class="rfs-bar-head mb-3">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                            @_metrica por servicio — top 10
+                        </MudText>
+                        @if (_servicioFocus is not null)
+                        {
+                            <div class="rfs-focus">
+                                <span class="rfs-focus__lbl">Filtrado:</span>
+                                <span class="rfs-focus__val" style="@($"background:{ColorDe(_servicioFocus)};")">@_servicioFocus</span>
+                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                               OnClick="LimpiarFoco" Title="Quitar filtro"
+                                               Style="color:#64748B; padding:2px;" />
+                            </div>
+                        }
+                        else
+                        {
+                            <span class="rfs-focus-hint">💡 Clic en un servicio para enfocar el tablero</span>
+                        }
+                    </div>
+                    <ApexChart TItem="BarItem" Options="_optsBar" Height="360" @ref="_barChart"
                                OnDataPointSelection="OnBarSelection">
                         <ApexPointSeries TItem="BarItem"
                                          Items="_barItems"
@@ -166,7 +162,7 @@ else
                     <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:700; color:#112F5B;">
                         Distribución — top 8 + otros
                     </MudText>
-                    <ApexChart TItem="PieItem" Options="_optsPie" Height="360"
+                    <ApexChart TItem="PieItem" Options="_optsPie" Height="360" @ref="_pieChart"
                                OnDataPointSelection="OnPieSelection">
                         <ApexPointSeries TItem="PieItem"
                                          Items="_pieItems"
@@ -312,6 +308,12 @@ else
     private List<BarItem> _barItems = new();
     private List<PieItem> _pieItems = new();
 
+    // Referencias a los charts para actualizarlos EN SU LUGAR al cambiar el foco (sin remontar
+    // → sin parpadeo). El @key/_chartsKey se reserva para cuando cambian los datos (Aplicar/métrica).
+    private ApexChart<SerieDia>? _areaChart;
+    private ApexChart<BarItem>? _barChart;
+    private ApexChart<PieItem>? _pieChart;
+
     // Paleta categórica validada (dataviz): azul de serie #2058D0 (el corporativo #003AA0
     // es demasiado oscuro para marcas de gráfico). El gris neutro final queda reservado para "Otros".
     private static readonly List<string> _palette = new()
@@ -435,15 +437,21 @@ else
             (_cabRes, _cabPax) = (0, 0);
 
         Recalcular();
+        _chartsKey = Guid.NewGuid();   // datos nuevos → remontar los charts (el key fuerza el remount)
 
         _cargando = false;
     }
 
-    // Cambio de métrica: recálculo en memoria, sin nueva query.
+    // Cambio de métrica: recálculo en memoria, sin nueva query. Cambia la forma de los gráficos
+    // (valores y escala) → se remontan con un key nuevo.
     private void CambiarMetrica(string metrica)
     {
         _metrica = metrica;
-        if (_detalle.Count > 0) Recalcular();
+        if (_detalle.Count > 0)
+        {
+            Recalcular();
+            _chartsKey = Guid.NewGuid();
+        }
     }
 
     private void Recalcular()
@@ -510,8 +518,16 @@ else
         _pivTotFila = datos.GroupBy(d => d.Fecha).ToDictionary(g => g.Key, g => g.Sum(val));
         _pivTotCol = _detalle.GroupBy(d => d.Servicio).ToDictionary(g => g.Key, g => g.Sum(val));
         _granTotal = datos.Sum(val);
+    }
 
-        _chartsKey = Guid.NewGuid();   // fuerza el remount de los ApexChart con los datos nuevos
+    // Actualiza los gráficos en su lugar (sin remontar → sin parpadeo). Blazor-ApexCharts
+    // detecta el cambio de Options/Items y llama al update suave de ApexCharts. Usar tras un
+    // cambio de FOCO (mismo dataset, solo cambian colores/atenuado y los datos derivados).
+    private async Task ActualizarGraficos()
+    {
+        if (_barChart is not null) await _barChart.UpdateOptionsAsync(true, true, false);
+        if (_pieChart is not null) await _pieChart.UpdateOptionsAsync(true, true, false);
+        if (_areaChart is not null) await _areaChart.UpdateSeriesAsync(true);
     }
 
     // Color de un servicio ATENUADO si hay foco y no es el enfocado (para barras/donut).
@@ -520,31 +536,28 @@ else
         (_servicioFocus is null || servicio == _servicioFocus) ? ColorDe(servicio) : "#D9E1EC";
 
     // ── Handlers del cross-filter ──
-    private void ToggleFoco(string servicio)
+    private async Task ToggleFoco(string servicio)
     {
         // Toggle: clic en el mismo servicio enfocado lo quita. "Otros" no es enfocable.
         _servicioFocus = (_servicioFocus == servicio || servicio == "Otros") ? null : servicio;
-        Recalcular();
+        Recalcular();                 // recalcula KPIs/tabla/colores (en memoria, sin re-query)
+        await ActualizarGraficos();   // repinta los charts EN SU LUGAR (sin remontar → sin parpadeo)
     }
 
-    private void LimpiarFoco()
-    {
-        _servicioFocus = null;
-        Recalcular();
-    }
+    private Task LimpiarFoco() => ToggleFoco(_servicioFocus ?? "");
 
     // ApexCharts entrega el punto clickeado en e.DataPoint; sus Items son los TItem agrupados
     // en ese punto (uno por categoría en barras/donut). Toggleamos el foco a ese servicio.
-    private void OnBarSelection(SelectedData<BarItem> e)
+    private async Task OnBarSelection(SelectedData<BarItem> e)
     {
         var servicio = e.DataPoint?.Items?.FirstOrDefault()?.Servicio;
-        if (servicio is not null) ToggleFoco(servicio);
+        if (servicio is not null) await ToggleFoco(servicio);
     }
 
-    private void OnPieSelection(SelectedData<PieItem> e)
+    private async Task OnPieSelection(SelectedData<PieItem> e)
     {
         var servicio = e.DataPoint?.Items?.FirstOrDefault()?.Servicio;
-        if (servicio is not null) ToggleFoco(servicio);
+        if (servicio is not null) await ToggleFoco(servicio);
     }
 
     private int PivVal(DateOnly f, string s) => _pivMap.TryGetValue((f, s), out var v) ? v : 0;
