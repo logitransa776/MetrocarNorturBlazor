@@ -1,0 +1,494 @@
+@inject ReportService Reports
+@inject AbmService Abm
+@inject IPermissionService Permisos
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Reserva Especial — form de alta fiel (reserva_transportacion_con_adicional.scx).
+   Modos: "alta" (form editable) y "ver". Réplica visual completa: fechas, cliente/operador,
+   servicios 1/2/3, vehículo, pax/km, grupo, guía, destinos, Valor Especial (permiso F),
+   Cnt Servicios y grilla de Adicionales, más modo "varios días" (ruta).
+
+   ⚠ ANDAMIAJE (07/07/2026): la ESCRITURA está construida (AbmService.AltaReservaEspecialAsync)
+   pero el botón Grabar está DESHABILITADO — el circuito `viaje` sigue con dueño FoxPro. Se activa
+   el DÍA D con AbmFeatureFlags.ReservasEspecialesAbmActivo=true. Plano: RESERVA_TRANSPORTACION.md.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.AddBox" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Nueva Reserva Especial</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">Alta</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:180px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else
+        {
+            @if (!_abmActivo)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    <b>Vista previa del alta de reservas.</b> La carga de reservas todavía se hace en FoxPro;
+                    esta pantalla queda lista para activarse el día que el circuito de viajes pase a Buslink.
+                </MudAlert>
+            }
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+            }
+
+            @* ── Fechas y horarios ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Fechas y horarios</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Pedido</div>
+                        <MudDatePicker @bind-Date="_fPedido" DateFormat="dd/MM/yyyy" PickerVariant="PickerVariant.Dialog"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Reserva</div>
+                        <MudDatePicker @bind-Date="_fReserva" DateFormat="dd/MM/yyyy" PickerVariant="PickerVariant.Dialog"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Hora inicio</div>
+                        <MudTextField @bind-Value="_horaInicio" Placeholder="HH:mm" MaxLength="5"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Hora fin</div>
+                        <MudTextField @bind-Value="_horaFin" Placeholder="HH:mm" MaxLength="5"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Duplica hasta</div>
+                        <MudDatePicker @bind-Date="_fFin" DateFormat="dd/MM/yyyy" PickerVariant="PickerVariant.Dialog"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--sm">
+                        <MudSwitch @bind-Value="_variosDias" Color="Color.Primary" Label="Servicio de varios días (ruta)" />
+                    </div>
+                    @if (_variosDias)
+                    {
+                        <div class="zoom-field zoom-field--sm">
+                            <div class="zoom-field__label">Vuelve el</div>
+                            <MudDatePicker @bind-Date="_fVuelve" DateFormat="dd/MM/yyyy" PickerVariant="PickerVariant.Dialog"
+                                           Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </div>
+                        <div class="zoom-field zoom-field--sm">
+                            <div class="zoom-field__label">Hora vuelta</div>
+                            <MudTextField @bind-Value="_horaVuelve" Placeholder="HH:mm" MaxLength="5"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @* ── Cliente / operador ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Cliente</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Cód. Cliente</div>
+                        <MudTextField @bind-Value="_idCliente" MaxLength="15" Immediate="true"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                    </div>
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Nombre / razón social</div>
+                        <MudTextField @bind-Value="_nombreCliente" MaxLength="50"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Operador</div>
+                        <MudTextField @bind-Value="_idOperador" MaxLength="15"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                    </div>
+                </div>
+            </div>
+
+            @* ── Servicios / vehículo ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Servicios y vehículo</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">1° Servicio</div>
+                        <MudSelect T="string" @bind-Value="_servicio1" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true">
+                            @foreach (var s in _servicios)
+                            {
+                                <MudSelectItem T="string" Value="@s.IdServici">@s.Nombre</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">2° Servicio</div>
+                        <MudSelect T="string" @bind-Value="_servicio2" Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true">
+                            @foreach (var s in _servicios)
+                            {
+                                <MudSelectItem T="string" Value="@s.IdServici">@s.Nombre</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">3° Servicio</div>
+                        <MudSelect T="string" @bind-Value="_servicio3" Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true">
+                            @foreach (var s in _servicios)
+                            {
+                                <MudSelectItem T="string" Value="@s.IdServici">@s.Nombre</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">T. Vehículo</div>
+                        <MudSelect T="string" @bind-Value="_tipoVehiculo" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true">
+                            @foreach (var v in _tiposVeh)
+                            {
+                                <MudSelectItem T="string" Value="@v.Id">@v.Nombre</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Pax</div>
+                        <MudNumericField @bind-Value="_pax" Min="0" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Km</div>
+                        <MudNumericField @bind-Value="_km" Min="0" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Aguas</div>
+                        <MudNumericField @bind-Value="_agua" Min="0" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Voucher</div>
+                        <MudNumericField @bind-Value="_voucher" Min="0" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Cnt. Servicios</div>
+                        <MudNumericField @bind-Value="_cantidadServicios" Min="1" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                </div>
+            </div>
+
+            @* ── Grupo ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Grupo</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Nombre del grupo (vacío = Sin grupo)</div>
+                        <MudTextField @bind-Value="_grupo" MaxLength="40"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">F. Partida</div>
+                        <MudDatePicker @bind-Date="_fGrupoFin" DateFormat="dd/MM/yyyy" PickerVariant="PickerVariant.Dialog"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                </div>
+            </div>
+
+            @* ── Guía / destinos / comentario ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Guía y recorrido</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Guía (nombre)</div>
+                        <MudTextField @bind-Value="_guiaNombre" MaxLength="23"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Guía (teléfono)</div>
+                        <MudTextField @bind-Value="_guiaTelefono" MaxLength="20"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Vuelo</div>
+                        <MudTextField @bind-Value="_vuelo" MaxLength="20"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Desde</div>
+                        <MudAutocomplete T="string" @bind-Value="_desde" SearchFunc="BuscarDestino" MaxItems="20"
+                                         CoerceValue="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                    </div>
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Hasta</div>
+                        <MudAutocomplete T="string" @bind-Value="_hasta" SearchFunc="BuscarDestino" MaxItems="20"
+                                         CoerceValue="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Distrito inicio</div>
+                        <MudTextField @bind-Value="_provincia" MaxLength="20"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <MudSwitch @bind-Value="_mas100km" Color="Color.Primary" Label="+100 km" />
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Comentario</div>
+                        <MudTextField @bind-Value="_comentario" MaxLength="254" Lines="2"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </div>
+                </div>
+            </div>
+
+            @* ── Adicionales (grilla en memoria) ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Adicionales</span>
+                <div class="pa-2">
+                    <div class="d-flex flex-wrap align-center mb-2" style="gap:8px;">
+                        <MudSelect T="string" @bind-Value="_adicSel" Label="Adicional" Dense="true"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:200px;">
+                            @foreach (var a in _adicionalesCat)
+                            {
+                                <MudSelectItem T="string" Value="@a.Codigo">@a.Nombre</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudNumericField @bind-Value="_adicCant" Label="Cant." Min="1" Style="width:90px;"
+                                         Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Add" OnClick="AgregarAdicional">Agregar</MudButton>
+                    </div>
+                    @if (_adicionales.Count > 0)
+                    {
+                        <MudSimpleTable Dense="true" Bordered="true" Style="max-width:520px;">
+                            <thead><tr><th>Adicional</th><th style="text-align:right;">Cant.</th><th></th></tr></thead>
+                            <tbody>
+                                @foreach (var ad in _adicionales)
+                                {
+                                    <tr>
+                                        <td>@ad.Nombre</td>
+                                        <td style="text-align:right;">@ad.Cantidad</td>
+                                        <td style="text-align:right;">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                           Color="Color.Error" OnClick="@(() => _adicionales.Remove(ad))" />
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </MudSimpleTable>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Style="color:#7A90AD;">Sin adicionales.</MudText>
+                    }
+                </div>
+            </div>
+
+            @* ── Valor Especial (permiso F) ── *@
+            @if (Permisos.Tiene('F'))
+            {
+                <div class="zoom-box zoom-box--sec">
+                    <span class="zoom-box__label">Valor Especial (precios convenidos)</span>
+                    <div class="zoom-row pa-2">
+                        <div class="zoom-field zoom-field--sm">
+                            <div class="zoom-field__label">Moneda facturar</div>
+                            <MudTextField @bind-Value="_monedaConvenida" MaxLength="10" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </div>
+                        <div class="zoom-field zoom-field--sm">
+                            <div class="zoom-field__label">Importe convenido</div>
+                            <MudNumericField @bind-Value="_importeConvenido" Min="0" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </div>
+                        <div class="zoom-field zoom-field--sm">
+                            <MudSwitch @bind-Value="_sinCargoCliente" Color="Color.Primary" Label="Sin cargo (cliente)" />
+                        </div>
+                        <div class="zoom-field zoom-field--sm">
+                            <div class="zoom-field__label">Descuento %</div>
+                            <MudNumericField @bind-Value="_descuento" Min="0" Max="100" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </div>
+                    </div>
+                    <div class="zoom-row pa-2">
+                        <div class="zoom-field zoom-field--sm">
+                            <div class="zoom-field__label">Moneda pagar</div>
+                            <MudTextField @bind-Value="_monedaPago" MaxLength="10" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </div>
+                        <div class="zoom-field zoom-field--sm">
+                            <div class="zoom-field__label">Importe pago</div>
+                            <MudNumericField @bind-Value="_importePago" Min="0" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </div>
+                        <div class="zoom-field zoom-field--sm">
+                            <MudSwitch @bind-Value="_sinCargoEmpresa" Color="Color.Primary" Label="Sin cargo (empresa)" />
+                        </div>
+                    </div>
+                </div>
+            }
+
+            @* ── Preview de filas a generar ── *@
+            <MudAlert Severity="Severity.Normal" Dense="true" Class="mt-2" Icon="@Icons.Material.Filled.Info">
+                Esta carga generaría <b>@PreviewFilas</b> @(PreviewFilas == 1 ? "reserva" : "reservas") en <code>viaje</code>
+                (@PreviewDetalle).
+            </MudAlert>
+
+            @* ── Botonera ── *@
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@(_abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                    @(_abmActivo ? "Alta habilitada" : "Escritura preparada · pendiente de activar en Buslink")
+                </div>
+                <div class="cli-footer__btns">
+                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Save" OnClick="@(() => Grabar("todo"))"
+                               Disabled="!_abmActivo || _grabando">
+                        @(_grabando ? "Grabando…" : "Grabar y limpiar")
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.SaveAs" OnClick="@(() => Grabar("mismoGrupo"))"
+                               Disabled="!_abmActivo || _grabando">
+                        Grabar y no limpiar
+                    </MudButton>
+                    <MudButton Variant="Variant.Text" Color="Color.Default" Size="Size.Small" OnClick="Cerrar">Cancelar</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string Modo { get; set; } = "alta";
+
+    // ⚠ Interruptor del andamiaje — mientras sea false el botón Grabar está deshabilitado Y
+    // AltaReservaEspecialAsync aborta antes de tocar la base (doble candado).
+    private static bool _abmActivo => AbmFeatureFlags.ReservasEspecialesAbmActivo;
+
+    private List<ServicioDto> _servicios = new();
+    private List<VehiculoTipoDto> _tiposVeh = new();
+    private List<DestinoRow> _destinos = new();
+    private List<(string Codigo, string Nombre)> _adicionalesCat = new();
+    private bool _cargando = true, _grabando;
+    private string? _error;
+
+    // Campos del form
+    private DateTime? _fPedido = DateTime.Today, _fReserva = DateTime.Today, _fFin = DateTime.Today;
+    private DateTime? _fVuelve = DateTime.Today, _fGrupoFin = DateTime.Today;
+    private string _horaInicio = "", _horaFin = "", _horaVuelve = "";
+    private bool _variosDias;
+    private string _idCliente = "", _nombreCliente = "", _idOperador = "";
+    private string _servicio1 = "", _servicio2 = "", _servicio3 = "", _tipoVehiculo = "";
+    private int _pax, _km, _agua, _voucher, _cantidadServicios = 1;
+    private string _grupo = "", _guiaNombre = "", _guiaTelefono = "", _vuelo = "SIN VUELO";
+    private string _desde = "", _hasta = "", _provincia = "", _comentario = "";
+    private bool _mas100km;
+    // Valor Especial
+    private string _monedaConvenida = "", _monedaPago = "";
+    private decimal _importeConvenido, _importePago, _descuento;
+    private bool _sinCargoCliente, _sinCargoEmpresa;
+    // Adicionales en memoria
+    private readonly List<AdicionalInput> _adicionales = new();
+    private string _adicSel = "";
+    private int _adicCant = 1;
+
+    // Preview de filas (días × cantidad de servicios), o 1 por día en modo ruta.
+    private int PreviewFilas
+    {
+        get
+        {
+            var fr = DateOnly.FromDateTime(_fReserva ?? DateTime.Today);
+            if (_variosDias)
+            {
+                var fv = DateOnly.FromDateTime(_fVuelve ?? _fReserva ?? DateTime.Today);
+                return Math.Max(1, fv.DayNumber - fr.DayNumber + 1);
+            }
+            var ff = DateOnly.FromDateTime(_fFin ?? _fReserva ?? DateTime.Today);
+            var dias = Math.Max(1, ff.DayNumber - fr.DayNumber + 1);
+            return dias * Math.Max(1, _cantidadServicios);
+        }
+    }
+    private string PreviewDetalle => _variosDias
+        ? "modo ruta: 1 fila por día del rango"
+        : $"{Math.Max(1, (DateOnly.FromDateTime(_fFin ?? _fReserva ?? DateTime.Today).DayNumber - DateOnly.FromDateTime(_fReserva ?? DateTime.Today).DayNumber) + 1)} día(s) × {Math.Max(1, _cantidadServicios)} servicio(s)";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _servicios = await Reports.GetServiciosAsync();
+        _tiposVeh = await Reports.GetVehiculosTipoAsync();
+        _destinos = await Reports.GetDestinosListaAsync();
+        // Catálogo de adicionales mínimo desde los destinos ya cargados no aplica; para el andamiaje,
+        // la lista de adicionales se deja preparada vacía (se completa al activar el circuito).
+        _adicionalesCat = new();
+        _cargando = false;
+    }
+
+    private async Task<IEnumerable<string>> BuscarDestino(string valor, CancellationToken _)
+    {
+        await Task.CompletedTask;
+        if (string.IsNullOrWhiteSpace(valor))
+            return _destinos.Take(20).Select(d => d.Destino);
+        return _destinos.Where(d => d.Destino.Contains(valor, StringComparison.OrdinalIgnoreCase))
+                        .Take(20).Select(d => d.Destino);
+    }
+
+    private void AgregarAdicional()
+    {
+        if (string.IsNullOrWhiteSpace(_adicSel)) return;
+        var cat = _adicionalesCat.FirstOrDefault(a => a.Codigo == _adicSel);
+        if (_adicionales.Any(a => a.Codigo == _adicSel)) return;   // anti-duplicado
+        _adicionales.Add(new AdicionalInput(_adicSel, cat.Nombre ?? _adicSel, Math.Max(1, _adicCant), 0m));
+        _adicSel = ""; _adicCant = 1;
+    }
+
+    private async Task Grabar(string modo)
+    {
+        if (!_abmActivo)
+        {
+            _error = "La escritura de reservas todavía no está habilitada (sigue en FoxPro).";
+            return;
+        }
+        _error = null; _grabando = true;
+
+        var guiaCompleto = string.IsNullOrWhiteSpace(_guiaNombre)
+            ? "SIN GUIA"
+            : $"{_guiaNombre.Trim()} : {_guiaTelefono.Trim()}";
+
+        var input = new ReservaEspecialInput(
+            FPedido: _fPedido is null ? null : DateOnly.FromDateTime(_fPedido.Value),
+            FReserva: DateOnly.FromDateTime(_fReserva ?? DateTime.Today),
+            HoraInicio: ParseHora(_horaInicio),
+            HoraFin: string.IsNullOrWhiteSpace(_horaFin) ? null : ParseHora(_horaFin),
+            HoraPresentacion: null,
+            FFin: _fFin is null ? null : DateOnly.FromDateTime(_fFin.Value),
+            CantidadServicios: _cantidadServicios,
+            VariosDias: _variosDias,
+            FVuelve: _fVuelve is null ? null : DateOnly.FromDateTime(_fVuelve.Value),
+            HoraVuelve: string.IsNullOrWhiteSpace(_horaVuelve) ? null : ParseHora(_horaVuelve),
+            IdCliente: _idCliente, NombreCliente: _nombreCliente, IdOperador: _idOperador,
+            IdServicio1: _servicio1, IdServicio2: _servicio2, IdServicio3: _servicio3,
+            TipoVehiculo: _tipoVehiculo, Pax: _pax, Km: _km, Agua: _agua, Voucher: _voucher,
+            Grupo: _grupo, FGrupoFin: _fGrupoFin is null ? null : DateOnly.FromDateTime(_fGrupoFin.Value),
+            GuiaNombreCompleto: guiaCompleto, GuiaNombre: _guiaNombre, GuiaTelefono: _guiaTelefono,
+            Desde: _desde, Hasta: _hasta, Provincia: _provincia, Mas100Km: _mas100km,
+            Vuelo: _vuelo, Comentario: _comentario,
+            MonedaConvenida: _monedaConvenida, ImporteConvenido: _importeConvenido,
+            SinCargoCliente: _sinCargoCliente, Descuento: _descuento,
+            MonedaPago: _monedaPago, ImportePago: _importePago, SinCargoEmpresa: _sinCargoEmpresa,
+            Adicionales: _adicionales.ToList(), Usuario: "");
+
+        var res = await Abm.AltaReservaEspecialAsync(input);
+        _grabando = false;
+        if (res.Ok) MudDialog.Close(DialogResult.Ok(true));
+        else { _error = res.Error; StateHasChanged(); }
+    }
+
+    private static TimeOnly ParseHora(string hhmm) =>
+        TimeOnly.TryParseExact(hhmm?.Trim(), "HH:mm", out var t) ? t : new TimeOnly(0, 0);
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+}

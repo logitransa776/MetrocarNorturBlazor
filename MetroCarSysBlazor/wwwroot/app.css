@@ -1340,6 +1340,37 @@ h1:focus {
     --z-acento:    #003AA0;   /* azul NORTUR (antes naranja) */
     --z-sep:       #CDD6E8;   /* separador de sección — más marcado */
     --z-header-bg: #112F5B;   /* header del diálogo — azul noche NORTUR */
+
+    /* ── ESTÁNDAR DE MODALES NORTUR (perillas únicas, 06/07/2026) ──
+       Tamaños/espaciados compactos validados por el usuario en el Zoom del Viaje.
+       TODO dialog del sistema (zoom-*, cli-dialog, nortur-ficha) consume estas
+       variables → un solo lugar para calibrar cómo se ve un modal en las
+       terminales de tráfico chicas (objetivo: 1280×720 sin desbordar).
+       Cambiar acá reajusta todos los modales a la vez. */
+    --nt-dlg-font-label:   0.68rem;   /* etiqueta de campo (MAYÚS) */
+    --nt-dlg-font-value:   0.83rem;   /* valor del campo */
+    --nt-dlg-font-boxlbl:  0.72rem;   /* título de bloque/sección */
+    --nt-dlg-pad-row:      2px 12px;  /* padding de una fila de campos */
+    --nt-dlg-pad-boxlbl:   2px 12px;  /* padding del título de bloque */
+    --nt-dlg-gap-box:      5px;       /* separación vertical entre bloques */
+    --nt-dlg-line:         1.25;      /* interlineado de valores */
+    --nt-dlg-content-pad:  12px 16px 14px; /* padding del cuerpo del dialog */
+    /* Tope de alto: el cuerpo del dialog nunca supera la pantalla; si el
+       contenido es más alto, scrollea DENTRO del modal (legibilidad primero). */
+    --nt-dlg-max-h:        calc(100vh - 100px);
+}
+
+/* ── Terminales de tráfico chicas (≤1280×720, notebooks/tablets) ──
+   En pantallas bajas el header del AppBar + barra de alertas comen alto: dejamos
+   MÁS viewport al modal (tope calculado sobre menos margen) y apretamos los
+   espaciados verticales un punto. La FUENTE NO baja (legibilidad primero, 2B):
+   si aun así el contenido no entra, el cuerpo scrollea dentro del modal. */
+@media (max-height: 800px) {
+    :root {
+        --nt-dlg-max-h:       calc(100vh - 72px);
+        --nt-dlg-gap-box:     4px;
+        --nt-dlg-content-pad: 8px 14px 10px;
+    }
 }
 
 /* ── MudDialog shell ── */
@@ -1356,13 +1387,13 @@ h1:focus {
 }
 .zoom-viaje-dialog .mud-dialog-content {
     background: var(--z-bg) !important;
-    padding: 12px 16px 14px !important;
+    padding: var(--nt-dlg-content-pad) !important;
     overflow-y: auto !important;
-    max-height: calc(100vh - 100px) !important;
+    max-height: var(--nt-dlg-max-h) !important;
 }
 
 /* Ancho máximo */
-.zoom-viaje-dialog { max-width: 920px; }
+.zoom-viaje-dialog { max-width: 1180px; }
 
 /* ── GPS embebido (Ubicar unidad / Recorrido en WEB en modal con iframe) ──
    El mapa GPS (metrocar.nortur.ar) se muestra en un iframe a pantalla casi completa.
@@ -1437,40 +1468,40 @@ h1:focus {
     flex-wrap: wrap;
     gap: 0 18px;
     border-radius: 6px;
-    padding: 7px 14px;
-    margin-bottom: 10px;
+    padding: 5px 14px;
+    margin-bottom: 8px;
     border: 1px solid transparent;
 }
 .zoom-estado-banda__label {
-    font-size: 0.72rem;
+    font-size: 0.66rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.7px;
     color: rgba(0,0,0,0.5);
     display: block;
-    margin-bottom: 1px;
+    margin-bottom: 0;
 }
 .zoom-estado-banda__valor {
-    font-size: 1.18rem;
+    font-size: 0.95rem;
     font-weight: 800;
     color: #1A2A45;
-    letter-spacing: 0.8px;
+    letter-spacing: 0.7px;
     text-transform: uppercase;
 }
 .zoom-estado-banda__sep {
     width: 1px;
-    height: 32px;
+    height: 26px;
     background: rgba(0,0,0,0.15);
     margin: 0 2px;
 }
 .zoom-estado-banda__item { display: flex; flex-direction: column; }
 .zoom-estado-banda__valor2 {
-    font-size: 0.98rem;
+    font-size: 0.82rem;
     font-weight: 600;
     color: #1A2A45;
 }
 .zoom-estado-banda__nro {
-    font-size: 1.14rem;
+    font-size: 0.92rem;
     font-weight: 800;
     color: #F99410;
     letter-spacing: 0.5px;
@@ -1480,8 +1511,8 @@ h1:focus {
 /* ── Grid principal: columna datos + columna derecha (adicionales + valores) ── */
 .zoom-grid {
     display: grid;
-    grid-template-columns: 1fr 175px;
-    gap: 10px;
+    grid-template-columns: 1fr 210px;
+    gap: 12px;
     align-items: start;
 }
 .zoom-col { display: flex; flex-direction: column; gap: 0; }
@@ -1503,7 +1534,7 @@ h1:focus {
     display: flex;
     flex-wrap: wrap;
     gap: 0 14px;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
 }
 .zoom-row:last-child { margin-bottom: 0; }
 
@@ -1511,26 +1542,34 @@ h1:focus {
 .zoom-field          { flex: 1 1 0; min-width: 90px; }
 .zoom-field--2       { flex: 2 1 0; }
 .zoom-field--3       { flex: 3 1 0; }
+/* Campo angosto: para columnas de valor corto (Cód. Cabecera, Kilómetros,
+   Rec. Celular). Base chica para ceder ancho a los textos largos, pero PUEDE
+   crecer (flex-grow 1) si el valor lo necesita → evita el wrap a 2 renglones. */
+.zoom-field--sm      { flex: 1 1 90px; min-width: 90px; max-width: 150px; }
 
 .zoom-field__label {
-    font-size: 0.72rem;
+    font-size: var(--nt-dlg-font-label);
     color: var(--z-label);
     text-transform: uppercase;
-    letter-spacing: 0.35px;
-    margin-bottom: 1px;
+    letter-spacing: 0.3px;
+    margin-bottom: 0;
     font-weight: 600;
     display: block;
     white-space: nowrap;
 }
 .zoom-field__value {
-    font-size: 0.96rem;
+    font-size: var(--nt-dlg-font-value);   /* estándar de modal — más datos en 1 línea */
     color: var(--z-value);
     font-weight: 600;
-    padding-bottom: 2px;
-    min-height: 20px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    padding-bottom: 0;
+    min-height: 18px;
+    /* Ya NO se recorta con "…": el texto largo (nombres de cliente/operador,
+       recorrido Desde/Hasta, guía, comentario) hace wrap a 2+ líneas y se ve
+       completo. Se mantiene el tooltip (title=) para leerlo sin recorrer. */
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: var(--nt-dlg-line);
     display: block;
 }
 .zoom-field__value--acento { color: var(--z-acento); font-weight: 700; }
@@ -1541,28 +1580,28 @@ h1:focus {
     border: 1px solid var(--z-border);
     border-radius: 6px;
     overflow: hidden;
-    margin-top: 8px;
+    margin-top: var(--nt-dlg-gap-box);
 }
 .zoom-box__label {
-    font-size: 0.78rem;
+    font-size: var(--nt-dlg-font-boxlbl);
     font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: 0.7px;
+    letter-spacing: 0.6px;
     color: var(--z-acento);
-    padding: 4px 12px 3px;
+    padding: var(--nt-dlg-pad-boxlbl);
     border-bottom: 1px solid var(--z-sep);
     background: #EEF3FB;
     display: block;
 }
 .zoom-box > .zoom-row {
-    padding: 4px 12px;
+    padding: var(--nt-dlg-pad-row);
     margin-bottom: 0;
     border-bottom: 1px solid var(--z-sep);
 }
 .zoom-box > .zoom-row:last-child { border-bottom: none; }
-.zoom-box--sec    { border-left: 3px solid #003AA0; margin-top: 6px; }
+.zoom-box--sec    { border-left: 3px solid #003AA0; margin-top: var(--nt-dlg-gap-box); }
 .zoom-box--sec:first-child { margin-top: 0; }
-.zoom-box--chofer { border-left: 3px solid #003AA0; margin-top: 6px; }
+.zoom-box--chofer { border-left: 3px solid #003AA0; margin-top: var(--nt-dlg-gap-box); }
 
 /* ── Panel naranja: Valores del Servicio (columna derecha) ── */
 .zoom-box--valores {
@@ -1657,12 +1696,14 @@ h1:focus {
     gap: 6px;
 }
 .zoom-doc__valor {
-    font-size: 0.96rem;
+    font-size: 0.83rem;   /* igualado al resto de valores */
     color: var(--z-value);
     font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    /* La ruta del adjunto puede ser larga (UNC): que se vea completa. */
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.25;
 }
 .zoom-doc__btn {
     flex-shrink: 0;
@@ -1933,6 +1974,20 @@ h1:focus {
 .cli-grid__row--sel:hover {
     background: #BFDBFE !important;
 }
+/* Combustible: carga ya conciliada (n_sobre ≠ 0) — réplica del dynamicbackcolor amarillo del FoxPro. */
+.comb-row--conciliada {
+    background: #FFF6CC !important;
+}
+.comb-row--conciliada:hover {
+    background: #FDE68A !important;
+}
+/* Combustible: unidad atrasada (15+ días sin cargar) — rojo suave. */
+.comb-row--atrasada {
+    background: #FDE2E1 !important;
+}
+.comb-row--atrasada:hover {
+    background: #FBC9C7 !important;
+}
 
 .cli-toolbar {
     display: flex;
@@ -2043,6 +2098,60 @@ h1:focus {
     color: #7A90AD;
     font-style: italic;
 }
+/* Odómetros — barra de filtros compacta (radio en línea, controles bien pegados) */
+.odo-filtros .odo-radio {
+    margin-right: 2px;
+}
+/* Los MudRadio en fila, chiquitos */
+.odo-filtros .odo-radio .mud-radio-group {
+    display: flex;
+    gap: 2px;
+}
+.odo-filtros .odo-radio label {
+    margin: 0;
+}
+/* Grupos de controles relacionados (Interno+Dominio, Desde+Hasta) bien pegaditos */
+.odo-filtros .odo-grupo {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+/* Que los inputs densos no metan alto extra en la barra */
+.odo-filtros .mud-input-control-input-container {
+    min-height: unset;
+}
+
+/* Siniestros — comparativa de zonas dañadas (asegurado vs tercero) */
+.sin-danos {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+.sin-danos__col {
+    flex: 1 1 220px;
+    min-width: 200px;
+}
+.sin-danos__title {
+    font-size: 0.78rem;
+    font-weight: 800;
+    color: #112F5B;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}
+/* Siniestros — texto de descripción libre del accidente (campo memo) */
+.sin-descripcion {
+    font-size: 0.86rem;
+    line-height: 1.4;
+    color: #2A3B52;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: #F7FAFF;
+    border: 1px solid #E1E9F5;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-top: 4px;
+}
 .cli-mails {
     margin-top: 4px;
 }
@@ -2148,7 +2257,9 @@ h1:focus {
    NORTUR. Aplicado en: Cliente, Chofer, Vehículo.
    Uso en el .razor:  <MudDialog Class="zoom-viaje-dialog nortur-ficha"> */
 .nortur-ficha .zoom-field__value {
-    font-size: 0.8rem;
+    /* tamaño e interlineado del estándar; solo el peso/letter-spacing es propio
+       de la ficha (dato liviano: contraste por color, no por grosor). */
+    font-size: var(--nt-dlg-font-value);
     font-weight: 500;            /* antes 600 — se veía "bloque negro" */
     color: var(--z-value);
     letter-spacing: 0.1px;
@@ -2163,21 +2274,23 @@ h1:focus {
 }
 
 /* ── Bloques como tarjeta: header gris + cuerpo blanco ──
-   (escopeado a las fichas; no toca Liquidación ni el Zoom del Viaje) */
+   (escopeado a las fichas; no toca Liquidación ni el Zoom del Viaje)
+   Tamaños/espaciado del estándar; el look de tarjeta (borde, sombra, franja
+   gris del header) es propio de la ficha. */
 .nortur-ficha .zoom-box {
     background: #FFFFFF;                       /* cuerpo blanco para máximo contraste */
     border: 1px solid #D8E0EC;
     border-radius: 8px;
     box-shadow: 0 1px 2px rgba(16,40,80,0.05); /* leve elevación, se ve como tarjeta */
-    margin-top: 10px;
+    margin-top: var(--nt-dlg-gap-box);
 }
 .nortur-ficha .zoom-box__label {
     color: #3A4A66;                            /* título gris oscuro, legible */
     background: #EDEFF3;                        /* FRANJA GRIS del header */
     border-bottom: 1px solid #DCE2EC;
-    font-size: 0.76rem;
+    font-size: var(--nt-dlg-font-boxlbl);
     letter-spacing: 0.6px;
-    padding: 5px 12px 4px;
+    padding: var(--nt-dlg-pad-boxlbl);
 }
 /* el borde-izquierdo de acento se mantiene, pero gris para acompañar la franja */
 .nortur-ficha .zoom-box--sec,
@@ -2645,6 +2758,59 @@ h1:focus {
 /* ── ABM de Usuarios: grilla de los 16 permisos (UsuarioEditorDialog) ── */
 .usr-dialog { max-width: 760px; }
 
+/* Estado de conexión en la grilla de usuarios (última sesión). */
+.usr-conn { font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
+.usr-conn--on   { color: #16A34A; }
+.usr-conn--off  { color: #94A3B8; }
+.usr-conn--none { color: #C4CDDA; font-weight: 400; }
+
+/* Chips de una letra del campo `acceso` (componente AccesoChips). */
+.acc-chips { display: inline-flex; flex-wrap: wrap; gap: 3px; }
+.acc-chip {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; border-radius: 4px;
+    color: #fff; font-size: 0.68rem; font-weight: 700; font-family: monospace;
+    line-height: 1; cursor: default; user-select: none;
+}
+
+/* Panel de leyenda de accesos (componente LeyendaAccesos). */
+.leyenda-acc { margin-bottom: 10px; }
+.leyenda-acc__toggle {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: none; border: none; cursor: pointer;
+    color: #003AA0; font-size: 0.8rem; font-weight: 600; padding: 2px 0;
+}
+.leyenda-acc__toggle:hover { text-decoration: underline; }
+.leyenda-acc__grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 4px 16px; margin-top: 8px; padding: 10px 12px;
+    background: #F5F8FC; border: 1px solid #E2EAF4; border-radius: 10px;
+}
+.leyenda-acc__item { display: flex; align-items: center; gap: 8px; }
+.leyenda-acc__label { font-size: 0.78rem; color: #334155; }
+
+/* Pills de tipo de evento en Auditoría de accesos. */
+.acc-ev {
+    display: inline-block; padding: 1px 8px; border-radius: 10px;
+    font-size: 0.72rem; font-weight: 700; white-space: nowrap;
+}
+.acc-ev--login    { background: #DCFCE7; color: #15803D; }
+.acc-ev--logout   { background: #E8EFF9; color: #1D4ED8; }
+.acc-ev--expirada { background: #FEF3C7; color: #B45309; }
+.acc-ev--vencida  { background: #FFEDD5; color: #C2410C; }
+.acc-ev--fallido  { background: #FEE2E2; color: #B91C1C; }
+
+/* Historial de sesiones en la ficha del usuario (modo ver). */
+.usr-ses { max-height: 240px; overflow-y: auto; padding: 4px 8px 8px; }
+.usr-ses__tbl { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.usr-ses__tbl th {
+    position: sticky; top: 0; background: #E8EFF9; color: #112F5B;
+    font-weight: 700; text-align: left; padding: 4px 8px; white-space: nowrap;
+    border-bottom: 1px solid #C4D3E8;
+}
+.usr-ses__tbl td { padding: 3px 8px; border-bottom: 1px solid #EEF2F8; white-space: nowrap; }
+.usr-ses__tbl tbody tr:hover { background: #F5F8FC; }
+
 .usr-perms {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2879,6 +3045,35 @@ h1:focus {
     font-size: 0.85rem;
 }
 
+/* ── Columna TOTAL fija a la derecha (espejo de la columna Fecha) ──
+   Con muchas columnas de servicio (24), el total de fila quedaba invisible sin
+   scrollear hasta el final. Sticky right en la última celda de cada fila. */
+.rfs-tabla th:last-child,
+.rfs-tabla td:last-child {
+    position: sticky;
+    right: 0;
+    border-left: 1px solid #E2E9F4;
+}
+
+.rfs-tabla tbody td:last-child {
+    background: #F8FAFD;
+    z-index: 1;
+}
+
+.rfs-tabla thead th:last-child {
+    z-index: 3;
+    background: #F4F7FB;
+}
+
+.rfs-tabla tfoot td:last-child {
+    z-index: 3;
+    background: #EEF3FA;
+}
+
+.rfs-tabla tbody tr:hover td:last-child {
+    background: #F0F5FC;
+}
+
 /* ── Pill de estado (drill-down) ── */
 .rfs-estado {
     display: inline-block;
@@ -2899,6 +3094,90 @@ h1:focus {
     gap: 10px;
     flex-wrap: wrap;
     min-height: 32px;
+}
+
+/* ── Fila de gráficos pareja ──
+   MudGrid/MudItem no estiran el contenido a igual altura: el panel más corto
+   (p. ej. el donut/área) queda con un hueco blanco enorme debajo. Con esto los
+   items de la fila se estiran a la altura del más alto y sus MudPaper llenan el
+   item (height:100%), de modo que ambos paneles terminan alineados abajo. */
+.nt-chart-row {
+    align-items: stretch;
+}
+.nt-chart-row > .mud-grid-item {
+    display: flex;
+}
+.nt-chart-row > .mud-grid-item > .mud-paper {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+/* El contenedor del gráfico ocupa el alto sobrante del panel para que el SVG
+   quede centrado y no deje aire muerto arriba/abajo. */
+.nt-chart-row .nt-chart-fill {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+}
+.nt-chart-row .nt-chart-fill > .apexcharts-canvas,
+.nt-chart-row .nt-chart-fill .mud-chart {
+    width: 100%;
+}
+
+/* Título + selector "Mostrar" juntos a la izquierda de la cabecera de barras. */
+.rfs-bar-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: nowrap;
+}
+
+/* Selector "Mostrar Top N" compacto, para que quede al lado del título sin ocupar de más.
+   MudBlazor deja el MudSelect a width:100% por defecto; hay que forzar el ancho en el
+   propio control con !important, si no se estira y cae debajo del título. */
+.rfs-topn-select {
+    width: 140px !important;
+    min-width: 140px;
+    flex: 0 0 140px;
+}
+.rfs-topn-select .mud-input-control,
+.rfs-topn-select .mud-input {
+    font-size: 0.82rem;
+}
+/* Achica un poco el alto del input outlined para que no domine la fila del título. */
+.rfs-topn-select .mud-input-slot {
+    padding-top: 6px;
+    padding-bottom: 6px;
+}
+
+/* Estado "activo/seleccionado": fondo azul suave, borde naranja NORTUR y texto azul
+   corporativo, para que se note que es un control interactivo y qué está elegido. */
+.rfs-topn-select .mud-input.mud-input-outlined {
+    background: #EFF5FF;
+    border-radius: 8px;
+    transition: box-shadow .15s ease, background .15s ease;
+}
+.rfs-topn-select .mud-input.mud-input-outlined .mud-input-outlined-border {
+    border-color: #F99410 !important;
+    border-width: 1.5px !important;
+}
+/* El valor seleccionado (Top 15) en azul corporativo y algo más marcado. */
+.rfs-topn-select .mud-select-input,
+.rfs-topn-select .mud-input-slot {
+    color: #112F5B;
+    font-weight: 600;
+}
+/* La etiqueta "Mostrar" también en el naranja de acento. */
+.rfs-topn-select .mud-input-label {
+    color: #E07C00 !important;
+    font-weight: 600;
+}
+/* Halo naranja suave al pasar el mouse / enfocar, para reforzar que resalta. */
+.rfs-topn-select:hover .mud-input.mud-input-outlined,
+.rfs-topn-select .mud-input.mud-input-outlined.mud-focused {
+    box-shadow: 0 0 0 3px rgba(249, 148, 16, 0.18);
+    background: #E8F1FF;
 }
 
 /* Chip compacto que anuncia el servicio enfocado + botón (X) para quitarlo. */

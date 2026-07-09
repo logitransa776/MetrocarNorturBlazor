@@ -32,6 +32,13 @@ es para administrarlos.
 - Orden por optiongroup: por **cliente** (razón social, nombre) o por **grupo** (nombre).
   La búsqueda incremental usa el campo del orden activo.
 - Grilla: código cliente, razón social, nombre del grupo, F. Fin Grupo, **F. Facturo**, id.
+- JOIN: `INNER JOIN cliente ON cliente_grupo.id_cliente = cliente.id_cliente` (un grupo cuyo
+  cliente no exista desaparece de la lista).
+- ⚠️ **El `arma_grid` activo NO filtra `f_delete`** (verificado 06/07/2026): trae TODOS los
+  grupos (borrados incluidos). Existe un `arma_grid_bk` (backup, NO usado) que sí filtra
+  `EMPTY(f_delete)`. Como la baja de grupo es **DELETE físico** (ver abajo), en la práctica no
+  hay grupos con `f_delete` seteado. En Blazor: replicar el activo (`_deleted = 0` de la réplica
+  igual, por convención del proyecto).
 - **Agregar** exige permiso `"2" $ cNivel`; Eliminar/Modificar/Consulta **no chequean
   permiso** (rareza heredada — en Blazor aplicar 3/4 igual).
 - **Cambio de cliente** (botón + textbox "cliente nuevo"): mueve un grupo entero a otro
@@ -67,10 +74,19 @@ Modos `alta` / `baja` / `modifica` / `consulta`. **El alta está totalmente come
 ### Modifica (renombrar grupo / cambiar fecha fin)
 
 - Campos editables: **nombre nuevo** (`nombre_new`) y `f_grupo_fin` — pero si
-  `f_grupo_fc` tiene valor (grupo facturado) quedan deshabilitados.
-- Valida que el nombre nuevo no exista para ese cliente.
-- Cuenta viajes por estado: si **todos FACTURADOS** → bloquea ("ya no pueden ser
-  modificadas"); los CANCELADO no cuentan.
+  `f_grupo_fc` tiene valor (grupo facturado) quedan deshabilitados. (⚠️ En el fuente en disco
+  `f_grupo_fin` viene deshabilitado siempre en el `Init` de modifica —línea 115—, luego solo
+  `nombre_new` y `f_grupo_ini` son editables de hecho; en Blazor habilitar según `f_grupo_fc`.)
+- Valida que el nombre nuevo no exista para ese cliente (solo si cambió el nombre).
+- **Clasificación de estados en MODIFICA (distinta a la BAJA — verificado 06/07/2026):**
+  - `CANCELADO` → se ignora (no cuenta).
+  - `SIN ASIGNAR` **o** `ASIGNADO` **o** `FINALIZADO` → suman a `nHayC` = **modificables**.
+    (⚠️ ojo: acá **FINALIZADO SÍ es modificable**, al revés que en la baja, donde FINALIZADO
+    es bloqueante junto con FACTURADO.)
+  - `FACTURADO` → suma a `nHayF` = **bloqueante**.
+  - Si `nHayC ≠ 0` (hay al menos uno modificable) → confirma y hace el UPDATE.
+  - Si `nHayC = 0` (todo FACTURADO/cancelado) → bloquea: "los estados de las reservas ya no
+    pueden ser modificadas".
 - Confirmación → `UPDATE viaje SET grupo = nuevo, f_grupo_fin = … WHERE id_cliente+grupo=…`
   + `UPDATE cliente_grupo SET nombre, f_grupo_fin, f_grupo_ini WHERE id = …`.
 

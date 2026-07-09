@@ -75,23 +75,29 @@
                     </div>
 
                     <div class="zoom-box zoom-box--sec">
-                        <span class="zoom-box__label">Cliente</span>
+                        <span class="zoom-box__label">Cliente / Grupo</span>
                         <div class="zoom-row">
                             @F("Código",   Str(_d.IdCliente))
                             @F("Nombre",   Str(_d.NombreCliente), ancho: 2)
                             @F("Operador", string.IsNullOrWhiteSpace(_d.IdOperador) ? "—" : _d.IdOperador)
                             @F("",         string.IsNullOrWhiteSpace(_d.NombreOperador) ? "—" : _d.NombreOperador)
                         </div>
+                        <div class="zoom-row">
+                            @F("Grupo",   _d.TieneGrupo ? "AGREGA" : "SIN GRUPO")
+                            @F("Nombre grupo",  string.IsNullOrWhiteSpace(_d.NombreGrupo) ? _d.Grupo : _d.NombreGrupo, ancho: 2)
+                            @F("F. Fin",  Fecha(_d.FGrupoFin))
+                            @F("F. Fact", Fecha(_d.FGrupoFactura))
+                        </div>
                     </div>
 
                     <div class="zoom-box zoom-box--sec">
                         <span class="zoom-box__label">Servicios</span>
                         <div class="zoom-row">
-                            @F("1° Servicio",   Serv(_d.IdServicio1, _d.Servicio1), ancho: 2)
-                            @F("2° Servicio",   Serv(_d.IdServicio2, _d.Servicio2))
-                            @F("3° Servicio",   Serv(_d.IdServicio3, _d.Servicio3))
-                            @F("Cód. Cabecera", Str(_d.Cabecera))
-                            @F("Kilómetros",    (_d.Km ?? 0).ToString("N0"))
+                            @F("1° Servicio",   Serv(_d.IdServicio1, _d.Servicio1), ancho: 3)
+                            @F("2° Servicio",   Serv(_d.IdServicio2, _d.Servicio2), ancho: 3)
+                            @F("3° Servicio",   Serv(_d.IdServicio3, _d.Servicio3), ancho: 2)
+                            @F("Cód. Cabecera", Str(_d.Cabecera), sm: true)
+                            @F("Kilómetros",    (_d.Km ?? 0).ToString("N0"), sm: true)
                         </div>
                     </div>
 
@@ -105,16 +111,6 @@
                             @F("Horas",  (_d.Horas ?? 0).ToString())
                             @F("Vuelo",  string.IsNullOrWhiteSpace(_d.Vuelo) ? "SIN VUELO" : _d.Vuelo)
                             @F("Guía",   Str(_d.Guia), ancho: 2)
-                        </div>
-                    </div>
-
-                    <div class="zoom-box zoom-box--sec">
-                        <span class="zoom-box__label">Grupo</span>
-                        <div class="zoom-row">
-                            @F("Grupo",   _d.TieneGrupo ? "AGREGA" : "SIN GRUPO")
-                            @F("Nombre",  string.IsNullOrWhiteSpace(_d.NombreGrupo) ? _d.Grupo : _d.NombreGrupo, ancho: 2)
-                            @F("F. Fin",  Fecha(_d.FGrupoFin))
-                            @F("F. Fact", Fecha(_d.FGrupoFactura))
                         </div>
                     </div>
 
@@ -136,15 +132,13 @@
                     <div class="zoom-box zoom-box--sec">
                         <span class="zoom-box__label">Recorrido</span>
                         <div class="zoom-row">
-                            @F("Desde",          Str(_d.Desde), ancho: 2)
-                            @F("Hasta",          Str(_d.Hasta), ancho: 2)
-                            @F("Distrito Inicio",Str(_d.Distrito))
-                            @F("Rec. Celular",   Str(_d.RecorridoCelular), ancho: 2)
+                            @F("Desde",          Str(_d.Desde), ancho: 3)
+                            @F("Hasta",          Str(_d.Hasta), ancho: 3)
+                            @F("Distrito Inicio",Str(_d.Distrito), ancho: 2)
+                            @F("Rec. Celular",   Str(_d.RecorridoCelular), sm: true)
                         </div>
                         <div class="zoom-row">
-                            @F("Comentario", Str(_d.Comentario), ancho: 4)
-                        </div>
-                        <div class="zoom-row">
+                            @F("Comentario", Str(_d.Comentario), ancho: 2)
                             @FDoc("Documento", _d.TieneAdjunto ? _d.Adjunto : "Sin Adjunto", _d.TieneAdjunto)
                         </div>
                     </div>
@@ -181,7 +175,7 @@
                                     @foreach (var a in _adicionales)
                                     {
                                         <tr>
-                                            <td>@a.Nombre</td>
+                                            <td title="@a.Nombre">@a.Nombre</td>
                                             <td class="r">@a.Cantidad</td>
                                         </tr>
                                     }
@@ -261,10 +255,12 @@
     }
 
     // Campo label+valor. ancho=columnas que ocupa (1..n), acento=naranja NORTUR.
-    private RenderFragment F(string label, string valor, bool acento = false, int ancho = 1) => b =>
+    // sm=true → campo angosto de ancho fijo (valores cortos: Cód. Cabecera, Km,
+    // Distrito, Rec. Celular). Ceden espacio a los campos de texto largo de la fila.
+    private RenderFragment F(string label, string valor, bool acento = false, int ancho = 1, bool sm = false) => b =>
     {
         b.OpenElement(0, "div");
-        b.AddAttribute(1, "class", $"zoom-field zoom-field--{ancho}");
+        b.AddAttribute(1, "class", sm ? "zoom-field zoom-field--sm" : $"zoom-field zoom-field--{ancho}");
         if (!string.IsNullOrEmpty(label))
         {
             b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label");
@@ -272,7 +268,10 @@
         }
         b.OpenElement(5, "div");
         b.AddAttribute(6, "class", acento ? "zoom-field__value zoom-field__value--acento" : "zoom-field__value");
-        b.AddContent(7, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        // Tooltip nativo con el valor completo (por si algún día se acota el alto).
+        if (!string.IsNullOrWhiteSpace(valor) && valor != "—")
+            b.AddAttribute(7, "title", valor);
+        b.AddContent(8, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
         b.CloseElement();
         b.CloseElement();
     };
@@ -291,7 +290,9 @@
         b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-valores__label");
         b.AddContent(4, label); b.CloseElement();
         b.OpenElement(5, "div"); b.AddAttribute(6, "class", "zoom-valores__value");
-        b.AddContent(7, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        if (!string.IsNullOrWhiteSpace(valor) && valor != "—")
+            b.AddAttribute(7, "title", valor);
+        b.AddContent(8, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
         b.CloseElement();
         b.CloseElement();
     };
@@ -318,15 +319,17 @@
         b.AddAttribute(6, "class", "zoom-doc");
         b.OpenElement(7, "span");
         b.AddAttribute(8, "class", "zoom-doc__valor");
-        b.AddContent(9, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
+        if (!string.IsNullOrWhiteSpace(valor) && valor != "—")
+            b.AddAttribute(9, "title", valor);
+        b.AddContent(10, string.IsNullOrWhiteSpace(valor) ? "—" : valor);
         b.CloseElement();
         if (tieneAdjunto && !string.IsNullOrWhiteSpace(valor))
         {
-            b.OpenElement(10, "button");
-            b.AddAttribute(11, "class", _copiado ? "zoom-doc__btn zoom-doc__btn--ok" : "zoom-doc__btn");
-            b.AddAttribute(12, "title", _copiado ? "¡Copiado!" : "Copiar");
-            b.AddAttribute(13, "onclick", EventCallback.Factory.Create(this, () => CopiarDoc(valor)));
-            b.AddContent(14, _copiado ? "✓" : "⧉");
+            b.OpenElement(11, "button");
+            b.AddAttribute(12, "class", _copiado ? "zoom-doc__btn zoom-doc__btn--ok" : "zoom-doc__btn");
+            b.AddAttribute(13, "title", _copiado ? "¡Copiado!" : "Copiar");
+            b.AddAttribute(14, "onclick", EventCallback.Factory.Create(this, () => CopiarDoc(valor)));
+            b.AddContent(15, _copiado ? "✓" : "⧉");
             b.CloseElement();
         }
         b.CloseElement();

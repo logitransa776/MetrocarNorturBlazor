@@ -28,12 +28,12 @@ del módulo: **`'V'`** (campo `usuario.acceso`).
 | 2→ | Apercibimientos: Motivos | `chofer_sancion_motivo.scx` | `chofer_sancion_motivo_abm.scx` | `chofer_sancion_motivo` | ⬜ pendiente |
 | 3 | **Capacitaciones: Consulta** | `chofer_curso_consulta.scx` | — | `chofer_curso`, `chofer_curso_parametro` | ⬜ pendiente |
 | 3→ | Capacitaciones: Armado | `chofer_curso_arma.scx` | — | `chofer_curso` | ⬜ pendiente |
-| 5 | **Odómetros** | `vehiculo_km.scx` | — | `vehiculo_km` | ⬜ pendiente |
-| 7 | **Siniestros** | `siniestro.scx` | `siniestro_abm.scx` | `siniestro` | ⬜ pendiente |
+| 5 | **Odómetros** | `vehiculo_km.scx` | — | `vehiculo_km` | ✅ solo lectura |
+| 7 | **Siniestros** | `siniestro.scx` | `siniestro_abm.scx` | `siniestro` | ✅ solo lectura |
 | 9 | **Vehículos - Flota** | `vehiculo.scx` | `vehiculo_abm.scx` | `vehiculo`, `vehiculo_dueno`, `vehiculo_permiso` | ✅ solo lectura |
-| 10 | **Agenda de Vencimientos** | `agenda_vencimiento.scx` | — (informe) | `chofer` + `vehiculo` + `parametro` | ⬜ pendiente |
-| 12 | **Fleteros** | `fletero.scx` | `fletero_abm.scx` | `fletero` | ⬜ pendiente |
-| 14 | **Tipo de Vehículos** | `vehiculo_tipo.scx` | `vehiculo_tipo_abm.scx` | `vehiculo_tipo` | ⬜ pendiente |
+| 10 | **Agenda de Vencimientos** | `agenda_vencimiento.scx` | — (informe) | `chofer` + `vehiculo` + `parametro` | ✅ solo lectura |
+| 12 | **Fleteros** | `fletero.scx` | `fletero_abm.scx` | `fletero` | ✅ solo lectura + andamiaje ABM |
+| 14 | **Tipo de Vehículos** | `vehiculo_tipo.scx` | `vehiculo_tipo_abm.scx` | `vehiculo_tipo` | ✅ solo lectura + andamiaje ABM |
 
 > `Fleteros` aparece también en el menú **Facturación** (mismo form `fletero`). El catálogo
 > de fleteros es compartido entre este módulo y Facturación/Liquidación.
@@ -72,6 +72,23 @@ del proyecto: **siempre filtrar `_deleted = 0`** (réplica) y mostrar `f_delete`
 
 > `agenda` (210 filas) **NO** es del módulo: es la agenda de contactos (Utilitarios), aunque
 > su estructura se parece a `chofer`. No confundir.
+
+### El número de INTERNO se muestra como `NTxxxx` (convención de todo el sistema)
+
+El "interno" (nro de coche) tiene DOS representaciones en la base:
+- **numérica** (`vehiculo.interno`, `vehiculo_km.interno`, `viaje.interno`) — ej. `220`, `8`.
+- **código con formato** `NTxxxx` — vive en **`viaje.id_interno`** (nvarchar, ej. `NT0220`).
+
+**Regla verificada contra la base (05/07/2026):** `id_interno = "NT" + interno` a **4 dígitos**
+(`interno 1 → NT0001`, `220 → NT0220`). Se cumple en todo el histórico salvo 2 casos de cambio
+de unidad (despreciables). El interno de `vehiculo_km` va de 1 a 9999, así que `D4` siempre alcanza.
+
+**Presentación (convención fija, pedida por el usuario):** en cualquier grilla, selector o
+reporte, el interno se muestra **como `NTxxxx`, igual que la Planilla de Tráfico** (su dropdown
+"U/Asignada" y su columna). Si el DTO solo tiene el número, formatear en C#:
+`"NT" + interno.ToString("D4")` (patrón: `OdometroRow.InternoNT` en `ReportService.cs`). El
+selector de interno es un autocomplete cuyo `ToStringFunc` devuelve el `NTxxxx`, y al abrirlo
+muestra la lista NT0001, NT0002… como el `<select>` de Tráfico. Ver `Odometros.razor`.
 
 ### Columnas truncadas a 10 chars (réplica DBF→SQL) — CRÍTICO
 
@@ -112,7 +129,12 @@ Cada pantalla tiene su doc detallada (tablas, columnas, validaciones, reglas no 
   02/07/2026: la ASIGNACIÓN de Tráfico también escribe `vehiculo_km`** (primer odómetro del
   mes → INSERT + cierra `km_fin` del mes anterior) — ver `TRAFICO2_TOOLBAR.md` §2.2. La tabla
   cambia de dueño con el circuito `viaje` el día D (plan Buslink), NO como catálogo suelto.
-- `references/SINIESTROS.md` — accidentes (form gigante de ~70 campos).
+  **Migrado solo lectura (04/07/2026):** grilla `Odometros.razor` + KPIs; plano completo en
+  `docs/PlanoFoxPro/vehiculos-choferes/ODOMETROS.md`.
+- `references/SINIESTROS.md` — accidentes (form gigante de ~70 campos). **Migrado solo lectura
+  (04/07/2026):** lista + ficha 5 solapas; plano en
+  `docs/PlanoFoxPro/vehiculos-choferes/SINIESTROS.md`. 🐛 `id_vehicul`=vehículo NORTUR vs
+  `dominio`=tercero; sin `f_delete` (solo `_deleted`).
 - `references/APERCIBIMIENTOS.md` — sanciones + motivos (tablas vacías hoy).
 - `references/CAPACITACIONES.md` — cursos por chofer + catálogo de cursos.
 - `references/AGENDA_VENCIMIENTOS.md` — informe de vtos (chofer + vehículo), no ABM.
@@ -129,11 +151,26 @@ Cada pantalla tiene su doc detallada (tablas, columnas, validaciones, reglas no 
 | --- | --- | --- | --- |
 | Choferes (solo lectura) | `Components/Pages/Choferes.razor` (`/choferes`) | `ChoferDetalleDialog.razor` (5 tabs) | `docs/PlanoFoxPro/vehiculos-choferes/CHOFER_ABM.md` |
 | Vehículos - Flota (solo lectura) | `Components/Pages/Vehiculos.razor` (`/vehiculos`) | `VehiculoDetalleDialog.razor` (6 tabs) | `references/VEHICULOS.md` |
+| Odómetros (solo lectura) | `Components/Pages/Odometros.razor` (`/odometros`) | — (grilla + KPIs) | `docs/PlanoFoxPro/vehiculos-choferes/ODOMETROS.md` |
+| Siniestros (solo lectura) | `Components/Pages/Siniestros.razor` (`/siniestros`) | `SiniestroDetalleDialog.razor` (5 solapas) | `docs/PlanoFoxPro/vehiculos-choferes/SINIESTROS.md` |
+| Agenda de Vencimientos (informe) | `Components/Pages/AgendaVencimientos.razor` (`/agenda-vencimientos`) | — (2 grillas + KPIs) | `docs/PLANOFOXPRO/vehiculos-choferes/AGENDA_VENCIMIENTOS.md` |
+| Fleteros (solo lectura + andamiaje ABM) | `Components/Pages/Fleteros.razor` (`/fleteros`) | `FleteroEditorDialog.razor` (4 modos) | `docs/PLANOFOXPRO/vehiculos-choferes/FLETEROS.md` |
+| Tipo de Vehículos (solo lectura + andamiaje ABM) | `Components/Pages/TiposVehiculo.razor` (`/tipos-vehiculo`) | `TipoVehiculoEditorDialog.razor` (4 modos) | `docs/PLANOFOXPRO/vehiculos-choferes/TIPO_VEHICULOS.md` |
 
 Patrón aplicado (copiar para las siguientes): lista MudTable con filtros + egresados en
 amarillo (`cli-grid__row--egresado`), ficha en `MudDialog` con tabs, estilos `cli-*`/`zoom-*`,
 botonera de ABM deshabilitada (solo lectura), permiso de módulo `'V'`. Métodos en
 `ReportService` (`GetChoferesAsync` / `GetChoferDetalleAsync`).
+
+> **Andamiaje ABM (05/07/2026, Fleteros + Tipo de Vehículos):** las dos pantallas nuevas de
+> catálogo llevan el dialog editor **multi-modo** (`ver`/`alta`/`modifica`/`baja`, calca
+> `UsuarioEditorDialog`) con la escritura YA ESCRITA en `AbmService`
+> (`Alta/Modifica/BajaFleteroAsync`, `…TipoVehiculoAsync`) pero **deshabilitada** por un flag
+> `private static readonly bool _abmActivo = false` en el dialog. La botonera
+> Agregar/Modificar/Eliminar de la lista se ve pero está `Disabled="true"`. El día del corte a
+> Buslink: poner `_abmActivo=true`, quitar los `Disabled`, bloquear el ABM en FoxPro y apagar la
+> sync de esa tabla. `fletero.id`/`vehiculo_tipo.id` NO son identity → alta con `MAX(id)+1`.
+> `parametro.aviso_*` son **bigint** → `CAST(... AS int)` (misma trampa que `viaje.id_viaje`).
 
 El **Home/Tablero** ya muestra KPIs de este módulo: Vehículos, VTV/Matafuegos por vencer,
 Choferes, Registros/CNRT/AEP por vencer (`TableroDto` en `ReportService`). Es la versión

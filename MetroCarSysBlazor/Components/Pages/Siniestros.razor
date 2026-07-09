@@ -1,0 +1,232 @@
+@page "/siniestros"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject ExcelExportService ExcelSvc
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Siniestros — NORTUR</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+        Siniestros
+    </MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Vehículos y Choferes · Partes de accidente — vista de solo lectura desde replicaVPF
+    </MudText>
+</div>
+
+@* ── Filtros (réplica de la toolbar FoxPro siniestro.scx) ── *@
+<MudPaper Class="pa-3 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:16px;">
+        <MudSelect T="string" @bind-Value="_ordenPor" Label="Buscar por" Dense="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:150px;">
+            <MudSelectItem T="string" Value="@("Siniestro")">Siniestro</MudSelectItem>
+            <MudSelectItem T="string" Value="@("Conductor")">Conductor</MudSelectItem>
+            <MudSelectItem T="string" Value="@("Dominio")">Dominio</MudSelectItem>
+            <MudSelectItem T="string" Value="@("Interno")">Interno</MudSelectItem>
+            <MudSelectItem T="string" Value="@("Fecha")">Fecha</MudSelectItem>
+        </MudSelect>
+        <MudTextField @bind-Value="_busqueda" Label="Filtrar"
+                      Immediate="true" DebounceInterval="200"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Style="min-width:300px; flex:1;" />
+        <MudSelect T="string" @bind-Value="_tipoAcc" Label="Tipo Acc." Clearable="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:160px;">
+            <MudSelectItem T="string" Value="@("")">(Todos)</MudSelectItem>
+            @foreach (var t in _tipos)
+            {
+                <MudSelectItem T="string" Value="@t">@t</MudSelectItem>
+            }
+        </MudSelect>
+        <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">
+            Total: @Filtrados.Count()
+        </MudChip>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">
+            Actualizar
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                   Disabled="_cargando || !Filtrados.Any()">
+            Excel
+        </MudButton>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="Filtrados" Dense="true" Hover="true" Striped="true"
+                  FixedHeader="true" Height="calc(100vh - 290px)"
+                  Bordered="false" Class="cli-grid grid-compacta"
+                  RowClass="cli-grid__row" OnRowClick="@OnRowClick" T="SiniestroRow">
+            <HeaderContent>
+                <MudTh Style="text-align:right"><MudTableSortLabel SortBy="new Func<SiniestroRow, object>(x => x.Id)">Siniestro</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<SiniestroRow, object>(x => x.Conductor)">Conductor</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<SiniestroRow, object>(x => x.Dominio)">Dominio</MudTableSortLabel></MudTh>
+                <MudTh Style="text-align:right"><MudTableSortLabel SortBy="new Func<SiniestroRow, object>(x => x.Interno)">Interno</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<SiniestroRow, object>(x => x.Fecha ?? DateOnly.MinValue)">Fecha</MudTableSortLabel></MudTh>
+                <MudTh>Lugar</MudTh>
+                <MudTh>Marca (tercero)</MudTh>
+                <MudTh>Tipo Acc.</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Siniestro" Style="text-align:right; font-weight:700; color:#003AA0;">@context.Id</MudTd>
+                <MudTd DataLabel="Conductor">@context.Conductor</MudTd>
+                <MudTd DataLabel="Dominio" Style="font-weight:600;">@context.Dominio</MudTd>
+                <MudTd DataLabel="Interno" Style="text-align:right">@(context.Interno == 0 ? "—" : context.Interno.ToString())</MudTd>
+                <MudTd DataLabel="Fecha">@(context.Fecha?.ToString("dd/MM/yyyy", _ar) ?? "—")</MudTd>
+                <MudTd DataLabel="Lugar">@context.Lugar</MudTd>
+                <MudTd DataLabel="Marca (tercero)">@context.Marca</MudTd>
+                <MudTd DataLabel="Tipo Acc.">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                             Color="@(context.TipoAcc == "VEHICULAR" ? Color.Info : Color.Warning)">
+                        @context.TipoAcc
+                    </MudChip>
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">No hay siniestros para el filtro aplicado.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        @* ── Botonera réplica FoxPro (solo lectura) ── *@
+        <div class="cli-toolbar">
+            <MudButton Disabled="true" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Add" Size="Size.Small">Agregar</MudButton>
+            <MudButton Disabled="true" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Delete" Size="Size.Small">Eliminar</MudButton>
+            <MudButton Disabled="true" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Edit" Size="Size.Small">Modificar</MudButton>
+            <MudButton Variant="Variant.Text" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Visibility"
+                       Size="Size.Small" OnClick="AbrirSeleccionado" Disabled="_sel is null">Consulta</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" /> Solo lectura · doble clic para ver el parte
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private List<SiniestroRow> _siniestros = new();
+    private List<string> _tipos = new();
+    private bool _cargando = true;
+    private string? _busqueda;
+    private string _ordenPor = "Siniestro";
+    private string _tipoAcc = "";
+    private SiniestroRow? _sel;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private IEnumerable<SiniestroRow> Filtrados
+    {
+        get
+        {
+            IEnumerable<SiniestroRow> q = _siniestros;
+
+            if (!string.IsNullOrWhiteSpace(_tipoAcc))
+                q = q.Where(s => string.Equals(s.TipoAcc, _tipoAcc, StringComparison.OrdinalIgnoreCase));
+
+            if (!string.IsNullOrWhiteSpace(_busqueda))
+            {
+                var b = _busqueda.Trim();
+                q = q.Where(s =>
+                    s.Conductor.Contains(b, StringComparison.OrdinalIgnoreCase)
+                    || s.Dominio.Contains(b, StringComparison.OrdinalIgnoreCase)
+                    || s.Lugar.Contains(b, StringComparison.OrdinalIgnoreCase)
+                    || s.Marca.Contains(b, StringComparison.OrdinalIgnoreCase)
+                    || s.Id.ToString().Contains(b)
+                    || s.Interno.ToString().Contains(b));
+            }
+
+            // "Buscar por" del FoxPro = criterio de ORDEN de la grilla.
+            return _ordenPor switch
+            {
+                "Conductor" => q.OrderBy(s => s.Conductor).ThenBy(s => s.Id),
+                "Dominio"   => q.OrderBy(s => s.Dominio).ThenBy(s => s.Id),
+                "Interno"   => q.OrderBy(s => s.Interno).ThenBy(s => s.Id),
+                "Fecha"     => q.OrderByDescending(s => s.Fecha ?? DateOnly.MinValue).ThenBy(s => s.Id),
+                _           => q.OrderBy(s => s.Id),
+            };
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('V'))   // módulo Vehículos y Choferes
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        _siniestros = await Reports.GetSiniestrosAsync();
+        _tipos = _siniestros
+            .Select(s => s.TipoAcc)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Distinct()
+            .OrderBy(t => t)
+            .ToList();
+        _cargando = false;
+    }
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private void OnRowClick(TableRowClickEventArgs<SiniestroRow> args)
+    {
+        _sel = args.Item;
+        if (args.MouseEventArgs.Detail >= 2 && _sel is not null)
+            _ = AbrirFicha(_sel.Id);
+    }
+
+    private async Task AbrirSeleccionado()
+    {
+        if (_sel is not null) await AbrirFicha(_sel.Id);
+    }
+
+    private async Task AbrirFicha(int id)
+    {
+        var parametros = new DialogParameters<SiniestroDetalleDialog>
+        {
+            { x => x.IdSiniestro, id }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<SiniestroDetalleDialog>("Parte de Siniestro", parametros, opciones);
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.Siniestros(Filtrados.ToList());
+        await JS.InvokeVoidAsync("downloadFile", "Siniestros.xlsx", Convert.ToBase64String(bytes));
+    }
+}

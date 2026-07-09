@@ -1,0 +1,207 @@
+@using MetroCarSysBlazor.Services
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Editor de un catálogo simple id + nombre. Sirve para DOS entidades del módulo
+   Viáticos — réplica de chofer_viatico_motivo_abm.scx y chofer_viatico_liquida_abm.scx
+   (idénticos). El llamador pasa la entidad + los delegados de AbmService, así un solo
+   dialog cubre Motivo y Forma de Liquidación. 4 modos: ver / alta / modifica / baja.
+
+   ⚠ ANDAMIAJE (05/07/2026): la ESCRITURA está construida (AbmService.*ViaticoMotivo/Liquida)
+   pero el botón Grabar está DESHABILITADO — las tablas chofer_viatico_motivo/_liquida siguen
+   con dueño FoxPro (y hoy están vacías). El día que se active: AbmFeatureFlags.ViaticoCatalogosAbmActivo=true
+   + bloquear FoxPro + apagar sync. 🐛 Baja FÍSICA (DELETE), no lógica.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@_icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@_titulo</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">@_chip</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (SoloEscritura && !_abmActivo)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                <b>Vista previa del ABM.</b> La edición de @_entidadTexto todavía se hace en FoxPro;
+                esta pantalla queda lista para activarse el día que la tabla pase a Buslink.
+            </MudAlert>
+        }
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+        }
+
+        <div class="zoom-box zoom-box--sec">
+            <span class="zoom-box__label">@_entidadTitulo</span>
+            <div class="zoom-row pa-2">
+                @if (!EsAlta)
+                {
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Código</div>
+                        <div class="zoom-field__value zoom-field__value--acento">@Id</div>
+                    </div>
+                }
+                <div class="zoom-field zoom-field--3">
+                    <div class="zoom-field__label">Nombre</div>
+                    @if (SoloEscritura)
+                    {
+                        <MudTextField @bind-Value="_nombre" MaxLength="60" Immediate="true"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                                      Style="text-transform:uppercase;" />
+                    }
+                    else { <div class="zoom-field__value" title="@_nombre">@V(_nombre)</div> }
+                </div>
+            </div>
+            @if (MostrarAudita)
+            {
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Audita cargas de combustible</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudCheckBox T="bool" @bind-Value="_audita" Label="Aplica validaciones extra en la carga"
+                                         Color="Color.Primary" Size="Size.Small" Dense="true" />
+                        }
+                        else { <div class="zoom-field__value">@(_audita ? "Sí" : "No")</div> }
+                    </div>
+                </div>
+            }
+        </div>
+
+        <div class="cli-footer">
+            <div class="cli-footer__hint">
+                <MudIcon Icon="@(SoloEscritura && _abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                @(SoloEscritura && !_abmActivo
+                    ? "Escritura preparada · pendiente de activar en Buslink"
+                    : SoloEscritura ? "Edición habilitada" : "Vista de solo lectura")
+            </div>
+            <div class="cli-footer__btns">
+                @if (EsAlta)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                        @(_grabando ? "Grabando…" : "Agregar")
+                    </MudButton>
+                }
+                else if (EsModifica)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                        @(_grabando ? "Grabando…" : "Modificar")
+                    </MudButton>
+                }
+                else if (EsBaja)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Delete" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                        @(_grabando ? "Procesando…" : "Eliminar")
+                    </MudButton>
+                }
+                <MudButton Variant="@(SoloLectura ? Variant.Filled : Variant.Text)"
+                           Color="@(SoloLectura ? Color.Primary : Color.Default)" Size="Size.Small"
+                           OnClick="Cerrar">@(SoloLectura ? "Cerrar" : "Cancelar")</MudButton>
+            </div>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Modo: "ver" | "alta" | "modifica" | "baja".</summary>
+    [Parameter] public string Modo { get; set; } = "ver";
+    /// <summary>Id del registro (para ver/modifica/baja). En alta se ignora.</summary>
+    [Parameter] public int Id { get; set; }
+    /// <summary>Nombre inicial (para ver/modifica/baja).</summary>
+    [Parameter] public string Nombre { get; set; } = "";
+    /// <summary>Entidad, solo para textos: "motivo" | "liquida" | "rubro".</summary>
+    [Parameter] public string Entidad { get; set; } = "motivo";
+    /// <summary>true → la escritura de esta entidad está habilitada (viene del feature flag).</summary>
+    [Parameter] public bool AbmActivo { get; set; }
+    /// <summary>Delegados de escritura del AbmService (los pasa la página) — variante nombre solo.</summary>
+    [Parameter] public Func<string, Task<AbmService.AbmResult>>? OnAlta { get; set; }
+    [Parameter] public Func<int, string, Task<AbmService.AbmResult>>? OnModifica { get; set; }
+    [Parameter] public Func<int, Task<AbmService.AbmResult>>? OnBaja { get; set; }
+
+    // ── Variante con flag `audita` (Rubros de contacto, estacion_rubro) ──
+    /// <summary>true → muestra el checkbox "audita" (para estacion_rubro).</summary>
+    [Parameter] public bool MostrarAudita { get; set; }
+    /// <summary>Valor inicial del flag audita.</summary>
+    [Parameter] public bool Audita { get; set; }
+    /// <summary>Delegados de escritura que reciben también el flag audita (si MostrarAudita).</summary>
+    [Parameter] public Func<string, bool, Task<AbmService.AbmResult>>? OnAltaConFlag { get; set; }
+    [Parameter] public Func<int, string, bool, Task<AbmService.AbmResult>>? OnModificaConFlag { get; set; }
+
+    private bool _abmActivo => AbmActivo;
+    private string _nombre = "";
+    private bool _audita;
+    private bool _grabando;
+    private string? _error;
+
+    private bool EsAlta => Modo == "alta";
+    private bool EsModifica => Modo == "modifica";
+    private bool EsBaja => Modo == "baja";
+    private bool SoloLectura => Modo == "ver" || EsBaja;
+    private bool SoloEscritura => EsAlta || EsModifica;
+
+    private string _entidadTexto => Entidad switch
+    {
+        "liquida" => "las formas de liquidación",
+        "rubro" => "los rubros de contacto",
+        _ => "los motivos de viático"
+    };
+    private string _entidadTitulo => Entidad switch
+    {
+        "liquida" => "Forma de liquidación",
+        "rubro" => "Rubro de contacto",
+        _ => "Motivo de viático"
+    };
+    private string _titulo => EsAlta ? "Alta" : EsModifica ? "Modificar" : EsBaja ? "Eliminar" : "Ver " + _entidadTitulo;
+    private string _chip => EsAlta ? "Nuevo" : EsModifica ? "Edición" : EsBaja ? "Baja física" : "Solo lectura";
+    private string _icono => EsAlta ? Icons.Material.Filled.AddCircle
+        : EsBaja ? Icons.Material.Filled.RemoveCircle
+        : Entidad == "liquida" ? Icons.Material.Filled.AccountBalance
+        : Entidad == "rubro" ? Icons.Material.Filled.Folder
+        : Icons.Material.Filled.Category;
+
+    protected override void OnInitialized() { _nombre = Nombre; _audita = Audita; }
+
+    private async Task Grabar()
+    {
+        if (!_abmActivo)
+        {
+            _error = "La escritura de este catálogo todavía no está habilitada (sigue en FoxPro).";
+            return;
+        }
+        _error = null; _grabando = true;
+
+        AbmService.AbmResult r;
+        if (EsBaja)
+            r = await (OnBaja?.Invoke(Id) ?? Nada());
+        else if (MostrarAudita)  // variante con flag audita (Rubros)
+            r = EsModifica
+                ? await (OnModificaConFlag?.Invoke(Id, _nombre, _audita) ?? Nada())
+                : await (OnAltaConFlag?.Invoke(_nombre, _audita) ?? Nada());
+        else
+            r = EsModifica
+                ? await (OnModifica?.Invoke(Id, _nombre) ?? Nada())
+                : await (OnAlta?.Invoke(_nombre) ?? Nada());
+
+        _grabando = false;
+        if (r.Ok) MudDialog.Close(DialogResult.Ok(true));
+        else { _error = r.Error; StateHasChanged(); }
+    }
+
+    private static Task<AbmService.AbmResult> Nada() =>
+        Task.FromResult(AbmService.AbmResult.Fallo("Operación no disponible."));
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+    private static string V(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+}

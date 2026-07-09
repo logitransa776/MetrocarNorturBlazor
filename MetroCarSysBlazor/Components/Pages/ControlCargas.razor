@@ -1,0 +1,145 @@
+@page "/control-cargas"
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Control de cargas — NORTUR</PageTitle>
+
+<div class="page-header mb-3">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Control de cargas</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Combustible · días sin cargar por unidad propia activa — datos en vivo desde replicaVPF
+    </MudText>
+</div>
+
+@* ── Filtros (réplica de trafico_vehiculo_combustible) ── *@
+<MudPaper Class="pa-2 mb-3 odo-filtros" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudCheckBox T="bool" @bind-Value="_soloSinCargar" Label="Solo unidades atrasadas" Color="Color.Primary" Size="Size.Small" />
+        <MudNumericField T="int" @bind-Value="_umbral" Label="Días de atraso ≥" Min="1" Max="365"
+                         Disabled="@(!_soloSinCargar)" HideSpinButtons="false"
+                         Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:140px;" />
+        <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">
+            @_datos.Count unidades
+        </MudChip>
+
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar" Disabled="_cargando">Filtro</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">Actualizar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || !_datos.Any()">Excel</MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="UNIDADES" Value="@_datos.Count.ToString("N0", _ar)" Sub="propias activas con cargas" />
+        <KpiCard Label="AL DÍA" Value="@_datos.Count(d => d.Dias < 7).ToString("N0", _ar)"
+                 Sub="cargaron hace menos de 7 días" Color="@NorturColors.Verde" />
+        <KpiCard Label="POR REVISAR" Value="@_datos.Count(d => d.Dias >= 7 && d.Dias < 15).ToString("N0", _ar)"
+                 Sub="7 a 14 días sin cargar" Color="@NorturColors.Naranja" />
+        <KpiCard Label="ATRASADAS" Value="@_datos.Count(d => d.Dias >= 15).ToString("N0", _ar)"
+                 Sub="15+ días sin cargar" Color="@NorturColors.Rojo" />
+    </div>
+
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="_datos" Dense="true" Hover="true" Striped="true" FixedHeader="true"
+                  Height="calc(100vh - 400px)" Bordered="false" Class="cli-grid grid-compacta"
+                  RowClassFunc="@RowClass" Virtualize="true" T="ControlCargaRow">
+            <HeaderContent>
+                <MudTh><MudTableSortLabel SortBy="new Func<ControlCargaRow, object>(x => x.Interno)">Interno</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<ControlCargaRow, object>(x => x.Dominio)">Dominio</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<ControlCargaRow, object>(x => x.UltCarga.DayNumber)">Última carga</MudTableSortLabel></MudTh>
+                <MudTh Style="text-align:right"><MudTableSortLabel InitialDirection="SortDirection.Descending" SortBy="new Func<ControlCargaRow, object>(x => x.Dias)">Días sin cargar</MudTableSortLabel></MudTh>
+                <MudTh Style="text-align:right">Odómetro últ. carga</MudTh>
+                <MudTh style="text-align:center">Estado</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Interno" Style="font-weight:700; color:#003AA0;">@context.InternoNT</MudTd>
+                <MudTd DataLabel="Dominio" Style="font-weight:600;">@context.Dominio</MudTd>
+                <MudTd DataLabel="Última carga">@context.UltCarga.ToString("dd/MM/yyyy", _ar)</MudTd>
+                <MudTd DataLabel="Días sin cargar" Style="text-align:right; font-weight:700;">@context.Dias.ToString("N0", _ar)</MudTd>
+                <MudTd DataLabel="Odómetro" Style="text-align:right">@context.Odometro.ToString("N0", _ar)</MudTd>
+                <MudTd DataLabel="Estado" Style="text-align:center">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="@EstadoColor(context.Dias)">
+                        @EstadoTexto(context.Dias)
+                    </MudChip>
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent><MudText Typo="Typo.body2" Class="pa-4">No hay unidades para el filtro aplicado.</MudText></NoRecordsContent>
+        </MudTable>
+        <div class="cli-toolbar">
+            <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
+            <span class="cli-toolbar__hint">
+                Días = desde la última carga registrada hasta hoy. La carga de combustible entra por la
+                Planilla de Tráfico (día D). Solo unidades PROPIAS activas con al menos una carga.
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private List<ControlCargaRow> _datos = new();
+    private bool _cargando = true;
+    private bool _soloSinCargar = false;
+    private int _umbral = 7;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('M'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        _datos = await Reports.GetControlCargasAsync(_soloSinCargar, _umbral);
+        _cargando = false;
+    }
+
+    private async Task Aplicar() => await CargarAsync();
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private string RowClass(ControlCargaRow d, int _) => d.Dias >= 15 ? "comb-row--atrasada" : "";
+
+    private static Color EstadoColor(int dias) => dias < 7 ? Color.Success : dias < 15 ? Color.Warning : Color.Error;
+    private static string EstadoTexto(int dias) => dias < 7 ? "Al día" : dias < 15 ? "Revisar" : "Atrasada";
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.ControlCargas(_datos);
+        await JS.InvokeVoidAsync("downloadFile", "ControlCargas.xlsx", Convert.ToBase64String(bytes));
+    }
+}

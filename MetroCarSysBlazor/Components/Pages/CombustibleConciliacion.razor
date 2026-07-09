@@ -1,0 +1,323 @@
+@page "/combustible-conciliacion"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject AbmService Abm
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>ABM y Conciliación de cargas — NORTUR</PageTitle>
+
+@* ── Encabezado ── *@
+<div class="page-header mb-3">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">ABM y Conciliación de cargas</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Combustible · cargas de la flota (vehiculo_sobre) — vista de solo lectura, lista para el ABM y la conciliación por lote
+    </MudText>
+</div>
+
+@* ── Filtros (réplica de vehiculo_combustible_mant_sobre_lote) ── *@
+<MudPaper Class="pa-2 mb-3 odo-filtros" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudSelect T="string" @bind-Value="_filtro" Label="Filtrar por" Dense="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:150px;"
+                   SelectedValuesChanged="@(_ => OnCambioFiltro())">
+            <MudSelectItem T="string" Value="@("todos")">Todos</MudSelectItem>
+            <MudSelectItem T="string" Value="@("dominio")">Dominio</MudSelectItem>
+            <MudSelectItem T="string" Value="@("lote")">Lote</MudSelectItem>
+            <MudSelectItem T="string" Value="@("estacion")">Estación</MudSelectItem>
+        </MudSelect>
+
+        @* Valor dependiente del filtro *@
+        @if (_filtro == "dominio")
+        {
+            <MudAutocomplete T="string" @bind-Value="_valorDominio" Label="Dominio" Dense="true"
+                             SearchFunc="@BuscarDominio" ResetValueOnEmptyText="true" Clearable="true" CoerceValue="true"
+                             Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;" />
+        }
+        else if (_filtro == "estacion")
+        {
+            <MudSelect T="string" @bind-Value="_valorEstacion" Label="Estación" Dense="true"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:210px;" Clearable="true">
+                @foreach (var e in _estaciones)
+                {
+                    <MudSelectItem T="string" Value="@e.Nombre">@e.Nombre</MudSelectItem>
+                }
+            </MudSelect>
+        }
+        else if (_filtro == "lote")
+        {
+            <MudNumericField T="long?" @bind-Value="_valorLote" Label="Nº de lote" Dense="true"
+                             HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:130px;" />
+        }
+
+        @* Fechas (deshabilitadas si el filtro es LOTE, fiel al FoxPro) *@
+        <div class="odo-grupo">
+            <MudDatePicker Label="Desde" @bind-Date="_desde" DateFormat="dd/MM/yyyy" Disabled="@(_filtro == "lote")"
+                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;" />
+            <MudDatePicker Label="Hasta" @bind-Date="_hasta" DateFormat="dd/MM/yyyy" Disabled="@(_filtro == "lote")"
+                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;" />
+        </div>
+
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar" Disabled="_cargando">Filtro</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">Actualizar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || !_cargas.Any()">Excel</MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    @* ── KPIs del resultado ── *@
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="CARGAS" Value="@_cargas.Count.ToString("N0", _ar)" Sub="@PeriodoTexto" />
+        <KpiCard Label="LITROS" Value="@_cargas.Sum(c => c.Litros).ToString("N1", _ar)"
+                 Sub="total del resultado" Color="@NorturColors.Naranja" />
+        <KpiCard Label="IMPORTE" Value="@_cargas.Sum(c => c.Importe).ToString("C2", _ar)"
+                 Sub="total (0 en tarjeta prepaga)" Color="@NorturColors.Azul" />
+        <KpiCard Label="SIN CONCILIAR" Value="@_cargas.Count(c => !c.Conciliada).ToString("N0", _ar)"
+                 Sub="cargas con lote 0" Color="@NorturColors.Rojo" />
+    </div>
+
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="_cargas" Dense="true" Hover="true" Striped="true" FixedHeader="true"
+                  Height="calc(100vh - 430px)" Bordered="false" Class="cli-grid grid-compacta"
+                  RowClassFunc="@RowClass" OnRowClick="@OnRowClick" Virtualize="true" T="CargaCombustibleRow">
+            <HeaderContent>
+                <MudTh><MudTableSortLabel InitialDirection="SortDirection.Ascending" SortBy="new Func<CargaCombustibleRow, object>(x => x.FCarga)">Fecha</MudTableSortLabel></MudTh>
+                <MudTh>Hora</MudTh>
+                <MudTh>Estación</MudTh>
+                <MudTh>Tipo</MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<CargaCombustibleRow, object>(x => x.Dominio)">Dominio</MudTableSortLabel></MudTh>
+                <MudTh>Interno</MudTh>
+                <MudTh Style="text-align:right">Odómetro</MudTh>
+                <MudTh style="text-align:center">Carga</MudTh>
+                <MudTh Style="text-align:right">Litros</MudTh>
+                <MudTh Style="text-align:right">Importe</MudTh>
+                <MudTh Style="text-align:right"><MudTableSortLabel SortBy="new Func<CargaCombustibleRow, object>(x => x.NSobre)">Lote</MudTableSortLabel></MudTh>
+                <MudTh>Forma pago</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Fecha">@context.FCarga.ToString("dd/MM/yyyy", _ar)</MudTd>
+                <MudTd DataLabel="Hora">@context.Hora</MudTd>
+                <MudTd DataLabel="Estación">@context.Estacion</MudTd>
+                <MudTd DataLabel="Tipo">@context.TipoCarga</MudTd>
+                <MudTd DataLabel="Dominio" Style="font-weight:600;">@context.Dominio</MudTd>
+                <MudTd DataLabel="Interno" Style="color:#003AA0; font-weight:700;">@context.InternoNT</MudTd>
+                <MudTd DataLabel="Odómetro" Style="text-align:right">@context.Odometro.ToString("N0", _ar)</MudTd>
+                <MudTd DataLabel="Carga" Style="text-align:center">@(context.Lleno ? "LLENO" : "PARC")</MudTd>
+                <MudTd DataLabel="Litros" Style="text-align:right">@context.Litros.ToString("N1", _ar)</MudTd>
+                <MudTd DataLabel="Importe" Style="text-align:right">@(context.Importe > 0 ? context.Importe.ToString("N2", _ar) : "·")</MudTd>
+                <MudTd DataLabel="Lote" Style="text-align:right; font-weight:600;">@(context.Conciliada ? context.NSobre.ToString() : "·")</MudTd>
+                <MudTd DataLabel="Forma pago">@context.FPago</MudTd>
+            </RowTemplate>
+            <NoRecordsContent><MudText Typo="Typo.body2" Class="pa-4">No hay cargas para el filtro aplicado.</MudText></NoRecordsContent>
+        </MudTable>
+
+        @* ── Barra de conciliación por lote (ANDAMIAJE — apagada por ConciliacionCombustibleAbmActivo) ── *@
+        <div class="cli-toolbar usr-toolbar" style="flex-wrap:wrap; gap:6px;">
+            <span style="font-weight:600; color:#112F5B; margin-right:4px;">
+                Lote actual:
+                <span style="color:#F99410;">@(_loteActual == 0 ? "—" : _loteActual.ToString())</span>
+            </span>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.AddCircle" OnClick="NuevoLote" Disabled="!_abmActivo">Nuevo lote</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Check" OnClick="Marcar"
+                       Disabled="!_abmActivo || _sel is null || _loteActual == 0">Marcar</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Clear" OnClick="Desmarcar"
+                       Disabled="!_abmActivo || _sel is null">Desmarcar</MudButton>
+            <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.DoneAll" OnClick="MarcarTodo"
+                       Disabled="!_abmActivo || _loteActual == 0 || !_cargas.Any()">Marcar todo</MudButton>
+            <div class="nav-divider" style="width:1px; height:24px; background:#E0E7F0; margin:0 4px;"></div>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Add" OnClick="Agregar" Disabled="!_abmActivo">Agregar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Edit" OnClick="Modificar" Disabled="!_abmActivo || _sel is null">Modificar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Delete" OnClick="Eliminar" Disabled="!_abmActivo || _sel is null">Eliminar</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Visibility" OnClick="Ver" Disabled="_sel is null">Ver ficha</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                @(_abmActivo
+                    ? "ABM y conciliación habilitados"
+                    : "Solo lectura · la conciliación se activa el día del corte a Buslink (toca vehiculo_sobre + parametro)")
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private static bool _abmActivo => AbmFeatureFlags.ConciliacionCombustibleAbmActivo;
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private List<CargaCombustibleRow> _cargas = new();
+    private List<EstacionCombustibleRow> _estaciones = new();
+    private List<string> _dominios = new();
+    private CargaCombustibleRow? _sel;
+    private bool _cargando = true;
+
+    private string _filtro = "todos";
+    private string? _valorDominio;
+    private string? _valorEstacion;
+    private long? _valorLote;
+    private DateTime? _desde = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-1);
+    private DateTime? _hasta = DateTime.Today;
+
+    private long _loteActual;   // lote "en curso" para la conciliación (andamiaje)
+
+    private string PeriodoTexto => _filtro == "lote"
+        ? $"Lote {_valorLote}"
+        : $"{(_desde ?? DateTime.Today):dd/MM/yyyy} – {(_hasta ?? DateTime.Today):dd/MM/yyyy}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('M'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        _estaciones = await Reports.GetEstacionesCombustibleAsync();
+        _dominios = await Reports.GetDominiosFlotaPropiaAsync();
+        await CargarAsync();
+    }
+
+    private void OnCambioFiltro()
+    {
+        // Al cambiar de criterio, limpiar el valor previo para no arrastrar filtros ocultos.
+        _valorDominio = null; _valorEstacion = null; _valorLote = null;
+    }
+
+    private async Task<IEnumerable<string>> BuscarDominio(string value, CancellationToken _)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return _dominios.Take(50);
+        return _dominios.Where(d => d.Contains(value, StringComparison.OrdinalIgnoreCase)).Take(50);
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        var desde = DateOnly.FromDateTime(_desde ?? DateTime.Today.AddMonths(-1));
+        var hasta = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
+        string? valor = _filtro switch
+        {
+            "dominio"  => _valorDominio,
+            "estacion" => _valorEstacion,
+            "lote"     => _valorLote?.ToString(),
+            _          => null,
+        };
+        _cargas = await Reports.GetCargasCombustibleAsync(_filtro, valor, desde, hasta);
+        if (_sel is not null) _sel = _cargas.FirstOrDefault(c => c.Id == _sel.Id);
+        _cargando = false;
+    }
+
+    private async Task Aplicar() => await CargarAsync();
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private string RowClass(CargaCombustibleRow c, int _) =>
+        (c.Conciliada ? "comb-row--conciliada " : "")
+        + (_sel is not null && _sel.Id == c.Id ? "cli-grid__row--sel" : "");
+
+    private void OnRowClick(TableRowClickEventArgs<CargaCombustibleRow> args)
+    {
+        _sel = args.Item;
+        if (args.MouseEventArgs.Detail >= 2 && _sel is not null)
+            _ = AbrirDialog("ver", _sel.Id);
+    }
+
+    // ── Conciliación (andamiaje) ──
+    private async Task NuevoLote()
+    {
+        var r = await Abm.NuevoLoteAsync();
+        if (r.Ok && r.Id is int id) { _loteActual = id; StateHasChanged(); }
+        else await Avisar(r.Error);
+    }
+
+    private async Task Marcar()
+    {
+        if (_sel is null || _loteActual == 0) return;
+        var r = await Abm.MarcarLoteAsync(_sel.Id, _loteActual);
+        if (r.Ok) await CargarAsync(); else await Avisar(r.Error);
+    }
+
+    private async Task Desmarcar()
+    {
+        if (_sel is null) return;
+        var r = await Abm.DesmarcarLoteAsync(_sel.Id);
+        if (r.Ok) await CargarAsync(); else await Avisar(r.Error);
+    }
+
+    private async Task MarcarTodo()
+    {
+        if (_loteActual == 0) return;
+        var ids = _cargas.Select(c => c.Id).ToList();
+        var r = await Abm.MarcarLoteMasivoAsync(ids, _loteActual);
+        if (r.Ok) await CargarAsync(); else await Avisar(r.Error);
+    }
+
+    // ── ABM de la carga ──
+    private Task Agregar() => AbrirDialog("alta", 0);
+    private Task Ver() => _sel is null ? Task.CompletedTask : AbrirDialog("ver", _sel.Id);
+    private Task Modificar() => _sel is null ? Task.CompletedTask : AbrirDialog("modifica", _sel.Id);
+    private Task Eliminar() => _sel is null ? Task.CompletedTask : AbrirDialog("baja", _sel.Id);
+
+    private async Task AbrirDialog(string modo, int id)
+    {
+        var parametros = new DialogParameters<CargaCombustibleEditorDialog>
+        {
+            { x => x.Modo, modo },
+            { x => x.Id, id },
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = false,
+            CloseOnEscapeKey = true, BackdropClick = false
+        };
+        var dlg = await DialogService.ShowAsync<CargaCombustibleEditorDialog>("Carga de combustible", parametros, opciones);
+        var res = await dlg.Result;
+        if (res is not null && !res.Canceled && res.Data is bool grabo && grabo)
+            await Refrescar();
+    }
+
+    private async Task Avisar(string? msg)
+    {
+        await DialogService.ShowMessageBoxAsync("Conciliación", msg ?? "No se pudo completar la operación.", yesText: "Entendido");
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.CargasCombustible(_cargas);
+        await JS.InvokeVoidAsync("downloadFile", "CargasCombustible.xlsx", Convert.ToBase64String(bytes));
+    }
+}

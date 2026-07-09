@@ -1,0 +1,235 @@
+@page "/agenda-vencimientos"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Agenda de Vencimientos — NORTUR</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+        Agenda de Vencimientos
+    </MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Vehículos y Choferes · Registros/CNRT/AEP de choferes y VTV/Matafuegos de la flota propia — vencidos y por vencer
+    </MudText>
+</div>
+
+@* ── Filtros ── *@
+<MudPaper Class="pa-2 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudSelect T="int" @bind-Value="_modo" Label="Anticipación" Dense="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:280px;">
+            <MudSelectItem T="int" Value="-1">Según parámetros del sistema (chofer @_pChofer / VTV @_pVtv / mataf. @_pMat)</MudSelectItem>
+            <MudSelectItem T="int" Value="0">Solo vencidos (hoy)</MudSelectItem>
+            <MudSelectItem T="int" Value="15">Vencen en 15 días (todos)</MudSelectItem>
+            <MudSelectItem T="int" Value="30">Vencen en 30 días (todos)</MudSelectItem>
+            <MudSelectItem T="int" Value="60">Vencen en 60 días (todos)</MudSelectItem>
+            <MudSelectItem T="int" Value="90">Vencen en 90 días (todos)</MudSelectItem>
+        </MudSelect>
+
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar" Disabled="_cargando">
+                Filtro
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">
+                Actualizar
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || (!_choferes.Any() && !_vehiculos.Any())">
+                Excel
+            </MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    @* ── KPIs ── *@
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="CHOFERES A REVISAR" Value="@_choferes.Count.ToString()"
+                 Sub="@LeyendaChofer" />
+        <KpiCard Label="REGISTROS VENCIDOS" Value="@ChofVencidos.ToString()"
+                 Sub="registro/CNRT/AEP ya vencido" Color="@NorturColors.Rojo" />
+        <KpiCard Label="VEHÍCULOS A REVISAR" Value="@_vehiculos.Count.ToString()"
+                 Sub="@LeyendaVeh" Color="@NorturColors.Naranja" />
+        <KpiCard Label="VTV/MATAFUEGO VENCIDO" Value="@VehVencidos.ToString()"
+                 Sub="ya vencido" Color="@NorturColors.Rojo" />
+    </div>
+
+    <MudGrid>
+        @* ── Grilla de choferes ── *@
+        <MudItem xs="12" lg="7">
+            <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+                <div class="pa-3 pb-1">
+                    <MudText Typo="Typo.subtitle1" Style="font-weight:800; color:#112F5B;">
+                        <MudIcon Icon="@Icons.Material.Filled.Badge" Size="Size.Small" Class="me-1" />
+                        Choferes — registro, CNRT y AEP
+                    </MudText>
+                </div>
+                <MudTable Items="_choferes" Dense="true" Hover="true" Striped="true"
+                          FixedHeader="true" Height="calc(100vh - 430px)"
+                          Bordered="false" Class="cli-grid grid-compacta" Virtualize="true" T="ChoferVtoRow">
+                    <HeaderContent>
+                        <MudTh>Chofer</MudTh>
+                        <MudTh>Nombre</MudTh>
+                        <MudTh>Registro</MudTh>
+                        <MudTh>CNRT</MudTh>
+                        <MudTh>AEP</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Chofer" Style="font-weight:700; color:#003AA0;">@context.IdChofer</MudTd>
+                        <MudTd DataLabel="Nombre" Style="font-weight:600;">@context.Nombre</MudTd>
+                        <MudTd DataLabel="Registro">@Vto(context.RegistroVto)</MudTd>
+                        <MudTd DataLabel="CNRT">@Vto(context.CnrtVto)</MudTd>
+                        <MudTd DataLabel="AEP">@Vto(context.AepVto)</MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body2" Class="pa-4">Ningún chofer con vencimientos en el rango elegido. 👍</MudText>
+                    </NoRecordsContent>
+                </MudTable>
+            </MudPaper>
+        </MudItem>
+
+        @* ── Grilla de vehículos ── *@
+        <MudItem xs="12" lg="5">
+            <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+                <div class="pa-3 pb-1">
+                    <MudText Typo="Typo.subtitle1" Style="font-weight:800; color:#112F5B;">
+                        <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Size="Size.Small" Class="me-1" />
+                        Vehículos propios — VTV y Matafuegos
+                    </MudText>
+                </div>
+                <MudTable Items="_vehiculos" Dense="true" Hover="true" Striped="true"
+                          FixedHeader="true" Height="calc(100vh - 430px)"
+                          Bordered="false" Class="cli-grid grid-compacta" Virtualize="true" T="VehiculoVtoRow">
+                    <HeaderContent>
+                        <MudTh>Interno</MudTh>
+                        <MudTh>Dominio</MudTh>
+                        <MudTh>VTV</MudTh>
+                        <MudTh>Matafuegos</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Interno" Style="font-weight:700; color:#003AA0;">@context.InternoNT</MudTd>
+                        <MudTd DataLabel="Dominio" Style="font-weight:600;">@context.Dominio</MudTd>
+                        <MudTd DataLabel="VTV">@Vto(context.VtvVto)</MudTd>
+                        <MudTd DataLabel="Matafuegos">@Vto(context.MatafuegoVto)</MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body2" Class="pa-4">Ningún vehículo propio con vencimientos en el rango elegido. 👍</MudText>
+                    </NoRecordsContent>
+                </MudTable>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <div class="d-flex align-center mt-2" style="gap:16px; color:#7A90AD; font-size:0.8rem;">
+        <span><span class="chof-vto--vencido">dd/mm/aaaa</span> vencido o sin fecha</span>
+        <span><span class="chof-vto--proximo">dd/mm/aaaa</span> vence dentro del rango</span>
+        <span style="flex:1;"></span>
+        <span><MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" /> Informe · la carga de vencimientos sigue en las fichas de Chofer y Vehículo</span>
+    </div>
+}
+
+@code {
+    private List<ChoferVtoRow> _choferes = new();
+    private List<VehiculoVtoRow> _vehiculos = new();
+    private bool _cargando = true;
+
+    // Modo del selector: -1 = "según parámetros del sistema" (fiel al FoxPro, cada tipo con su
+    // umbral); 0/15/30/60/90 = umbral uniforme para los tres (override de conveniencia).
+    private int _modo = -1;
+
+    // Umbrales del sistema (parametro.aviso_cho/veh/mat) — cargados al iniciar.
+    private int _pChofer = 30, _pVtv = 7, _pMat = 10;
+
+    private readonly DateOnly _hoy = DateOnly.FromDateTime(DateTime.Today);
+
+    // Umbrales EFECTIVOS según el modo elegido.
+    private int DiasChofer => _modo < 0 ? _pChofer : _modo;
+    private int DiasVtv => _modo < 0 ? _pVtv : _modo;
+    private int DiasMat => _modo < 0 ? _pMat : _modo;
+
+    private string LeyendaChofer => _modo == 0 ? "vencidos a hoy"
+        : _modo < 0 ? $"registro/CNRT/AEP · {_pChofer} días"
+        : $"vencen en {_modo} días";
+    private string LeyendaVeh => _modo == 0 ? "flota propia · vencidos"
+        : _modo < 0 ? $"flota propia · VTV {_pVtv}d / mataf. {_pMat}d"
+        : $"flota propia · {_modo} días";
+
+    private int ChofVencidos => _choferes.Count(c =>
+        EsVencido(c.RegistroVto) || EsVencido(c.CnrtVto) || EsVencido(c.AepVto));
+    private int VehVencidos => _vehiculos.Count(v =>
+        EsVencido(v.VtvVto) || EsVencido(v.MatafuegoVto));
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('V'))   // módulo Vehículos y Choferes
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        (_pChofer, _pVtv, _pMat) = await Reports.GetParametrosAvisoAsync();
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        _choferes = await Reports.GetChoferesPorVencerAsync(DiasChofer);
+        _vehiculos = await Reports.GetVehiculosPorVencerAsync(DiasVtv, DiasMat);
+        _cargando = false;
+    }
+
+    private async Task Aplicar() => await CargarAsync();
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        // La agenda no usa las claves de InvalidarCacheAbm; limpiamos las nuestras vía TTL,
+        // pero para forzar frescura re-consultamos igual (el TTL corto de 60s hace el resto).
+        await CargarAsync();
+    }
+
+    // ¿ya venció (o no tiene fecha)? NULL cuenta como vencido, igual que el FoxPro con EMPTY().
+    private bool EsVencido(DateOnly? f) => f is null || f.Value <= _hoy;
+
+    // Pinta la fecha de vencimiento: rojo si vencida/sin fecha, ámbar si vence dentro del rango.
+    private RenderFragment Vto(DateOnly? f) => builder =>
+    {
+        var clase = EsVencido(f) ? "chof-vto--vencido" : "chof-vto--proximo";
+        var texto = f is null ? "sin fecha" : f.Value.ToString("dd/MM/yyyy");
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "class", clase);
+        builder.AddContent(2, texto);
+        builder.CloseElement();
+    };
+
+    private async Task DescargarExcel()
+    {
+        // Para el sombreado del Excel pasamos el umbral MÁS AMPLIO en juego, así "por vencer"
+        // marca todo lo que cualquiera de las grillas considera próximo (aprox. de conveniencia).
+        var diasAmplio = Math.Max(DiasChofer, Math.Max(DiasVtv, DiasMat));
+        var bytes = ExcelSvc.AgendaVencimientos(_choferes, _vehiculos, diasAmplio);
+        await JS.InvokeVoidAsync("downloadFile", "AgendaVencimientos.xlsx", Convert.ToBase64String(bytes));
+    }
+}

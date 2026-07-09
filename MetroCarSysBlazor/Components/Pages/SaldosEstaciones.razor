@@ -1,0 +1,146 @@
+@page "/saldos-estaciones"
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Saldos de Estaciones — NORTUR</PageTitle>
+
+@* ── Encabezado ── *@
+<div class="page-header mb-3">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Saldos de Estaciones</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Combustible · saldo por estación (depósitos − consumos) — informe histórico
+    </MudText>
+</div>
+
+<MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Icon="@Icons.Material.Filled.History">
+    <b>Circuito sin uso desde 2017.</b> El control de saldos por estación aplicaba cuando se pagaba por
+    depósito anticipado en las 3 estaciones YPF con control de saldo. Desde 2018 se paga con tarjeta
+    prepaga. Se conserva como consulta histórica (rango por defecto 2013–2017).
+</MudAlert>
+
+@* ── Filtros ── *@
+<MudPaper Class="pa-2 mb-3 odo-filtros" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <div class="odo-grupo">
+            <MudDatePicker Label="Desde" @bind-Date="_desde" DateFormat="dd/MM/yyyy"
+                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:170px;" />
+            <MudDatePicker Label="Hasta" @bind-Date="_hasta" DateFormat="dd/MM/yyyy"
+                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:170px;" />
+        </div>
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar" Disabled="_cargando">Filtro</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">Actualizar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || !_saldos.Any()">Excel</MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="ESTACIONES" Value="@_saldos.Count.ToString("N0", _ar)" Sub="@PeriodoTexto" />
+        <KpiCard Label="DEPÓSITOS" Value="@_saldos.Sum(s => s.Debe).ToString("C0", _ar)"
+                 Sub="total del debe" Color="@NorturColors.Verde" />
+        <KpiCard Label="CONSUMOS" Value="@_saldos.Sum(s => s.Haber).ToString("C0", _ar)"
+                 Sub="total del haber" Color="@NorturColors.Naranja" />
+        <KpiCard Label="SALDO" Value="@_saldos.Sum(s => s.Saldo).ToString("C0", _ar)"
+                 Sub="debe − haber" Color="@NorturColors.Azul" />
+    </div>
+
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="_saldos" Dense="true" Hover="true" Striped="true" FixedHeader="true"
+                  Bordered="false" Class="cli-grid grid-compacta" T="SaldoEstacionRow">
+            <HeaderContent>
+                <MudTh>Estación</MudTh>
+                <MudTh Style="text-align:right">Debe (depósitos)</MudTh>
+                <MudTh Style="text-align:right">Haber (consumos)</MudTh>
+                <MudTh Style="text-align:right">Saldo</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Estación" Style="font-weight:600;">@context.Estacion</MudTd>
+                <MudTd DataLabel="Debe" Style="text-align:right">@context.Debe.ToString("N2", _ar)</MudTd>
+                <MudTd DataLabel="Haber" Style="text-align:right">@context.Haber.ToString("N2", _ar)</MudTd>
+                <MudTd DataLabel="Saldo" Style="@($"text-align:right; font-weight:700; color:{(context.Saldo < 0 ? "#DC2626" : "#16A34A")};")">
+                    @context.Saldo.ToString("N2", _ar)
+                </MudTd>
+            </RowTemplate>
+            <FooterContent>
+                <MudTd Style="font-weight:700;">TOTAL</MudTd>
+                <MudTd Style="text-align:right; font-weight:700;">@_saldos.Sum(s => s.Debe).ToString("N2", _ar)</MudTd>
+                <MudTd Style="text-align:right; font-weight:700;">@_saldos.Sum(s => s.Haber).ToString("N2", _ar)</MudTd>
+                <MudTd Style="text-align:right; font-weight:700;">@_saldos.Sum(s => s.Saldo).ToString("N2", _ar)</MudTd>
+            </FooterContent>
+            <NoRecordsContent><MudText Typo="Typo.body2" Class="pa-4">Sin movimientos en el período.</MudText></NoRecordsContent>
+        </MudTable>
+        <div class="cli-toolbar">
+            <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+            <span class="cli-toolbar__hint">Informe de solo lectura · el join de estaciones es por nombre (como el FoxPro).</span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private List<SaldoEstacionRow> _saldos = new();
+    private bool _cargando = true;
+    // Default en el rango con datos (el circuito vivió 2013-2017).
+    private DateTime? _desde = new DateTime(2013, 1, 1);
+    private DateTime? _hasta = new DateTime(2017, 12, 31);
+
+    private string PeriodoTexto => $"{(_desde ?? DateTime.Today):dd/MM/yyyy} – {(_hasta ?? DateTime.Today):dd/MM/yyyy}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('M'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        var desde = DateOnly.FromDateTime(_desde ?? new DateTime(2013, 1, 1));
+        var hasta = DateOnly.FromDateTime(_hasta ?? new DateTime(2017, 12, 31));
+        _saldos = await Reports.GetSaldosEstacionesAsync(desde, hasta);
+        _cargando = false;
+    }
+
+    private async Task Aplicar() => await CargarAsync();
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.SaldosEstaciones(_saldos);
+        await JS.InvokeVoidAsync("downloadFile", "SaldosEstaciones.xlsx", Convert.ToBase64String(bytes));
+    }
+}

@@ -1,0 +1,29 @@
+@* Panel de referencia desplegable con las 16 letras del campo `acceso` y su módulo.
+   "Levantar" de un vistazo qué significa cada letra. Fuente única: PermisosCatalogo. *@
+
+<div class="leyenda-acc">
+    <button type="button" class="leyenda-acc__toggle" @onclick="() => _abierto = !_abierto">
+        <MudIcon Icon="@Icons.Material.Filled.Help" Size="Size.Small" />
+        <span>¿Qué significan las letras de Acceso?</span>
+        <MudIcon Icon="@(_abierto ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" Size="Size.Small" />
+    </button>
+    @if (_abierto)
+    {
+        <div class="leyenda-acc__grid">
+            @foreach (var p in PermisosCatalogo.Todos)
+            {
+                <div class="leyenda-acc__item" title="@p.Descripcion">
+                    <span class="acc-chip" style="@($"background:{PermisosCatalogo.Color(p.Letra)};")">@p.Letra</span>
+                    <span class="leyenda-acc__label">@p.Etiqueta</span>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>Si arranca desplegada (default: colapsada, se abre al hacer clic).</summary>
+    [Parameter] public bool Abierta { get; set; }
+    private bool _abierto;
+    protected override void OnInitialized() => _abierto = Abierta;
+}

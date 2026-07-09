@@ -1,0 +1,212 @@
+@page "/viaticos"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Viáticos — NORTUR</PageTitle>
+
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Viáticos</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Tráfico · Viáticos de los conductores — vista de solo lectura (lista para el ABM)
+    </MudText>
+</div>
+
+@* ── Filtros (réplica de chofer_viatico.scx) ── *@
+<MudPaper Class="pa-2 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudDatePicker Label="Desde" @bind-Date="_desde" DateFormat="dd/MM/yyyy"
+                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined"
+                           Margin="Margin.Dense" Style="width:170px;" />
+            <MudDatePicker Label="Hasta" @bind-Date="_hasta" DateFormat="dd/MM/yyyy"
+                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined"
+                           Margin="Margin.Dense" Style="width:170px;" />
+        </div>
+        <MudSelect T="string" @bind-Value="_idChofer" Label="Conductor" Dense="true" Clearable="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:220px;">
+            <MudSelectItem T="string" Value="@("")">Todos</MudSelectItem>
+            @foreach (var c in _choferes)
+            {
+                <MudSelectItem T="string" Value="@c.IdChofer">@c.Nombre</MudSelectItem>
+            }
+        </MudSelect>
+
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar" Disabled="_cargando">Filtro</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">Actualizar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || _viaticos.Count == 0">Excel</MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="VIÁTICOS" Value="@_viaticos.Count.ToString("N0")" Sub="@PeriodoTexto" />
+        <KpiCard Label="IMPORTE TOTAL" Value="@_viaticos.Sum(v => v.Importe).ToString("C0", _ar)"
+                 Sub="suma del período" Color="@NorturColors.Verde" />
+        <KpiCard Label="CONDUCTORES" Value="@_viaticos.Select(v => v.IdChofer).Distinct().Count().ToString("N0")"
+                 Sub="distintos" Color="@NorturColors.Naranja" />
+    </div>
+
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="_viaticos" Dense="true" Hover="true" Striped="true"
+                  FixedHeader="true" Height="calc(100vh - 400px)"
+                  Bordered="false" Class="cli-grid grid-compacta"
+                  RowClass="cli-grid__row" RowClassFunc="@RowClass"
+                  OnRowClick="@OnRowClick" T="ViaticoRow" Virtualize="true">
+            <HeaderContent>
+                <MudTh><MudTableSortLabel SortBy="new Func<ViaticoRow, object>(x => x.Fecha)">Fecha</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<ViaticoRow, object>(x => x.Conductor)">Conductor</MudTableSortLabel></MudTh>
+                <MudTh>Motivo</MudTh>
+                <MudTh>Liquida</MudTh>
+                <MudTh>Forma Pago</MudTh>
+                <MudTh Style="text-align:right">Importe</MudTh>
+                <MudTh>F. Pago</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Fecha">@context.Fecha.ToString("dd/MM/yyyy")</MudTd>
+                <MudTd DataLabel="Conductor" Style="font-weight:600;">@context.Conductor</MudTd>
+                <MudTd DataLabel="Motivo">@context.Motivo</MudTd>
+                <MudTd DataLabel="Liquida">@context.FormaLiquida</MudTd>
+                <MudTd DataLabel="Forma Pago">@context.FormaPago</MudTd>
+                <MudTd DataLabel="Importe" Style="text-align:right; font-weight:600;">@context.Importe.ToString("N2", _ar)</MudTd>
+                <MudTd DataLabel="F. Pago">@(context.FPago?.ToString("dd/MM/yyyy") ?? "—")</MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">
+                    No hay viáticos cargados en ese período. (El módulo de Viáticos no tuvo uso en el sistema FoxPro.)
+                </MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        @* ── Botonera réplica FoxPro (Agregar / Eliminar / Modificar / Consultar) ── *@
+        @* ANDAMIAJE: la escritura se habilita con AbmFeatureFlags.ViaticosAbmActivo (hoy false). *@
+        <div class="cli-toolbar usr-toolbar">
+            <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.Add"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Agregar" Disabled="!_abmActivo">Agregar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Eliminar" Disabled="!_abmActivo || _sel is null">Eliminar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Modificar" Disabled="!_abmActivo || _sel is null">Modificar</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Visibility"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Ver" Disabled="_sel is null">Consultar</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                @(_abmActivo
+                    ? "ABM habilitado · doble clic para ver la ficha"
+                    : "Solo lectura · el ABM se activa el día del corte a Buslink · doble clic para ver la ficha")
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private static bool _abmActivo => AbmFeatureFlags.ViaticosAbmActivo;
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private List<ViaticoRow> _viaticos = new();
+    private List<CatalogoSimpleRow> _choferes = new();
+    private bool _cargando = true;
+    private DateTime? _desde = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateTime? _hasta = DateTime.Today;
+    private string _idChofer = "";
+    private ViaticoRow? _sel;
+
+    private string PeriodoTexto => $"{(_desde ?? DateTime.Today):dd/MM/yyyy} – {(_hasta ?? DateTime.Today):dd/MM/yyyy}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('T'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        _choferes = await Reports.GetChoferesComboAsync();
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        var desde = DateOnly.FromDateTime(_desde ?? DateTime.Today);
+        var hasta = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
+        _viaticos = await Reports.GetViaticosAsync(desde, hasta, string.IsNullOrWhiteSpace(_idChofer) ? null : _idChofer);
+        if (_sel is not null)
+            _sel = _viaticos.FirstOrDefault(v => v.Id == _sel.Id);
+        _cargando = false;
+    }
+
+    private async Task Aplicar() => await CargarAsync();
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private string RowClass(ViaticoRow v, int _) =>
+        _sel is not null && _sel.Id == v.Id ? "cli-grid__row--sel" : "";
+
+    private void OnRowClick(TableRowClickEventArgs<ViaticoRow> args)
+    {
+        _sel = args.Item;
+        if (args.MouseEventArgs.Detail >= 2 && _sel is not null)
+            _ = AbrirDialog("ver", _sel);
+    }
+
+    private Task Agregar() => AbrirDialog("alta", null);
+    private Task Ver() => _sel is null ? Task.CompletedTask : AbrirDialog("ver", _sel);
+    private Task Modificar() => _sel is null ? Task.CompletedTask : AbrirDialog("modifica", _sel);
+    private Task Eliminar() => _sel is null ? Task.CompletedTask : AbrirDialog("baja", _sel);
+
+    private async Task AbrirDialog(string modo, ViaticoRow? fila)
+    {
+        var parametros = new DialogParameters<ViaticoEditorDialog>
+        {
+            { x => x.Modo, modo },
+            { x => x.Id, fila?.Id ?? 0 },
+            { x => x.Fila, fila }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = false,
+            CloseOnEscapeKey = true, BackdropClick = false
+        };
+        var dlg = await DialogService.ShowAsync<ViaticoEditorDialog>("Viático", parametros, opciones);
+        var res = await dlg.Result;
+        if (res is not null && !res.Canceled && res.Data is bool grabo && grabo)
+            await Refrescar();
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.Viaticos(_viaticos);
+        await JS.InvokeVoidAsync("downloadFile", "Viaticos.xlsx", Convert.ToBase64String(bytes));
+    }
+}

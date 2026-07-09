@@ -1,0 +1,241 @@
+@page "/odometros"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Control de Odómetros — NORTUR</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+        Control de Odómetros
+    </MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Vehículos y Choferes · Lecturas de kilometraje — vista de solo lectura desde replicaVPF
+    </MudText>
+</div>
+
+@* ── Filtros (réplica de la toolbar FoxPro vehiculo_km.scx) ── *@
+<MudPaper Class="pa-2 mb-3 odo-filtros" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudRadioGroup T="string" @bind-Value="_modo" Class="odo-radio">
+            <MudRadio T="string" Value="@("dominio")" Size="Size.Small" Color="Color.Primary" Dense="true">Por vehículo</MudRadio>
+            <MudRadio T="string" Value="@("todos")" Size="Size.Small" Color="Color.Primary" Dense="true">Todos</MudRadio>
+        </MudRadioGroup>
+
+        @* Interno (formato NTxxxx, como en Tráfico) + Dominio (patente), pegaditos *@
+        <div class="odo-grupo">
+            <MudAutocomplete T="int?" @bind-Value="_interno" Label="Interno" Dense="true"
+                             SearchFunc="@BuscarInterno" ResetValueOnEmptyText="true"
+                             Clearable="true" CoerceValue="false"
+                             ToStringFunc="@(i => i is int n ? "NT" + n.ToString("D4") : "")"
+                             Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:150px;" />
+            <MudAutocomplete T="string" @bind-Value="_dominio" Label="Dominio" Dense="true"
+                             SearchFunc="@BuscarDominio" ResetValueOnEmptyText="true"
+                             Clearable="true" CoerceValue="true" Disabled="@(_modo != "dominio")"
+                             Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:150px;" />
+        </div>
+
+        @* Desde + Hasta, pegaditos *@
+        <div class="odo-grupo">
+            <MudDatePicker Label="Desde" @bind-Date="_desde" DateFormat="dd/MM/yyyy"
+                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined"
+                           Margin="Margin.Dense" Style="width:170px;" />
+            <MudDatePicker Label="Hasta" @bind-Date="_hasta" DateFormat="dd/MM/yyyy"
+                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined"
+                           Margin="Margin.Dense" Style="width:170px;" />
+        </div>
+
+        @* Botonera de acción, toda junta a la derecha (Filtro · Actualizar · Excel) *@
+        <span style="flex:1 1 auto;"></span>
+        <div class="odo-grupo">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar" Disabled="_cargando">
+                Filtro
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">
+                Actualizar
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || !Filtrados.Any()">
+                Excel
+            </MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    @* ── KPIs (reflejan el filtro de interno, se recalculan en memoria) ── *@
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="LECTURAS" Value="@KpiLecturas.ToString("N0", _ar)"
+                 Sub="@PeriodoTexto" />
+        <KpiCard Label="UNIDADES" Value="@KpiUnidades.ToString("N0", _ar)"
+                 Sub="dominios distintos" Color="@NorturColors.Naranja" />
+        <KpiCard Label="KM RECORRIDOS" Value="@KpiKmRecorridos.ToString("N0", _ar)"
+                 Sub="suma del período (km_fin − km_inicio)" Color="@NorturColors.Verde" />
+        <KpiCard Label="SIN CIERRE" Value="@KpiSinCierre.ToString("N0", _ar)"
+                 Sub="lecturas con Km Fin pendiente" Color="@NorturColors.Rojo" />
+    </div>
+
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="Filtrados" Dense="true" Hover="true" Striped="true"
+                  FixedHeader="true" Height="calc(100vh - 355px)"
+                  Bordered="false" Class="cli-grid grid-compacta"
+                  Virtualize="true" T="OdometroRow">
+            <HeaderContent>
+                <MudTh><MudTableSortLabel SortBy="new Func<OdometroRow, object>(x => x.Interno)">Interno</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<OdometroRow, object>(x => x.Dominio)">Dominio</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel InitialDirection="SortDirection.Descending" SortBy="new Func<OdometroRow, object>(x => x.FCarga ?? DateOnly.MinValue)">Fecha</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<OdometroRow, object>(x => x.AnoMes)">Año y Mes</MudTableSortLabel></MudTh>
+                <MudTh Style="text-align:right"><MudTableSortLabel SortBy="new Func<OdometroRow, object>(x => x.KmInicio ?? 0)">Km. Inicio</MudTableSortLabel></MudTh>
+                <MudTh Style="text-align:right"><MudTableSortLabel SortBy="new Func<OdometroRow, object>(x => x.KmFin ?? 0)">Km. Fin</MudTableSortLabel></MudTh>
+                <MudTh Style="text-align:right"><MudTableSortLabel SortBy="new Func<OdometroRow, object>(x => x.KmRecorridos ?? -1)">Km. Recorridos</MudTableSortLabel></MudTh>
+                <MudTh>U. Creó</MudTh>
+                <MudTh>U. Modificó</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Interno" Style="font-weight:700; color:#003AA0;">@context.InternoNT</MudTd>
+                <MudTd DataLabel="Dominio" Style="font-weight:600;">@context.Dominio</MudTd>
+                <MudTd DataLabel="Fecha">@(context.FCarga?.ToString("dd/MM/yyyy", _ar) ?? "—")</MudTd>
+                <MudTd DataLabel="Año y Mes">@AnoMesTexto(context.AnoMes)</MudTd>
+                <MudTd DataLabel="Km. Inicio" Style="text-align:right">@Km(context.KmInicio)</MudTd>
+                <MudTd DataLabel="Km. Fin" Style="text-align:right">@Km(context.KmFin)</MudTd>
+                <MudTd DataLabel="Km. Recorridos" Style="text-align:right; font-weight:600;">@Km(context.KmRecorridos)</MudTd>
+                <MudTd DataLabel="U. Creó">@context.UCreo</MudTd>
+                <MudTd DataLabel="U. Modificó">@context.UModifico</MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">
+                    Ese dominio no tiene cargas de lecturas en el período. Probá con otro o ampliá el rango.
+                </MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        @* ── Botonera réplica FoxPro (solo lectura) ── *@
+        <div class="cli-toolbar">
+            <MudButton Disabled="true" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Add" Size="Size.Small">Agregar</MudButton>
+            <MudButton Disabled="true" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Delete" Size="Size.Small">Eliminar</MudButton>
+            <MudButton Disabled="true" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Edit" Size="Size.Small">Modificar</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" /> Solo lectura · la carga de odómetros sigue en FoxPro
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private List<OdometroRow> _datos = new();
+    private List<string> _dominios = new();
+    private List<int> _internos = new();     // internos presentes en los datos traídos (para el selector)
+    private bool _cargando = true;
+    private string _modo = "dominio";        // "dominio" | "todos"
+    private string? _dominio;
+    private int? _interno;                    // filtro por interno (en memoria)
+    private DateTime? _desde = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-2);
+    private DateTime? _hasta = DateTime.Today;
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private string PeriodoTexto =>
+        $"{(_desde ?? DateTime.Today):dd/MM/yyyy} – {(_hasta ?? DateTime.Today):dd/MM/yyyy}";
+
+    // Filtro por interno EN MEMORIA sobre lo ya traído (sin re-query, como el resto de la app).
+    private IEnumerable<OdometroRow> Filtrados =>
+        _interno is int i ? _datos.Where(x => x.Interno == i) : _datos;
+
+    // KPIs derivados de lo filtrado → cambian con el filtro de interno sin volver a SQL.
+    private int KpiLecturas => Filtrados.Count();
+    private int KpiUnidades => Filtrados.Select(x => x.Dominio).Distinct().Count();
+    private long KpiKmRecorridos => Filtrados.Sum(x => x.KmRecorridos ?? 0);
+    private int KpiSinCierre => Filtrados.Count(x => x.KmFin is null);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('V'))   // módulo Vehículos y Choferes
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        _dominios = await Reports.GetDominiosFlotaPropiaAsync();
+        await CargarAsync();
+    }
+
+    private async Task<IEnumerable<string>> BuscarDominio(string value, CancellationToken _)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return _dominios.Take(50);
+        return _dominios
+            .Where(d => d.Contains(value, StringComparison.OrdinalIgnoreCase))
+            .Take(50);
+    }
+
+    private async Task<IEnumerable<int?>> BuscarInterno(string value, CancellationToken _)
+    {
+        var lista = _internos.Cast<int?>();
+        if (string.IsNullOrWhiteSpace(value))
+            return lista.Take(50);
+        return lista
+            .Where(n => n!.Value.ToString().Contains(value.Trim()))
+            .Take(50);
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+
+        var desde = DateOnly.FromDateTime(_desde ?? DateTime.Today.AddMonths(-2));
+        var hasta = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
+        var dom = _modo == "dominio" ? _dominio : null;
+        _datos = await Reports.GetOdometrosAsync(dom, desde, hasta);
+
+        // Internos disponibles = los presentes en el resultado (solo con lectura y != 0).
+        _internos = _datos.Where(x => x.Interno != 0).Select(x => x.Interno)
+                          .Distinct().OrderBy(n => n).ToList();
+        // Si el interno filtrado ya no existe en el nuevo dataset, lo limpiamos.
+        if (_interno is int i && !_internos.Contains(i)) _interno = null;
+
+        _cargando = false;
+    }
+
+    private async Task Aplicar() => await CargarAsync();
+
+    // Botón "Actualizar": invalida el caché de la consulta y vuelve a pegarle a SQL en vivo.
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.Odometros(Filtrados.ToList(), _desde ?? DateTime.Today, _hasta ?? DateTime.Today);
+        var nombre = $"Odometros_{(_desde ?? DateTime.Today):yyyyMMdd}_{(_hasta ?? DateTime.Today):yyyyMMdd}.xlsx";
+        await JS.InvokeVoidAsync("downloadFile", nombre, Convert.ToBase64String(bytes));
+    }
+
+    private string Km(long? v) => v is long n ? n.ToString("N0", _ar) : "—";
+
+    // "202606" → "06/2026"
+    private static string AnoMesTexto(string am) =>
+        (am.Length == 6 && int.TryParse(am, out _)) ? $"{am.Substring(4, 2)}/{am.Substring(0, 4)}" : am;
+}

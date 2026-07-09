@@ -38,8 +38,12 @@ Modos `alta` / `baja` / `modifica` / `consulta`. Todos los campos se graban en M
   mismo — los cambios de contacto en modificación NUNCA se guardan). En Blazor corregirlo.
 - **Nueva Localidad**: INPUTBOX → anti-duplicado → `INSERT INTO destino_localidad`.
 - El campo `cabecera` está deshabilitado en el form (se carga por otra vía).
-- El fuente referencia un botón `google` (mapa) que no existe en el `.scx` del disco —
-  señal de que el exe productivo es más nuevo que este fuente.
+- El fuente **SÍ tiene** el objeto `google` (botón mapa) — re-verificado 06/07/2026: existe en
+  el `.scx` del disco pero solo se lo deshabilita en baja/consulta; no tiene `Click` con lógica
+  de mapa en este fuente. En Blazor no es necesario replicarlo (no aporta al ABM).
+- **Largos de campo (MaxLength del form, para el editor Blazor):** `destino`/`direccion`/
+  `localidad`/`telefono`/`correo`/`contacto`/`cabecera` = **50** cada uno. Todos se graban en
+  MAYÚSCULAS (`UPPER`). `mas100km` = checkbox.
 
 ## Reglas no obvias
 

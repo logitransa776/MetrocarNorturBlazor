@@ -1,0 +1,348 @@
+@inject ReportService Reports
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Grupos de Clientes — réplica del form FoxPro cliente_grupo_abm.scx. Modos:
+   "ver" (solo lectura), "modifica", "baja". ⚠ SIN "alta": los grupos NACEN desde la carga de
+   Reservas (el alta del form FoxPro está totalmente comentada).
+
+   ⚠ ANDAMIAJE (06/07/2026): la ESCRITURA está construida (AbmService.ModificaGrupoAsync /
+   BajaGrupoAsync) pero DESHABILITADA. La modifica y la baja operan EN CASCADA sobre `viaje`
+   (renombre arrastra viajes / baja = cancelación masiva con motivo) → esto toca el circuito
+   viaje: se activa el DÍA D junto con Tráfico, no como catálogo suelto. Para activar:
+   AbmFeatureFlags.GruposAbmActivo=true + bloquear FoxPro + apagar sync. Ver CLIENTE_GRUPO_ABM.md.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@_icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@_titulo</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">@_chip</span>
+            @if (!string.IsNullOrEmpty(_nombre))
+            {
+                <span class="zoom-title-bar__nro">@_nombre</span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:160px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_noExiste)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">El grupo ya no existe.</MudAlert>
+        }
+        else
+        {
+            @if (SoloEscritura && !_abmActivo)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    <b>Vista previa del ABM.</b> La modificación / baja de grupos todavía se hace en
+                    FoxPro. Estas operaciones cancelan o arrastran viajes en cascada → se activan el
+                    día del corte a Buslink, junto con el circuito de Tráfico.
+                </MudAlert>
+            }
+            @if (_cerrado && SoloEscritura)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                    Grupo <b>facturado</b> (F. Facturó @Fecha(_model!.FFacturo)): no se puede renombrar
+                    ni cambiar la fecha.
+                </MudAlert>
+            }
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+            }
+
+            @* ── Datos del grupo ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Grupo de cliente</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Cód. Cliente</div>
+                        <div class="zoom-field__value" title="@_idCliente">@_idCliente</div>
+                    </div>
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Razón social</div>
+                        <div class="zoom-field__value" title="@_razonSocial">@V(_razonSocial)</div>
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Nombre original</div>
+                        <div class="zoom-field__value" title="@_nombre">@_nombre</div>
+                    </div>
+                    @if (EsModifica)
+                    {
+                        <div class="zoom-field zoom-field--3">
+                            <div class="zoom-field__label">Nuevo nombre</div>
+                            <MudTextField @bind-Value="_nombreNuevo" MaxLength="50" Immediate="true"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          Disabled="_cerrado" Style="text-transform:uppercase;" />
+                        </div>
+                    }
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Fecha de llegada (inicio)</div>
+                        @if (EsModifica && !_cerrado)
+                        {
+                            <MudDatePicker @bind-Date="_fInicio" DateFormat="dd/MM/yyyy"
+                                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value">@Fecha(_model!.FInicio)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Fecha de partida (fin)</div>
+                        @if (EsModifica && !_cerrado)
+                        {
+                            <MudDatePicker @bind-Date="_fFin" DateFormat="dd/MM/yyyy"
+                                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value">@Fecha(_model!.FFin)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">F. Facturó</div>
+                        <div class="zoom-field__value">@Fecha(_model!.FFacturo)</div>
+                    </div>
+                </div>
+            </div>
+
+            @* ── Impacto sobre las reservas del grupo (cascada) ── *@
+            @if (SoloEscritura)
+            {
+                <div class="zoom-box zoom-box--sec mt-2">
+                    <span class="zoom-box__label">Reservas del grupo — impacto de esta operación</span>
+                    <div class="pa-2">
+                        @if (_totalViajes == 0)
+                        {
+                            <MudText Typo="Typo.body2" Style="color:#7A90AD;">No se encontraron viajes para este grupo.</MudText>
+                        }
+                        else
+                        {
+                            <div class="d-flex flex-wrap" style="gap:8px;">
+                                @foreach (var kv in _porEstado.OrderBy(k => k.Key))
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                             Color="@EstadoColor(kv.Key)">@kv.Key: @kv.Value</MudChip>
+                                }
+                            </div>
+                            <MudText Typo="Typo.caption" Class="mt-2" Style="color:#7A90AD;">
+                                @_impactoTexto
+                            </MudText>
+                        }
+                    </div>
+                </div>
+
+                @* ── Motivo de cancelación (solo baja, solo si hay SIN ASIGNAR) ── *@
+                @if (EsBaja && _haySinAsignar)
+                {
+                    <div class="zoom-box zoom-box--sec mt-2">
+                        <span class="zoom-box__label">Motivo de cancelación (obligatorio)</span>
+                        <div class="pa-2" style="max-width:360px;">
+                            <MudSelect @bind-Value="_idMotivo" Dense="true" Variant="Variant.Outlined"
+                                       Margin="Margin.Dense" Placeholder="Elegí el motivo">
+                                @foreach (var m in _motivos)
+                                {
+                                    <MudSelectItem Value="@m.Id">@m.Motivo</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </div>
+                    </div>
+                }
+            }
+
+            @* ── Botonera ── *@
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@(SoloEscritura && _abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                    @(SoloEscritura && !_abmActivo
+                        ? "Escritura preparada · se activa el día D con Tráfico"
+                        : SoloEscritura ? "Edición habilitada" : "Vista de solo lectura")
+                </div>
+                <div class="cli-footer__btns">
+                    @if (EsModifica)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar"
+                                   Disabled="!_abmActivo || _grabando || _cerrado || _bloqueado">
+                            @(_grabando ? "Grabando…" : "Modificar")
+                        </MudButton>
+                    }
+                    else if (EsBaja)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Delete" OnClick="Grabar"
+                                   Disabled="!_abmActivo || _grabando || _bloqueado">
+                            @(_grabando ? "Procesando…" : "Eliminar grupo")
+                        </MudButton>
+                    }
+                    <MudButton Variant="@(SoloLectura ? Variant.Filled : Variant.Text)"
+                               Color="@(SoloLectura ? Color.Primary : Color.Default)" Size="Size.Small"
+                               OnClick="Cerrar">@(SoloLectura ? "Cerrar" : "Cancelar")</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Modo: "ver" | "modifica" | "baja". (Sin "alta": los grupos nacen en Reservas.)</summary>
+    [Parameter] public string Modo { get; set; } = "ver";
+    /// <summary>Id del grupo.</summary>
+    [Parameter] public int Id { get; set; }
+
+    private static bool _abmActivo => AbmFeatureFlags.GruposAbmActivo;
+
+    private GrupoRow? _model;
+    private string _idCliente = "", _razonSocial = "", _nombre = "", _nombreNuevo = "";
+    private DateTime? _fInicio, _fFin;
+    private bool _cerrado;
+    private Dictionary<string, int> _porEstado = new();
+    private List<MotivoCancelaDto> _motivos = new();
+    private int _idMotivo;
+    private bool _cargando = true, _grabando, _noExiste;
+    private string? _error;
+
+    private bool EsModifica => Modo == "modifica";
+    private bool EsBaja => Modo == "baja";
+    private bool SoloLectura => Modo == "ver";
+    private bool SoloEscritura => EsModifica || EsBaja;
+
+    private int _totalViajes => _porEstado.Values.Sum();
+    private bool _haySinAsignar => _porEstado.TryGetValue("SIN ASIGNAR", out var n) && n > 0;
+    private bool _hayAsignado => _porEstado.TryGetValue("ASIGNADO", out var n) && n > 0;
+    private bool _hayFacturado => (_porEstado.TryGetValue("FACTURADO", out var f) && f > 0);
+    private bool _hayFinalizado => (_porEstado.TryGetValue("FINALIZADO", out var fi) && fi > 0);
+
+    // Bloqueo del botón según las reglas del FoxPro (además de la cascada real en AbmService).
+    private bool _bloqueado
+    {
+        get
+        {
+            if (EsBaja)
+                return _hayAsignado;   // hay ASIGNADO → no se puede eliminar
+            if (EsModifica)
+            {
+                if (_cerrado) return true;
+                // Modificable = SIN ASIGNAR/ASIGNADO/FINALIZADO; bloquea si hay viajes y ninguno modificable.
+                var hayMod = _haySinAsignar || _hayAsignado || _hayFinalizado;
+                return _totalViajes > 0 && !hayMod;
+            }
+            return false;
+        }
+    }
+
+    private string _impactoTexto
+    {
+        get
+        {
+            if (EsBaja)
+            {
+                if (_hayAsignado) return "⚠ Hay reservas ASIGNADAS: primero hay que pasarlas a SIN ASIGNAR. No se puede eliminar.";
+                if (_haySinAsignar && !_hayFacturado && !_hayFinalizado) return "Se cancelarán TODAS las reservas del grupo y se eliminará el grupo.";
+                if (_haySinAsignar) return "Se cancelarán solo las reservas SIN ASIGNAR (hay finalizadas/facturadas: el grupo NO se elimina).";
+                return "No hay reservas cancelables; el grupo se eliminará solo si no tiene historia facturada.";
+            }
+            if (EsModifica)
+            {
+                if (_cerrado) return "El grupo está facturado: no se puede modificar.";
+                if (_totalViajes > 0 && !(_haySinAsignar || _hayAsignado || _hayFinalizado))
+                    return "Todas las reservas están FACTURADAS: ya no pueden modificarse.";
+                return "El renombre y la nueva fecha se arrastrarán a las reservas modificables del grupo.";
+            }
+            return "";
+        }
+    }
+
+    private string _titulo => EsModifica ? "Modificar Grupo" : EsBaja ? "Eliminar Grupo" : "Datos del Grupo";
+    private string _chip => EsModifica ? "Edición (cascada)" : EsBaja ? "Baja (cancela viajes)" : "Solo lectura";
+    private string _icono => EsBaja ? Icons.Material.Filled.RemoveCircle
+        : EsModifica ? Icons.Material.Filled.Edit
+        : Icons.Material.Filled.Groups;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _model = await Reports.GetGrupoRowAsync(Id);
+        if (_model is null) { _noExiste = true; _cargando = false; return; }
+        _idCliente = _model.IdCliente;
+        _razonSocial = _model.RazonSocial;
+        _nombre = _model.Nombre;
+        _nombreNuevo = _model.Nombre;
+        _cerrado = _model.Cerrado;
+        _fInicio = _model.FInicio?.ToDateTime(TimeOnly.MinValue);
+        _fFin = _model.FFin?.ToDateTime(TimeOnly.MinValue);
+
+        if (SoloEscritura)
+        {
+            _porEstado = await Reports.GetViajesGrupoPorEstadoAsync(_idCliente, _nombre);
+            if (EsBaja)
+            {
+                _motivos = await Reports.GetMotivosCancelacionAsync();
+                // Default: primer motivo "CANCELADO POR CLIENTE" si aparece, si no el primero.
+                _idMotivo = _motivos.FirstOrDefault(m => m.Motivo.Contains("CLIENTE", StringComparison.OrdinalIgnoreCase))?.Id
+                    ?? _motivos.FirstOrDefault()?.Id ?? 0;
+            }
+        }
+        _cargando = false;
+    }
+
+    private async Task Grabar()
+    {
+        if (!_abmActivo)
+        {
+            _error = "La escritura de grupos se habilita el día del corte a Buslink (toca el circuito de viajes).";
+            return;
+        }
+        _error = null; _grabando = true;
+
+        if (EsBaja)
+        {
+            if (_haySinAsignar && _idMotivo <= 0)
+            {
+                _error = "Elegí el motivo de cancelación."; _grabando = false; return;
+            }
+            Finalizar(await Abm.BajaGrupoAsync(Id, _idCliente, _nombre, _idMotivo));
+            return;
+        }
+
+        // Modifica
+        Finalizar(await Abm.ModificaGrupoAsync(
+            Id, _idCliente, _nombre, _nombreNuevo,
+            _fInicio is DateTime i ? DateOnly.FromDateTime(i) : null,
+            _fFin is DateTime f ? DateOnly.FromDateTime(f) : null));
+    }
+
+    private void Finalizar(AbmService.AbmResult r)
+    {
+        _grabando = false;
+        if (r.Ok) MudDialog.Close(DialogResult.Ok(true));
+        else { _error = r.Error; StateHasChanged(); }
+    }
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+
+    private static Color EstadoColor(string estado) => estado.ToUpperInvariant() switch
+    {
+        "SIN ASIGNAR" => Color.Warning,
+        "ASIGNADO" => Color.Info,
+        "FINALIZADO" => Color.Success,
+        "FACTURADO" => Color.Primary,
+        "CANCELADO" => Color.Error,
+        _ => Color.Default,
+    };
+
+    private static string V(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+    private static string Fecha(DateOnly? f) => f is null ? "—" : f.Value.ToString("dd/MM/yyyy");
+}

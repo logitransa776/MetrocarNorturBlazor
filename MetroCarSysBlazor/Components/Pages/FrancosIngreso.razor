@@ -1,0 +1,72 @@
+@page "/francos-ingreso"
+@using MetroCarSysBlazor.Components.Shared
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@rendermode InteractiveServer
+
+<PageTitle>Ingreso de Francos — NORTUR</PageTitle>
+
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Ingreso de Francos</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Tráfico · Alta masiva de francos (choferes × fechas × motivo) — lista para el ABM
+    </MudText>
+</div>
+
+<MudPaper Class="pa-6" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0; max-width:820px;">
+    @if (!_abmActivo)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-4">
+            <b>Vista previa del ABM.</b> El alta de francos todavía se hace en FoxPro. Esta pantalla
+            reproduce el proceso del sistema viejo (elegir choferes × un rango de fechas × un motivo)
+            y queda lista para activarse el día del corte a Buslink.
+        </MudAlert>
+    }
+
+    <MudText Typo="Typo.body1" Class="mb-4">
+        El <b>Ingreso de Francos</b> genera un franco por cada chofer seleccionado y cada día del rango
+        elegido. Al generar, se saltean los días que ya tengan un franco cargado (evita duplicados),
+        igual que el sistema FoxPro.
+    </MudText>
+
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+               StartIcon="@Icons.Material.Filled.PlaylistAdd" OnClick="Abrir">
+        Abrir el ingreso de francos
+    </MudButton>
+
+    @if (_ultimoResultado is not null)
+    {
+        <MudAlert Severity="Severity.Success" Dense="true" Class="mt-4">@_ultimoResultado</MudAlert>
+    }
+</MudPaper>
+
+@code {
+    private static bool _abmActivo => AbmFeatureFlags.FrancosAbmActivo;
+    private string? _ultimoResultado;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('T'))
+            Nav.NavigateTo("/", forceLoad: false);
+    }
+
+    private async Task Abrir()
+    {
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = false,
+            CloseOnEscapeKey = true, BackdropClick = false
+        };
+        var dlg = await DialogService.ShowAsync<FrancoAltaDialog>("Ingreso de Francos", opciones);
+        var res = await dlg.Result;
+        if (res is not null && !res.Canceled && res.Data is bool grabo && grabo)
+            _ultimoResultado = "Francos generados. Podés verlos en Mantenimiento de Francos.";
+    }
+}

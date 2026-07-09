@@ -1,10 +1,12 @@
+@* Prioridad de recorte cuando la tarjeta queda angosta: el VALOR nunca se corta (flex-shrink:0),
+   el Sub cede primero (shrink alto) y el Label después — ambos con elipsis, nunca corte seco. *@
 <MudPaper Class="pa-0" Elevation="2" Style="@($"height:100%; border-radius:8px; overflow:hidden; border-left:4px solid {Color}; background: linear-gradient(135deg, #ffffff 60%, {Color}18 100%);")">
-    <div style="padding:8px 14px; display:flex; align-items:baseline; gap:10px;">
-        <span style="font-size:0.78rem; font-weight:800; color:#4A5568; letter-spacing:0.06em; text-transform:uppercase; white-space:nowrap;">@Label</span>
-        <span style="@($"font-size:1.25rem; font-weight:900; color:{Color}; white-space:nowrap; letter-spacing:-0.01em;")">@Value</span>
+    <div style="padding:8px 14px; display:flex; align-items:baseline; gap:10px; min-width:0;">
+        <span style="font-size:0.78rem; font-weight:800; color:#4A5568; letter-spacing:0.06em; text-transform:uppercase; white-space:nowrap; flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;">@Label</span>
+        <span style="@($"font-size:1.25rem; font-weight:900; color:{Color}; white-space:nowrap; letter-spacing:-0.01em; flex:0 0 auto;")">@Value</span>
         @if (!string.IsNullOrEmpty(Sub))
         {
-            <span style="font-size:0.74rem; font-weight:600; color:#718096; white-space:nowrap;">@Sub</span>
+            <span style="font-size:0.74rem; font-weight:600; color:#718096; white-space:nowrap; flex:0 999 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;">@Sub</span>
         }
     </div>
 </MudPaper>

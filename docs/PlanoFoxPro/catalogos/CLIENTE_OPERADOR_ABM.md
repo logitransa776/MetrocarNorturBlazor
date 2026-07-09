@@ -44,3 +44,10 @@ Modos `alta` / `baja` / `modifica` / `consulta`. Puede recibir el código de cli
    queda huérfano (el FoxPro no lo valida). En Blazor: validar referencias antes de borrar
    o pasar a baja lógica.
 3. Columna SQL truncada: `id_operado`.
+4. **`nextel` NO es editable** (verificado 06/07/2026): el campo existe en la tabla pero en el
+   form el textbox nextel está comentado (`*Thisform.nextel.enabled`) y NO figura en el
+   INSERT/UPDATE. En Blazor: no ofrecerlo en el editor (o mostrarlo solo lectura).
+5. **Campos del editor y largos (MaxLength del form):** `id_operado` código=15 · `nombre`=40 ·
+   `id_cliente`=15 · `telefono`=20 · `celular`=20 · `interno`=70 · `email`=70 (valida que
+   contenga `@`) · `comentario`=70. El email se graba en minúsculas (`LOWER`); el resto en
+   MAYÚSCULAS (`Format="!"`). Obligatorios: código, cliente (debe existir) y nombre.

@@ -1,0 +1,347 @@
+@page "/consumo-mensual"
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Consumo Mensual — NORTUR</PageTitle>
+
+<div class="page-header mb-3">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Consumo Mensual de Combustible</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Combustible · litros cargados por mes, unidad y tipo — datos en vivo desde replicaVPF
+    </MudText>
+</div>
+
+<MudPaper Elevation="1" Class="rfs-filtros mb-4">
+    <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudSize.Small" Style="color:#003AA0; flex-shrink:0;" />
+    <div class="rfs-fechas">
+        <MudDatePicker Label="Desde" @bind-Date="_desde" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+        <MudDatePicker Label="Hasta" @bind-Date="_hasta" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+    </div>
+    <span style="flex:1 1 auto;"></span>
+    <div class="d-flex align-center" style="gap:6px;">
+        <MudButton Variant="Variant.Filled" Color="MudColor.Primary" Size="MudSize.Small"
+                   StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar" Disabled="_cargando">Filtro</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="MudColor.Primary" Size="MudSize.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">Actualizar</MudButton>
+        <MudButton Variant="Variant.Filled" Color="MudColor.Success" Size="MudSize.Small"
+                   StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                   Disabled="_cargando || !_detalle.Any()">Excel</MudButton>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <div class="rfs-kpis mb-4">
+        <KpiCard Label="LITROS" Value="@_kpiLitros.ToString("N0", _ar)" Sub="@PeriodoTexto" />
+        <KpiCard Label="CARGAS" Value="@_kpiCargas.ToString("N0", _ar)"
+                 Sub="operaciones de carga" Color="@NorturColors.Naranja" />
+        <KpiCard Label="UNIDADES" Value="@_kpiUnidades.ToString("N0", _ar)"
+                 Sub="con al menos una carga" Color="@NorturColors.Azul" />
+        <KpiCard Label="PROMEDIO / MES" Value="@_kpiProm.ToString("N0", _ar)"
+                 Sub="litros por mes" Color="@NorturColors.Verde" />
+    </div>
+
+    @if (!_detalle.Any())
+    {
+        <MudAlert Severity="Severity.Info" Class="mb-4">No hay cargas de combustible en el período.</MudAlert>
+    }
+    else
+    {
+        <div @key="_chartsKey">
+        <MudGrid Class="mb-2 nt-chart-row">
+            <MudItem xs="12" md="8">
+                <MudPaper Elevation="1" Class="pa-3" Style="border-radius:14px;">
+                    <div class="rfs-bar-head">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                            Litros cargados por mes @(_focoTipo is null ? "" : $"· {_focoTipo}")
+                        </MudText>
+                    </div>
+                    <div class="nt-chart-fill">
+                        <ApexChart @ref="_chartMes" TItem="MesLitros" Options="_optsMes" Height="330">
+                            <ApexPointSeries TItem="MesLitros" Items="_mesItems" Name="Litros"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="@(x => x.Mes)"
+                                             YValue="@(x => x.Litros)" />
+                        </ApexChart>
+                    </div>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <MudPaper Elevation="1" Class="pa-3" Style="border-radius:14px;">
+                    <div class="rfs-bar-head">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">Por tipo de combustible</MudText>
+                        @ChipFoco()
+                    </div>
+                    <div class="nt-chart-fill">
+                        <ApexChart @ref="_chartTipo" TItem="TipoLitros" Options="_optsTipo" Height="330"
+                                   OnDataPointSelection="OnTipoSelection">
+                            <ApexPointSeries TItem="TipoLitros" Items="_tipoItems" Name="Litros"
+                                             SeriesType="SeriesType.Donut"
+                                             XValue="@(x => x.Tipo)"
+                                             YAggregate="@(g => g.Sum(x => x.Litros))" />
+                        </ApexChart>
+                    </div>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+        </div>
+
+        @* ── Pivote mes × unidad (reusa las clases rfs-* del pivote de Reservas) ── *@
+        <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+            <div class="rfs-tabla-wrap">
+                <table class="rfs-tabla">
+                    <thead>
+                        <tr>
+                            <th class="rfs-col-fecha">Unidad</th>
+                            @foreach (var m in _meses)
+                            {
+                                <th class="rfs-th-serv" style="text-align:right;">@MesTexto(m)</th>
+                            }
+                            <th class="rfs-th-total">TOTAL</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <Virtualize Items="_unidades" Context="u" ItemSize="30" OverscanCount="12" SpacerElement="tr">
+                            <tr>
+                                <td class="rfs-col-fecha" style="font-weight:700; color:#003AA0;">
+                                    @InternoNT(u.Interno) · @u.Dominio
+                                </td>
+                                @foreach (var m in _meses)
+                                {
+                                    var v = Litros(m, u.Dominio);
+                                    if (v > 0)
+                                    {
+                                        <td class="rfs-num">@v.ToString("N0", _ar)</td>
+                                    }
+                                    else
+                                    {
+                                        <td class="rfs-num rfs-cero">·</td>
+                                    }
+                                }
+                                <td class="rfs-num rfs-tot">@TotalUnidad(u.Dominio).ToString("N0", _ar)</td>
+                            </tr>
+                        </Virtualize>
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td class="rfs-col-fecha rfs-tot">TOTAL</td>
+                            @foreach (var m in _meses)
+                            {
+                                <td class="rfs-num rfs-tot">@TotalMes(m).ToString("N0", _ar)</td>
+                            }
+                            <td class="rfs-num rfs-tot rfs-grantot">@_kpiLitros.ToString("N0", _ar)</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+            <div class="cli-toolbar">
+                <MudIcon Icon="@Icons.Material.Filled.Info" Size="MudSize.Small" />
+                <span class="cli-toolbar__hint">
+                    Litros por mes y unidad. El importe no se registra (tarjeta prepaga) → la métrica es litros.
+                    Clic en una porción del donut para enfocar un tipo de combustible.
+                </span>
+            </div>
+        </MudPaper>
+    }
+}
+
+@code {
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private static readonly List<string> _palette = new()
+    { "#2058D0","#F99410","#16A34A","#DC2626","#0EA5E9","#7C3AED" };
+
+    private List<ConsumoMensualRow> _detalle = new();
+    private List<string> _meses = new();
+    private List<(string Dominio, int Interno)> _unidades = new();
+    private List<MesLitros> _mesItems = new();
+    private List<TipoLitros> _tipoItems = new();
+    private Dictionary<(string, string), decimal> _mapa = new();   // (mes, dominio) → litros
+
+    private bool _cargando = true;
+    private string? _focoTipo;
+    private Guid _chartsKey = Guid.NewGuid();
+    private DateTime? _desde = new DateTime(DateTime.Today.Year, 1, 1);
+    private DateTime? _hasta = DateTime.Today;
+
+    private ApexChart<MesLitros>? _chartMes;
+    private ApexChart<TipoLitros>? _chartTipo;
+    private ApexChartOptions<MesLitros> _optsMes = new();
+    private ApexChartOptions<TipoLitros> _optsTipo = new();
+
+    private decimal _kpiLitros; private int _kpiCargas; private int _kpiUnidades; private decimal _kpiProm;
+
+    private string PeriodoTexto => $"{(_desde ?? DateTime.Today):dd/MM/yyyy} – {(_hasta ?? DateTime.Today):dd/MM/yyyy}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('M'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        ConfigurarGraficos();
+        await Cargar();
+    }
+
+    private void ConfigurarGraficos()
+    {
+        _optsMes = new ApexChartOptions<MesLitros>
+        {
+            Chart = new() { Toolbar = new() { Show = false }, Animations = new() { Enabled = false } },
+            Colors = new List<string> { NorturColors.Azul },
+            PlotOptions = new() { Bar = new() { ColumnWidth = "55%" } },
+            DataLabels = new() { Enabled = false },
+            Yaxis = new() { new() { Labels = new() { Formatter = "function(v){ return v==null?'':Math.round(v).toLocaleString('es-AR'); }" } } },
+            Tooltip = new() { Y = new() { Formatter = "function(v){ return v==null?'':Math.round(v).toLocaleString('es-AR')+' l'; }" } },
+        };
+        _optsTipo = new ApexChartOptions<TipoLitros>
+        {
+            Chart = new() { Toolbar = new() { Show = false }, Animations = new() { Enabled = false } },
+            Legend = new() { Position = LegendPosition.Bottom },
+            DataLabels = new() { Enabled = true },
+            States = new()
+            {
+                Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+                Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+            },
+        };
+    }
+
+    private async Task Cargar()
+    {
+        _cargando = true;
+        StateHasChanged();
+        var desde = DateOnly.FromDateTime(_desde ?? new DateTime(DateTime.Today.Year, 1, 1));
+        var hasta = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
+        _detalle = await Reports.GetConsumoMensualAsync(desde, hasta);
+        _focoTipo = null;
+        _chartsKey = Guid.NewGuid();
+        Recalcular();
+        _cargando = false;
+    }
+
+    private async Task Aplicar() => await Cargar();
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await Cargar();
+    }
+
+    private void Recalcular()
+    {
+        _meses = _detalle.Select(d => d.Mes).Distinct().OrderBy(m => m).ToList();
+        _unidades = _detalle.Select(d => (d.Dominio, d.Interno)).Distinct().OrderBy(u => u.Interno).ToList();
+
+        // Subconjunto según foco de tipo (para KPIs, evolución y pivote).
+        var foco = _focoTipo is null ? _detalle : _detalle.Where(d => d.TipoCarga == _focoTipo).ToList();
+
+        _mapa = new();
+        foreach (var d in foco)
+        {
+            var k = (d.Mes, d.Dominio);
+            _mapa[k] = (_mapa.TryGetValue(k, out var v) ? v : 0) + d.Litros;
+        }
+
+        _kpiLitros = foco.Sum(d => d.Litros);
+        _kpiCargas = foco.Sum(d => d.Cargas);
+        _kpiUnidades = foco.Select(d => d.Dominio).Distinct().Count();
+        _kpiProm = _meses.Count > 0 ? Math.Round(_kpiLitros / _meses.Count, 0) : 0;
+
+        _mesItems = _meses
+            .Select(m => new MesLitros(MesTexto(m), foco.Where(d => d.Mes == m).Sum(d => d.Litros)))
+            .ToList();
+
+        // Donut por tipo: SIEMPRE sobre el dataset completo (estable); colores por tipo.
+        _tipoItems = _detalle
+            .GroupBy(d => d.TipoCarga)
+            .Select(g => new TipoLitros(g.Key, g.Sum(x => x.Litros)))
+            .OrderByDescending(x => x.Litros)
+            .ToList();
+        _optsTipo.Colors = _tipoItems
+            .Select((t, i) => (_focoTipo is null || t.Tipo == _focoTipo)
+                ? _palette[i % _palette.Count] : "#D9E1EC")
+            .ToList();
+    }
+
+    // ── Cross-filter por tipo ──
+    private RenderFragment ChipFoco() => builder =>
+    {
+        if (_focoTipo is null) return;
+        builder.OpenComponent<MudChip<string>>(0);
+        builder.AddAttribute(1, "T", "string");
+        builder.AddAttribute(2, "Color", MudColor.Primary);
+        builder.AddAttribute(3, "Size", MudSize.Small);
+        builder.AddAttribute(4, "OnClose", EventCallback.Factory.Create<MudChip<string>>(this, _ => LimpiarFoco()));
+        builder.AddAttribute(5, "Label", true);
+        builder.AddAttribute(6, "ChildContent", (RenderFragment)(b => b.AddContent(0, $"Tipo: {_focoTipo}")));
+        builder.CloseComponent();
+    };
+
+    private async Task OnTipoSelection(SelectedData<TipoLitros> e)
+    {
+        var t = e.DataPoint?.Items?.FirstOrDefault()?.Tipo;
+        if (t is not null) await ToggleFoco(t);
+    }
+
+    private async Task ToggleFoco(string t)
+    {
+        _focoTipo = _focoTipo == t ? null : t;
+        Recalcular();
+        await ActualizarGraficos();
+    }
+
+    private async Task LimpiarFoco()
+    {
+        _focoTipo = null;
+        Recalcular();
+        await ActualizarGraficos();
+    }
+
+    private async Task ActualizarGraficos()
+    {
+        if (_chartMes is not null) await _chartMes.UpdateSeriesAsync(true);
+        if (_chartTipo is not null) await _chartTipo.UpdateOptionsAsync(true, true, false);
+        StateHasChanged();
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = Excel.ConsumoMensual(_detalle);
+        var nombre = $"ConsumoMensual_{(_desde ?? DateTime.Today):yyyyMMdd}_{(_hasta ?? DateTime.Today):yyyyMMdd}.xlsx";
+        await JS.InvokeVoidAsync("downloadFile", nombre, Convert.ToBase64String(bytes));
+    }
+
+    // Helpers de la tabla pivote
+    private decimal Litros(string mes, string dom) => _mapa.TryGetValue((mes, dom), out var v) ? v : 0;
+    private decimal TotalUnidad(string dom) => _meses.Sum(m => Litros(m, dom));
+    private decimal TotalMes(string mes) => _unidades.Sum(u => Litros(mes, u.Dominio));
+    private static string MesTexto(string m) => m.Length == 7 ? $"{m.Substring(5, 2)}/{m.Substring(0, 4)}" : m;
+    private static string InternoNT(int i) => i == 0 ? "—" : "NT" + i.ToString("D4");
+
+    private record MesLitros(string Mes, decimal Litros);
+    private record TipoLitros(string Tipo, decimal Litros);
+}

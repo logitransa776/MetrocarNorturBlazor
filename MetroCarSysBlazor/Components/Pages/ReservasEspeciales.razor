@@ -1,0 +1,238 @@
+@page "/reservas-especiales"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Reservas Especiales — réplica del alta manual (reserva_transportacion_con_adicional.scx).
+   Acá se LISTAN las reservas ya cargadas (viaje.origen='T') para consultar; el alta nueva
+   abre el editor ReservaEspecialEditorDialog con el form fiel y Grabar apagado (andamiaje,
+   AbmFeatureFlags.ReservasEspecialesAbmActivo=false hasta el día D). Plano: RESERVA_TRANSPORTACION.md.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<PageTitle>Reservas Especiales — NORTUR</PageTitle>
+
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Reservas Especiales</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Reservas · Alta manual de reservas (transportación) — vista de solo lectura (lista para el ABM)
+    </MudText>
+</div>
+
+@* ── Barra de filtros (izquierda) + acciones (derecha, juntas) ── *@
+<MudPaper Class="pa-2 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudDatePicker Label="Desde" @bind-Date="_desde" PickerVariant="PickerVariant.Dialog"
+                           DateFormat="dd/MM/yyyy" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:150px;" />
+            <MudDatePicker Label="Hasta" @bind-Date="_hasta" PickerVariant="PickerVariant.Dialog"
+                           DateFormat="dd/MM/yyyy" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:150px;" />
+        </div>
+        <MudSelect T="string" Label="Estados" MultiSelection="true" @bind-SelectedValues="_estados"
+                   SelectAll="true" SelectAllText="Todos" Dense="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:170px;"
+                   MultiSelectionTextFunc="@(v => v.Count == ReportService.EstadosViaje.Count ? "Todos" : $"{v.Count} de {ReportService.EstadosViaje.Count}")">
+            @foreach (var e in ReportService.EstadosViaje)
+            {
+                <MudSelectItem T="string" Value="@e">@e</MudSelectItem>
+            }
+        </MudSelect>
+        <MudTextField @bind-Value="_busqueda" Label="Buscar (cliente, servicio, destino, grupo)"
+                      Immediate="false" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:280px;"
+                      OnKeyDown="@(e => { if (e.Key == "Enter") _ = CargarAsync(); })" />
+        <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">
+            @_reservas.Count reservas · @_reservas.Sum(r => r.Pax).ToString("N0") pax
+        </MudChip>
+
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="CargarAsync" Disabled="_cargando">
+                Filtrar
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">
+                Actualizar
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || _reservas.Count == 0">
+                Excel
+            </MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="_reservas" Dense="true" Hover="true" Striped="true"
+                  FixedHeader="true" Height="calc(100vh - 330px)"
+                  Bordered="false" Class="cli-grid grid-compacta"
+                  RowClass="cli-grid__row" RowClassFunc="@RowClass"
+                  OnRowClick="@OnRowClick" T="ReservaFsDetalleRow" Virtualize="true">
+            <HeaderContent>
+                <MudTh>Fecha</MudTh>
+                <MudTh>Hora</MudTh>
+                <MudTh>Servicio</MudTh>
+                <MudTh>Cliente</MudTh>
+                <MudTh>Recorrido</MudTh>
+                <MudTh Style="text-align:right;">Pax</MudTh>
+                <MudTh>Chofer</MudTh>
+                <MudTh>Interno</MudTh>
+                <MudTh>Grupo</MudTh>
+                <MudTh>Estado</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Fecha" Style="font-weight:600;">@context.Fecha.ToString("dd/MM/yyyy")</MudTd>
+                <MudTd DataLabel="Hora">@Dash(context.Hora)</MudTd>
+                <MudTd DataLabel="Servicio" title="@context.Servicio">@Dash(context.Servicio)</MudTd>
+                <MudTd DataLabel="Cliente" title="@context.Cliente">@Dash(context.Cliente)</MudTd>
+                <MudTd DataLabel="Recorrido" title="@context.Recorrido">@Dash(context.Recorrido)</MudTd>
+                <MudTd DataLabel="Pax" Style="text-align:right;">@context.Pax</MudTd>
+                <MudTd DataLabel="Chofer">@Dash(context.Chofer)</MudTd>
+                <MudTd DataLabel="Interno">@(context.Interno is > 0 ? $"NT{context.Interno:0000}" : "·")</MudTd>
+                <MudTd DataLabel="Grupo">@(context.Grupo is "SIN GRUPO" or "" ? "·" : context.Grupo)</MudTd>
+                <MudTd DataLabel="Estado"><span class="rfs-estado" style="@EstiloEstado(context.Estado)">@context.Estado</span></MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">No hay reservas especiales para el filtro aplicado.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        @* ── Botonera réplica FoxPro — ANDAMIAJE: se habilita con ReservasEspecialesAbmActivo (hoy false) ── *@
+        <div class="cli-toolbar usr-toolbar">
+            <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.AddBox"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="NuevaReserva" Disabled="!_abmActivo">
+                Nueva reserva
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Visibility"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="VerFicha" Disabled="_sel is null">Ver ficha</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                @(_abmActivo
+                    ? "ABM habilitado · doble clic para ver la ficha del viaje"
+                    : "Solo lectura · el alta de reservas se activa el día del corte a Buslink · doble clic para ver la ficha")
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    // Interruptor del andamiaje (centralizado). Hoy false → botón Nueva reserva deshabilitado.
+    private static bool _abmActivo => AbmFeatureFlags.ReservasEspecialesAbmActivo;
+
+    private List<ReservaFsDetalleRow> _reservas = new();
+    private bool _cargando = true;
+    private DateTime? _desde = DateTime.Today.AddDays(-30);
+    private DateTime? _hasta = DateTime.Today;
+    private IReadOnlyCollection<string> _estados = new HashSet<string>();
+    private string? _busqueda;
+    private ReservaFsDetalleRow? _sel;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('R'))   // módulo Reservas
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        var d = DateOnly.FromDateTime(_desde ?? DateTime.Today.AddDays(-30));
+        var h = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
+        _reservas = await Reports.GetReservasEspecialesAsync(d, h, _estados, _busqueda);
+        if (_sel is not null)
+            _sel = _reservas.FirstOrDefault(r => r.IdViaje == _sel.IdViaje);
+        _cargando = false;
+    }
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private string RowClass(ReservaFsDetalleRow r, int _) =>
+        _sel is not null && _sel.IdViaje == r.IdViaje ? "cli-grid__row--sel" : "";
+
+    private void OnRowClick(TableRowClickEventArgs<ReservaFsDetalleRow> args)
+    {
+        _sel = args.Item;
+        if (args.MouseEventArgs.Detail >= 2 && _sel is not null)
+            _ = AbrirFicha(_sel);
+    }
+
+    private Task VerFicha() => _sel is null ? Task.CompletedTask : AbrirFicha(_sel);
+
+    // La ficha reusa ReservasFsDetalleDialog (un item) — clic en la fila abre el Zoom del Viaje.
+    private async Task AbrirFicha(ReservaFsDetalleRow r)
+    {
+        var parametros = new DialogParameters<ReservasFsDetalleDialog>
+        {
+            { x => x.Items, new List<ReservaFsDetalleRow> { r } },
+            { x => x.Subtitulo, $"Reserva Nº {r.IdViaje} — {r.Fecha:dd/MM/yyyy}" }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.ExtraLarge, FullWidth = true,
+            CloseButton = false, CloseOnEscapeKey = true, BackdropClick = true
+        };
+        await DialogService.ShowAsync<ReservasFsDetalleDialog>("Reserva", parametros, opciones);
+    }
+
+    private async Task NuevaReserva()
+    {
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.ExtraLarge, FullWidth = true,
+            CloseButton = false, CloseOnEscapeKey = true, BackdropClick = false
+        };
+        var parametros = new DialogParameters<ReservaEspecialEditorDialog> { { x => x.Modo, "alta" } };
+        var dlg = await DialogService.ShowAsync<ReservaEspecialEditorDialog>("Nueva reserva especial", parametros, opciones);
+        var res = await dlg.Result;
+        if (res is not null && !res.Canceled && res.Data is bool grabo && grabo)
+            await Refrescar();
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.ReservasEspeciales(_reservas);
+        await JS.InvokeVoidAsync("downloadFile", "ReservasEspeciales.xlsx", Convert.ToBase64String(bytes));
+    }
+
+    private static string Dash(string? s) => string.IsNullOrWhiteSpace(s) ? "·" : s;
+
+    // Mismo esquema de colores de estado que ReservasFsDetalleDialog (consistencia visual).
+    private static string EstiloEstado(string estado) => estado switch
+    {
+        "SIN ASIGNAR" => "background:#FEF3C7; color:#92400E;",
+        "ASIGNADO"    => "background:#DBEAFE; color:#1E40AF;",
+        "FINALIZADO"  => "background:#DCFCE7; color:#166534;",
+        "FACTURADO"   => "background:#E8EFF9; color:#112F5B;",
+        "CANCELADO"   => "background:#FEE2E2; color:#991B1B;",
+        _             => "background:#F1F5F9; color:#475569;"
+    };
+}

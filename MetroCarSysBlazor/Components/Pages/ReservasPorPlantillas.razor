@@ -1,0 +1,266 @@
+@page "/reservas-por-plantillas"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject AbmService Abm
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Reservas por Plantillas (Armado) — réplica de reserva_plantilla_armar.scx.
+   Combo plantilla + Buscar → grilla de filas + cliente + rango de fechas + días de semana.
+   PREVIEW / dry-run EN MEMORIA (sin escribir): cuántos viajes generaría. Botón Generar =
+   ANDAMIAJE (AbmFeatureFlags.ArmadoPlantillasActivo=false hasta el día D). Plano: RESERVA_PLANTILLAS.md.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<PageTitle>Reservas por Plantillas — NORTUR</PageTitle>
+
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Reservas por Plantillas</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Reservas · Armado masivo desde plantilla (genera viajes origen 'P') — vista de solo lectura (lista para el ABM)
+    </MudText>
+</div>
+
+@* ── Paso 1: plantilla + cliente + fechas ── *@
+<MudPaper Class="pa-3 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudSelect T="string" Label="Plantilla" @bind-Value="_plantillaSel" Dense="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:280px;">
+            @foreach (var p in _plantillas)
+            {
+                <MudSelectItem T="string" Value="@p">@p</MudSelectItem>
+            }
+        </MudSelect>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Search" OnClick="BuscarPlantilla"
+                   Disabled="string.IsNullOrEmpty(_plantillaSel)">Buscar</MudButton>
+
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudTextField @bind-Value="_idCliente" Label="Cód. Cliente" MaxLength="15"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:130px; text-transform:uppercase;" />
+            <MudTextField @bind-Value="_nombreCliente" Label="Nombre cliente" MaxLength="50"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:230px; text-transform:uppercase;" />
+        </div>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudDatePicker Label="Desde" @bind-Date="_desde" PickerVariant="PickerVariant.Dialog"
+                           DateFormat="dd/MM/yyyy" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:150px;" />
+            <MudDatePicker Label="Hasta" @bind-Date="_hasta" PickerVariant="PickerVariant.Dialog"
+                           DateFormat="dd/MM/yyyy" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:150px;" />
+        </div>
+    </div>
+
+    @* ── Días de la semana + feriados ── *@
+    <div class="d-flex flex-wrap align-center mt-2" style="gap:4px;">
+        <span style="font-size:0.78rem; color:#7A90AD; margin-right:6px;">Días:</span>
+        @for (int i = 0; i < 7; i++)
+        {
+            var idx = i;
+            <MudCheckBox T="bool" Value="_dias[idx]" ValueChanged="@(v => { _dias[idx] = v; })"
+                         Dense="true" Size="Size.Small" Label="@_nombresDias[idx]" />
+        }
+        <MudCheckBox T="bool" @bind-Value="_feriados" Dense="true" Size="Size.Small" Label="Feriados" Color="Color.Warning" />
+        <span style="flex:1 1 auto;"></span>
+        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="TodaLaSemana">Toda la semana (L-V)</MudButton>
+        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="TodosLosDias">Todos los días</MudButton>
+    </div>
+</MudPaper>
+
+@if (_plantillaCargada)
+{
+    @* ── Grilla de filas de la plantilla (read-only) ── *@
+    <MudPaper Elevation="1" Class="mb-3" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="_filas" Dense="true" Hover="true" Striped="true" FixedHeader="true"
+                  Height="280px" Bordered="false" Class="cli-grid grid-compacta" T="PlantillaFilaRow" Virtualize="true">
+            <HeaderContent>
+                <MudTh>Hora</MudTh>
+                <MudTh>Servicio</MudTh>
+                <MudTh>T. Veh</MudTh>
+                <MudTh>Desde</MudTh>
+                <MudTh>Hasta</MudTh>
+                <MudTh Style="text-align:right;">Pax</MudTh>
+                <MudTh>Cabecera</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@Dash(context.HoraIni)</MudTd>
+                <MudTd title="@context.Servicio">@Dash(context.Servicio)</MudTd>
+                <MudTd>@Dash(context.TipoVeh)</MudTd>
+                <MudTd title="@context.Desde">@Dash(context.Desde)</MudTd>
+                <MudTd title="@context.Hasta">@Dash(context.Hasta)</MudTd>
+                <MudTd Style="text-align:right;">@context.Pax</MudTd>
+                <MudTd Style="font-family:monospace;">@Dash(context.Cabecera)</MudTd>
+            </RowTemplate>
+        </MudTable>
+    </MudPaper>
+
+    @* ── Preview / dry-run + botón Generar (andamiaje) ── *@
+    <MudPaper Class="pa-3" Elevation="1" Style="border-radius:14px;">
+        @if (_avisoFeriados is not null)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">@_avisoFeriados</MudAlert>
+        }
+        <div class="d-flex flex-wrap align-center" style="gap:16px;">
+            <div>
+                <MudText Typo="Typo.h6" Style="color:#003AA0; font-weight:800;">
+                    @_previewViajes viajes se generarían
+                </MudText>
+                <MudText Typo="Typo.body2" Style="color:#7A90AD;">
+                    @_previewFechas fecha(s) que matchean × @_filas.Count servicio(s) de la plantilla
+                    · cliente @(string.IsNullOrWhiteSpace(_idCliente) ? "(sin elegir)" : _idCliente)
+                </MudText>
+            </div>
+            <span style="flex:1 1 auto;"></span>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Medium"
+                       StartIcon="@Icons.Material.Filled.PlaylistAddCheck" OnClick="Generar"
+                       Disabled="!_abmActivo || _generando || _previewViajes == 0 || string.IsNullOrWhiteSpace(_idCliente)">
+                @(_generando ? "Generando…" : "Generar plantilla")
+            </MudButton>
+        </div>
+        <div class="mt-2" style="font-size:0.8rem; color:#7A90AD;">
+            <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Style="vertical-align:middle;" />
+            @(_abmActivo
+                ? "Armado habilitado."
+                : "Solo lectura · el armado (que graba viajes) se activa el día del corte a Buslink. El conteo de arriba es una simulación en memoria (no escribe nada).")
+        </div>
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+        }
+    </MudPaper>
+}
+else if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <MudPaper Class="pa-6 text-center" Elevation="0">
+        <MudText Typo="Typo.body1" Style="color:#7A90AD;">Elegí una plantilla y tocá <b>Buscar</b> para ver sus servicios y simular el armado.</MudText>
+    </MudPaper>
+}
+
+@code {
+    private static bool _abmActivo => AbmFeatureFlags.ArmadoPlantillasActivo;
+
+    private List<string> _plantillas = new();
+    private List<PlantillaFilaRow> _filas = new();
+    private string? _plantillaSel;
+    private bool _plantillaCargada, _cargando = true, _generando;
+    private string _idCliente = "", _nombreCliente = "";
+    private DateTime? _desde = DateTime.Today, _hasta = DateTime.Today.AddDays(7);
+    private readonly bool[] _dias = new bool[7];   // [0]=Lun … [6]=Dom
+    private static readonly string[] _nombresDias = { "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom" };
+    private bool _feriados;
+    private string? _error, _avisoFeriados;
+
+    private List<DateOnly> _feriadosRango = new();
+    private int _previewViajes, _previewFechas;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('R'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        // Default L-V marcado (como el botón rápido más usado).
+        for (int i = 0; i < 5; i++) _dias[i] = true;
+        _plantillas = await Reports.GetPlantillasComboAsync();
+        _plantillaSel = _plantillas.FirstOrDefault();
+        _cargando = false;
+    }
+
+    private async Task BuscarPlantilla()
+    {
+        if (string.IsNullOrEmpty(_plantillaSel)) return;
+        _cargando = true; StateHasChanged();
+        _filas = await Reports.GetPlantillaFilasAsync(_plantillaSel);
+
+        // Chequeo "Reparar plantilla" (fiel al FoxPro): si alguna fila no tiene cabecera, bloquea.
+        var sinCabecera = _filas.Count(f => string.IsNullOrWhiteSpace(f.Cabecera) || f.Cabecera == "SIN CABECERA");
+        _error = sinCabecera > 0 ? $"La plantilla tiene {sinCabecera} fila(s) sin cabecera. Repare la plantilla antes de usarla." : null;
+
+        _plantillaCargada = true;
+        _cargando = false;
+        await RecalcularPreviewAsync();
+    }
+
+    // Preview EN MEMORIA (dry-run): cuenta fechas del rango cuyo día está marcado (feriados según check).
+    private async Task RecalcularPreviewAsync()
+    {
+        var d = DateOnly.FromDateTime(_desde ?? DateTime.Today);
+        var h = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
+        _feriadosRango = h >= d ? await Reports.GetFeriadosRangoAsync(d, h) : new();
+        _avisoFeriados = _feriadosRango.Count == 0
+            ? "No hay feriados cargados en el rango (verificá los feriados antes de generar — hoy 0 feriados 2026 en la base)."
+            : $"{_feriadosRango.Count} feriado(s) en el rango.";
+
+        int fechas = 0;
+        if (h >= d)
+        {
+            for (var dia = d; dia <= h; dia = dia.AddDays(1))
+            {
+                bool esFeriado = _feriadosRango.Contains(dia);
+                int idx = (int)dia.DayOfWeek == 0 ? 6 : (int)dia.DayOfWeek - 1;   // Lun=0 … Dom=6
+                bool marcado = _dias[idx];
+                bool generar = esFeriado ? _feriados : marcado;
+                if (generar) fechas++;
+            }
+        }
+        _previewFechas = fechas;
+        _previewViajes = fechas * _filas.Count;
+        StateHasChanged();
+    }
+
+    // Los controles de fechas/días recalculan el preview al cambiar.
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_plantillaCargada) await RecalcularPreviewAsync();
+    }
+
+    private async Task TodaLaSemana()
+    {
+        for (int i = 0; i < 7; i++) _dias[i] = i < 5;
+        _feriados = false;
+        if (_plantillaCargada) await RecalcularPreviewAsync();
+    }
+
+    private async Task TodosLosDias()
+    {
+        for (int i = 0; i < 7; i++) _dias[i] = true;
+        _feriados = true;
+        if (_plantillaCargada) await RecalcularPreviewAsync();
+    }
+
+    private async Task Generar()
+    {
+        if (!_abmActivo)
+        {
+            _error = "El armado (que graba viajes) todavía no está habilitado (sigue en FoxPro).";
+            return;
+        }
+        _error = null; _generando = true;
+
+        var input = new ArmadoInput(
+            IdReserva: _plantillaSel!, IdCliente: _idCliente, NombreCliente: _nombreCliente,
+            Desde: DateOnly.FromDateTime(_desde ?? DateTime.Today),
+            Hasta: DateOnly.FromDateTime(_hasta ?? DateTime.Today),
+            DiasSemana: _dias, IncluirFeriados: _feriados, NombrePlanta: true, Usuario: "");
+
+        var res = await Abm.ArmarPlantillaAsync(input);
+        _generando = false;
+        if (res.Ok)
+            await DialogService.ShowMessageBoxAsync("Armado", $"Se generó el lote Nº {res.Id} con {_previewViajes} viajes.", yesText: "Entendido");
+        else
+            _error = res.Error;
+        StateHasChanged();
+    }
+
+    private static string Dash(string? s) => string.IsNullOrWhiteSpace(s) ? "·" : s;
+}

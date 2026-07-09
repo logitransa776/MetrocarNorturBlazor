@@ -1,0 +1,196 @@
+@page "/voucher-recepcion"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject AbmService Abm
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Voucher Recepción — NORTUR</PageTitle>
+
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Voucher Recepción</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Tráfico · Auditoría de vouchers de recepción — vista de solo lectura (marca de recepción lista para el día D)
+    </MudText>
+</div>
+
+@* ── Filtros (réplica de trafico_voucher.scx: 3 modos de consulta) ── *@
+<MudPaper Class="pa-2 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudRadioGroup T="string" @bind-Value="_modo">
+            <MudRadio T="string" Value="@("voucher")" Size="Size.Small" Color="Color.Primary">Rango de voucher</MudRadio>
+            <MudRadio T="string" Value="@("fecha")" Size="Size.Small" Color="Color.Primary">Rango de fechas</MudRadio>
+            <MudRadio T="string" Value="@("sin")" Size="Size.Small" Color="Color.Primary">Sin recepcionar</MudRadio>
+        </MudRadioGroup>
+
+        @if (_modo == "voucher")
+        {
+            <div class="d-flex align-center" style="gap:6px;">
+                <MudNumericField @bind-Value="_dVoucher" Label="Desde Nº" Min="0" HideSpinButtons="true"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:120px;" />
+                <MudNumericField @bind-Value="_hVoucher" Label="Hasta Nº" Min="0" HideSpinButtons="true"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:120px;" />
+            </div>
+        }
+        else if (_modo == "fecha")
+        {
+            <div class="d-flex align-center" style="gap:6px;">
+                <MudDatePicker @bind-Date="_dFecha" Label="Desde" DateFormat="dd/MM/yyyy"
+                               PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;" />
+                <MudDatePicker @bind-Date="_hFecha" Label="Hasta" DateFormat="dd/MM/yyyy"
+                               PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;" />
+            </div>
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Style="color:#7A90AD;">Vouchers emitidos aún no recepcionados.</MudText>
+        }
+
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Search" OnClick="Buscar" Disabled="_cargando">Buscar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || _items.Count == 0">Excel</MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@* ── KPIs ── *@
+<div class="d-flex flex-wrap mb-3" style="gap:12px;">
+    <div style="flex:1 1 0; min-width:180px;"><KpiCard Label="Vouchers" Value="@_items.Count.ToString("N0")" /></div>
+    <div style="flex:1 1 0; min-width:180px;"><KpiCard Label="Recepcionados" Value="@_items.Count(v => v.Recepcionado).ToString("N0")" Color="@NorturColors.Verde" /></div>
+    <div style="flex:1 1 0; min-width:180px;"><KpiCard Label="Sin recepcionar" Value="@_items.Count(v => !v.Recepcionado).ToString("N0")" Color="@NorturColors.Naranja" /></div>
+</div>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="_items" Dense="true" Hover="true" Striped="true"
+                  FixedHeader="true" Height="calc(100vh - 400px)"
+                  Bordered="false" Class="cli-grid grid-compacta" T="VoucherRow">
+            <HeaderContent>
+                <MudTh>Voucher</MudTh>
+                <MudTh>F. Voucher</MudTh>
+                <MudTh>Nº Viaje</MudTh>
+                <MudTh>Fecha</MudTh>
+                <MudTh>Hora</MudTh>
+                <MudTh>Interno</MudTh>
+                <MudTh>Destino</MudTh>
+                <MudTh>Chofer</MudTh>
+                <MudTh>Veh</MudTh>
+                <MudTh>Cliente</MudTh>
+                <MudTh>Comentario</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Voucher" Style="font-weight:700; color:#003AA0;">@context.VoucherNro</MudTd>
+                <MudTd DataLabel="F. Voucher">@(context.VoucherRecep?.ToString("dd/MM/yyyy") ?? "")</MudTd>
+                <MudTd DataLabel="Nº Viaje">@context.IdViaje</MudTd>
+                <MudTd DataLabel="Fecha">@(context.FReserva?.ToString("dd/MM/yyyy") ?? "")</MudTd>
+                <MudTd DataLabel="Hora">@context.Hora</MudTd>
+                <MudTd DataLabel="Interno">@context.InternoNT</MudTd>
+                <MudTd DataLabel="Destino">@context.Destino</MudTd>
+                <MudTd DataLabel="Chofer">@context.IdChofer</MudTd>
+                <MudTd DataLabel="Veh">@context.Vehiculo</MudTd>
+                <MudTd DataLabel="Cliente">@context.IdCliente</MudTd>
+                <MudTd DataLabel="Comentario">@context.Comentario</MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">No se encontraron vouchers con esa consulta.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        @* ── Botonera de recepción (andamiaje: toca `viaje`, se enciende el día D) ── *@
+        <div class="cli-toolbar usr-toolbar">
+            <div class="d-flex align-center" style="gap:6px;">
+                <MudDatePicker @bind-Date="_fechaRecep" Label="Fecha de recepción" DateFormat="dd/MM/yyyy"
+                               PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:170px;" />
+                <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.DoneAll"
+                           Size="Size.Small" OnClick="MarcarTodos" Disabled="!_recepActivo || _items.Count == 0">Marcar todos</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Clear"
+                           Size="Size.Small" OnClick="LimpiarRecep" Disabled="!_recepActivo || _items.Count == 0">Limpiar recepción</MudButton>
+            </div>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                @(_recepActivo ? "Marca de recepción habilitada" : "Solo lectura · la marca de recepción se habilita con el circuito de Tráfico (día D)")
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private static bool _recepActivo => AbmFeatureFlags.VoucherRecepcionActivo;
+
+    private List<VoucherRow> _items = new();
+    private string _modo = "voucher";
+    private long _dVoucher, _hVoucher;
+    private DateTime? _dFecha = DateTime.Today, _hFecha = DateTime.Today;
+    private DateTime? _fechaRecep = DateTime.Today;
+    private bool _cargando;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('T'))
+            Nav.NavigateTo("/", forceLoad: false);
+    }
+
+    private async Task Buscar()
+    {
+        if (_modo == "voucher" && (_dVoucher <= 0 || _hVoucher <= 0))
+            return;
+        if (_modo == "voucher" && _dVoucher > _hVoucher)
+            (_dVoucher, _hVoucher) = (_hVoucher, _dVoucher);
+
+        _cargando = true;
+        StateHasChanged();
+        _items = await Reports.GetVoucherAuditoriaAsync(
+            _modo, _dVoucher, _hVoucher,
+            DateOnly.FromDateTime(_dFecha ?? DateTime.Today),
+            DateOnly.FromDateTime(_hFecha ?? DateTime.Today),
+            DateOnly.FromDateTime(DateTime.Today));
+        _cargando = false;
+    }
+
+    private async Task MarcarTodos()
+    {
+        if (!_recepActivo) return;
+        var fecha = DateOnly.FromDateTime(_fechaRecep ?? DateTime.Today);
+        var viajes = _items
+            .Where(v => v.FReserva is not null)
+            .Select(v => (v.IdViaje, v.FReserva!.Value));
+        await Abm.MarcarRecepcionLoteAsync(viajes, fecha);
+        await Buscar();
+    }
+
+    private async Task LimpiarRecep()
+    {
+        if (!_recepActivo) return;
+        var viajes = _items
+            .Where(v => v.FReserva is not null)
+            .Select(v => (v.IdViaje, v.FReserva!.Value));
+        await Abm.MarcarRecepcionLoteAsync(viajes, null);
+        await Buscar();
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.Voucher(_items);
+        await JS.InvokeVoidAsync("downloadFile", "VoucherRecepcion.xlsx", Convert.ToBase64String(bytes));
+    }
+}

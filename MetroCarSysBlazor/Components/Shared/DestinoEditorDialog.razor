@@ -1,0 +1,288 @@
+@inject ReportService Reports
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Destinos — réplica del form FoxPro destino_abm.scx. 4 modos:
+   "ver" (solo lectura), "alta", "modifica", "baja".
+
+   ⚠ ANDAMIAJE (06/07/2026): la ESCRITURA está construida (AbmService.*DestinoAsync) pero el botón
+   Grabar está DESHABILITADO — la tabla `destino` sigue con dueño FoxPro (sync viva). Para activar:
+   AbmFeatureFlags.DestinosAbmActivo=true + bloquear FoxPro + apagar sync. Grupo A del plan Buslink
+   (cutover temprano). Baja FÍSICA. 🐛 Bug del contacto (contacto=contacto) corregido acá.
+   Ver abm-metrocar + DESTINO_ABM.md.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@_icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@_titulo</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">@_chip</span>
+            @if (!string.IsNullOrEmpty(_encabezado))
+            {
+                <span class="zoom-title-bar__nro">@_encabezado</span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:160px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_noExiste)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">El destino ya no existe.</MudAlert>
+        }
+        else
+        {
+            @if (SoloEscritura && !_abmActivo)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    <b>Vista previa del ABM.</b> La edición de destinos todavía se hace en FoxPro;
+                    esta pantalla queda lista para activarse el día que la tabla pase a Buslink.
+                </MudAlert>
+            }
+            @if (EsBaja)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                    Baja <b>física</b>: el destino se elimina definitivamente (así lo hace el FoxPro).
+                </MudAlert>
+            }
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+            }
+
+            @* ── Datos del destino ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Destino</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Destino (nombre)</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_destino" MaxLength="50" Immediate="true"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else
+                        {
+                            <div class="zoom-field__value zoom-field__value--acento" title="@_destino">@_destino</div>
+                        }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">+100 km</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudCheckBox @bind-Value="_mas100Km" Color="Color.Primary" Size="Size.Small" Dense="true" Label="Sí" />
+                        }
+                        else { <div class="zoom-field__value">@(_mas100Km ? "Sí" : "No")</div> }
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Dirección</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_direccion" MaxLength="50"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_direccion">@V(_direccion)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Localidad</div>
+                        @if (SoloEscritura)
+                        {
+                            <div class="d-flex align-center" style="gap:4px;">
+                                <MudSelect @bind-Value="_localidad" Dense="true" Variant="Variant.Outlined"
+                                           Margin="Margin.Dense" Clearable="true" Style="min-width:150px;">
+                                    @foreach (var l in _localidades)
+                                    {
+                                        <MudSelectItem Value="@l">@l</MudSelectItem>
+                                    }
+                                </MudSelect>
+                                <MudIconButton Icon="@Icons.Material.Filled.AddLocationAlt" Size="Size.Small"
+                                               Color="Color.Primary" title="Nueva localidad"
+                                               OnClick="NuevaLocalidad" Disabled="!_abmActivo" />
+                            </div>
+                        }
+                        else { <div class="zoom-field__value" title="@_localidad">@V(_localidad)</div> }
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Teléfono</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_telefono" MaxLength="50"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value">@V(_telefono)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Correo</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_correo" MaxLength="50"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_correo">@V(_correo)</div> }
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Contacto</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_contacto" MaxLength="50"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_contacto">@V(_contacto)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Cabecera</div>
+                        <div class="zoom-field__value" title="@_cabecera">@V(_cabecera)</div>
+                    </div>
+                </div>
+            </div>
+
+            @* ── Botonera ── *@
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@(SoloEscritura && _abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                    @(SoloEscritura && !_abmActivo
+                        ? "Escritura preparada · pendiente de activar en Buslink"
+                        : SoloEscritura ? "Edición habilitada" : "Vista de solo lectura")
+                </div>
+                <div class="cli-footer__btns">
+                    @if (EsAlta)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Grabando…" : "Agregar")
+                        </MudButton>
+                    }
+                    else if (EsModifica)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Grabando…" : "Modificar")
+                        </MudButton>
+                    }
+                    else if (EsBaja)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Delete" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Procesando…" : "Eliminar")
+                        </MudButton>
+                    }
+                    <MudButton Variant="@(SoloLectura ? Variant.Filled : Variant.Text)"
+                               Color="@(SoloLectura ? Color.Primary : Color.Default)" Size="Size.Small"
+                               OnClick="Cerrar">@(SoloLectura ? "Cerrar" : "Cancelar")</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Modo: "ver" | "alta" | "modifica" | "baja".</summary>
+    [Parameter] public string Modo { get; set; } = "ver";
+    /// <summary>Id del destino (para ver/modifica/baja). En alta se ignora.</summary>
+    [Parameter] public int Id { get; set; }
+
+    private static bool _abmActivo => AbmFeatureFlags.DestinosAbmActivo;
+
+    private string _destino = "", _direccion = "", _localidad = "", _telefono = "";
+    private string _correo = "", _contacto = "", _cabecera = "";
+    private bool _mas100Km;
+    private List<string> _localidades = new();
+    private bool _cargando = true, _grabando, _noExiste;
+    private string? _error;
+
+    private bool EsAlta => Modo == "alta";
+    private bool EsModifica => Modo == "modifica";
+    private bool EsBaja => Modo == "baja";
+    private bool SoloLectura => Modo == "ver" || EsBaja;
+    private bool SoloEscritura => EsAlta || EsModifica;
+
+    private string _titulo => EsAlta ? "Alta de Destino"
+        : EsModifica ? "Modificar Destino"
+        : EsBaja ? "Eliminar Destino"
+        : "Datos del Destino";
+    private string _chip => EsAlta ? "Nuevo" : EsModifica ? "Edición" : EsBaja ? "Baja física" : "Solo lectura";
+    private string _encabezado => EsAlta ? "" : _destino;
+    private string _icono => EsAlta ? Icons.Material.Filled.AddCircle
+        : EsBaja ? Icons.Material.Filled.RemoveCircle
+        : Icons.Material.Filled.LocationOn;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (SoloEscritura)
+            _localidades = await Reports.GetDestinoLocalidadesAsync();
+
+        if (EsAlta) { _cargando = false; return; }
+
+        var d = await Reports.GetDestinoRowAsync(Id);
+        if (d is null) { _noExiste = true; _cargando = false; return; }
+        _destino = d.Destino;
+        _direccion = d.Direccion;
+        _localidad = d.Localidad;
+        _telefono = d.Telefono;
+        _correo = d.Correo;
+        _contacto = d.Contacto;
+        _cabecera = d.Cabecera;
+        _mas100Km = d.Mas100Km;
+        _cargando = false;
+    }
+
+    // "Nueva Localidad" (botón + del combo). El alta real está en AbmService.AltaLocalidadAsync,
+    // pero se habilita junto con el ABM de destinos (Buslink). Hoy es andamiaje: solo avisa.
+    private void NuevaLocalidad()
+    {
+        _error = "El alta de localidades se habilita junto con el ABM de destinos (día del corte a Buslink).";
+    }
+
+    private async Task Grabar()
+    {
+        if (!_abmActivo)
+        {
+            _error = "La escritura de destinos todavía no está habilitada (sigue en FoxPro).";
+            return;
+        }
+        _error = null; _grabando = true;
+
+        if (EsBaja)
+        {
+            Finalizar(await Abm.BajaDestinoAsync(Id));
+            return;
+        }
+
+        var input = new DestinoInput(
+            _destino, _direccion, _localidad, _telefono,
+            _correo, _contacto, _cabecera, _mas100Km);
+
+        Finalizar(EsAlta
+            ? await Abm.AltaDestinoAsync(input)
+            : await Abm.ModificaDestinoAsync(Id, input));
+    }
+
+    private void Finalizar(AbmService.AbmResult r)
+    {
+        _grabando = false;
+        if (r.Ok) MudDialog.Close(DialogResult.Ok(true));
+        else { _error = r.Error; StateHasChanged(); }
+    }
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+
+    private static string V(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+}

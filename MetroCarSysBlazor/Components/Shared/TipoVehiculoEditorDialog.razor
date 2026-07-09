@@ -1,0 +1,276 @@
+@inject ReportService Reports
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Tipo de Vehículos — réplica del form FoxPro vehiculo_tipo_abm.scx. 4 modos:
+   "ver" (solo lectura), "alta", "modifica", "baja".
+
+   ⚠ ANDAMIAJE (05/07/2026): la ESCRITURA está construida (AbmService.*TipoVehiculoAsync) pero
+   el botón Grabar está DESHABILITADO — la tabla `vehiculo_tipo` sigue con dueño FoxPro (sync
+   viva). El día que se active el ABM: poner AbmFeatureFlags.TiposVehiculoAbmActivo=true +
+   bloquear FoxPro + apagar sync. Checklist: docs/buslink/ACTIVAR_ABM_VEHICULOS_CHOFERES.md.
+   Es el catálogo más chico del módulo (6 filas) → primer ABM real candidato. Ver abm-metrocar.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@_icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@_titulo</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">@_chip</span>
+            @if (!string.IsNullOrEmpty(_encabezado))
+            {
+                <span class="zoom-title-bar__nro">@_encabezado</span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:160px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_noExiste)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">El tipo de vehículo ya no existe.</MudAlert>
+        }
+        else
+        {
+            @if (SoloEscritura && !_abmActivo)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    <b>Vista previa del ABM.</b> La edición de tipos de vehículo todavía se hace en
+                    FoxPro; esta pantalla queda lista para activarse el día que la tabla pase a Buslink.
+                </MudAlert>
+            }
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+            }
+            @if (_inhabilitado && !EsBaja)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                    Tipo dado de baja el @Fecha(_model.FDelete).
+                </MudAlert>
+            }
+
+            @* ── Datos del tipo ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Tipo de vehículo</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Código</div>
+                        @if (EsAlta)
+                        {
+                            <MudTextField @bind-Value="_codigo" MaxLength="15" Immediate="true"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Placeholder="BUS"
+                                          Style="text-transform:uppercase;" />
+                        }
+                        else
+                        {
+                            <div class="zoom-field__value zoom-field__value--acento" title="@_codigo">@_codigo</div>
+                        }
+                    </div>
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Nombre</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_nombre" MaxLength="30" Immediate="true"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value" title="@_nombre">@V(_nombre)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Capacidad (pax)</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudNumericField @bind-Value="_pax" Min="0" HideSpinButtons="false"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value">@_pax</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Subtipo</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_subtipo" MaxLength="1"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value">@V(_subtipo)</div> }
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Consumo mín. (l/100km)</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudNumericField @bind-Value="_consumoMin" Min="0" Format="0.##" HideSpinButtons="true"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value">@Cons(_model.ConsumoMin)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Consumo máx. (l/100km)</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudNumericField @bind-Value="_consumoMax" Min="0" Format="0.##" HideSpinButtons="true"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value">@Cons(_model.ConsumoMax)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Se vende</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudCheckBox @bind-Value="_vende" Color="Color.Primary" Size="Size.Small" Dense="true" Label="Sí" />
+                        }
+                        else { <div class="zoom-field__value">@(_model.Vende ? "Sí" : "No")</div> }
+                    </div>
+                    @if (!EsAlta)
+                    {
+                        <div class="zoom-field zoom-field--sm">
+                            <div class="zoom-field__label">Baja</div>
+                            <div class="zoom-field__value">@Fecha(_model.FDelete)</div>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @* ── Botonera ── *@
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@(SoloEscritura && _abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                    @(SoloEscritura && !_abmActivo
+                        ? "Escritura preparada · pendiente de activar en Buslink"
+                        : SoloEscritura ? "Edición habilitada" : "Vista de solo lectura")
+                </div>
+                <div class="cli-footer__btns">
+                    @if (EsAlta)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Grabando…" : "Agregar")
+                        </MudButton>
+                    }
+                    else if (EsModifica)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Grabando…" : "Modificar")
+                        </MudButton>
+                    }
+                    else if (EsBaja)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Delete" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Procesando…" : "Dar de baja")
+                        </MudButton>
+                    }
+                    <MudButton Variant="@(SoloLectura ? Variant.Filled : Variant.Text)"
+                               Color="@(SoloLectura ? Color.Primary : Color.Default)" Size="Size.Small"
+                               OnClick="Cerrar">@(SoloLectura ? "Cerrar" : "Cancelar")</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Modo: "ver" | "alta" | "modifica" | "baja".</summary>
+    [Parameter] public string Modo { get; set; } = "ver";
+    /// <summary>Id del tipo (para ver/modifica/baja). En alta se ignora.</summary>
+    [Parameter] public int Id { get; set; }
+
+    // ⚠ Interruptor del andamiaje — centralizado en AbmFeatureFlags. Mientras sea false el botón
+    // Grabar está deshabilitado Y Grabar() aborta antes de tocar la base (doble candado). Para
+    // activar el ABM, seguir docs/buslink/ACTIVAR_ABM_VEHICULOS_CHOFERES.md.
+    private static bool _abmActivo => AbmFeatureFlags.TiposVehiculoAbmActivo;
+
+    private TipoVehiculoRow _model = new(0, "", "", 0, "", null, null, false, "", null);
+    private string _codigo = "", _nombre = "", _subtipo = "";
+    private int _pax;
+    private decimal? _consumoMin, _consumoMax;
+    private bool _vende;
+    private bool _cargando = true, _grabando, _noExiste, _inhabilitado;
+    private string? _error;
+
+    private bool EsAlta => Modo == "alta";
+    private bool EsModifica => Modo == "modifica";
+    private bool EsBaja => Modo == "baja";
+    private bool SoloLectura => Modo == "ver" || EsBaja;
+    private bool SoloEscritura => EsAlta || EsModifica;
+
+    private string _titulo => EsAlta ? "Alta de Tipo de Vehículo"
+        : EsModifica ? "Modificar Tipo de Vehículo"
+        : EsBaja ? "Dar de baja Tipo de Vehículo"
+        : "Datos del Tipo de Vehículo";
+    private string _chip => EsAlta ? "Nuevo" : EsModifica ? "Edición" : EsBaja ? "Baja lógica" : "Solo lectura";
+    private string _encabezado => EsAlta ? "" : _codigo;
+    private string _icono => EsAlta ? Icons.Material.Filled.AddCircle
+        : EsBaja ? Icons.Material.Filled.RemoveCircle
+        : Icons.Material.Filled.Category;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (EsAlta) { _cargando = false; return; }
+
+        // El detalle sale de la misma lista (6 filas — no vale la pena una query aparte).
+        var tipo = (await Reports.GetTiposVehiculoAsync()).FirstOrDefault(t => t.Id == Id);
+        if (tipo is null) { _noExiste = true; _cargando = false; return; }
+        _model = tipo;
+        _codigo = tipo.Codigo;
+        _nombre = tipo.Nombre;
+        _pax = tipo.Pax;
+        _subtipo = tipo.Subtipo;
+        _consumoMin = tipo.ConsumoMin;
+        _consumoMax = tipo.ConsumoMax;
+        _vende = tipo.Vende;
+        _inhabilitado = tipo.FDelete is not null;
+        _cargando = false;
+    }
+
+    private async Task Grabar()
+    {
+        if (!_abmActivo)
+        {
+            _error = "La escritura de tipos de vehículo todavía no está habilitada (sigue en FoxPro).";
+            return;
+        }
+        _error = null; _grabando = true;
+
+        if (EsBaja)
+        {
+            Finalizar(await Abm.BajaTipoVehiculoAsync(Id));
+            return;
+        }
+
+        var input = new TipoVehiculoInput(
+            EsAlta ? _codigo : _model.Codigo, _nombre, _pax, _subtipo,
+            _consumoMin, _consumoMax, _vende, _model.DirDibujo);
+
+        Finalizar(EsAlta
+            ? await Abm.AltaTipoVehiculoAsync(input)
+            : await Abm.ModificaTipoVehiculoAsync(Id, input, rehabilitar: _inhabilitado));
+    }
+
+    private void Finalizar(AbmService.AbmResult r)
+    {
+        _grabando = false;
+        if (r.Ok) MudDialog.Close(DialogResult.Ok(true));
+        else { _error = r.Error; StateHasChanged(); }
+    }
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+
+    private static string V(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+    private static string Cons(decimal? d) => d is decimal v ? v.ToString("0.##") : "—";
+    private static string Fecha(DateOnly? f) => f is null ? "—" : f.Value.ToString("dd/MM/yyyy");
+}

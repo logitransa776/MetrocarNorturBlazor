@@ -38,6 +38,9 @@
     </div>
 </MudPaper>
 
+@* Leyenda de las letras de Acceso (desplegable). *@
+<LeyendaAccesos />
+
 @if (_cargando)
 {
     <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
@@ -55,6 +58,9 @@ else
                 <MudTh><MudTableSortLabel InitialDirection="SortDirection.Ascending" SortBy="new Func<UsuarioListaRow, object>(x => x.Usuario)">Nombre</MudTableSortLabel></MudTh>
                 <MudTh>Nivel</MudTh>
                 <MudTh>Operador</MudTh>
+                <MudTh>Estado</MudTh>
+                <MudTh>Último ingreso</MudTh>
+                <MudTh>Última IP</MudTh>
                 <MudTh>Inhabilitado</MudTh>
                 <MudTh>Módulos habilitados</MudTh>
             </HeaderContent>
@@ -68,10 +74,33 @@ else
                         <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Style="color:#16A34A;" />
                     }
                 </MudTd>
+                @{
+                    var ses = Sesion(context.Id);
+                }
+                <MudTd DataLabel="Estado" Style="text-align:center;">
+                    @if (ses is not null && ses.Activa)
+                    {
+                        <span class="usr-conn usr-conn--on" title="Sesión iniciada, sin cerrar">● Conectado</span>
+                    }
+                    else if (ses is not null)
+                    {
+                        <span class="usr-conn usr-conn--off" title="Sin sesión activa">● Desconectado</span>
+                    }
+                    else
+                    {
+                        <span class="usr-conn usr-conn--none" title="Nunca ingresó desde Buslink">—</span>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Último ingreso">
+                    @(ses?.Inicio is null ? "—" : ses.Inicio.Value.ToString("dd/MM/yy HH:mm"))
+                </MudTd>
+                <MudTd DataLabel="Última IP" Style="font-family:monospace; color:#5A6A88;">
+                    @(string.IsNullOrEmpty(ses?.Ip) ? "—" : ses!.Ip)
+                </MudTd>
                 <MudTd DataLabel="Inhabilitado" Style="text-align:center;">
                     @(context.FInhabilitacion is null ? "" : context.FInhabilitacion.Value.ToString("dd/MM/yy"))
                 </MudTd>
-                <MudTd DataLabel="Módulos habilitados" Style="letter-spacing:1px; font-family:monospace; color:#5A6A88;">@context.Acceso</MudTd>
+                <MudTd DataLabel="Módulos habilitados"><AccesoChips Acceso="@context.Acceso" /></MudTd>
             </RowTemplate>
             <NoRecordsContent>
                 <MudText Typo="Typo.body2" Class="pa-4">No hay usuarios para el filtro aplicado.</MudText>
@@ -98,10 +127,15 @@ else
 
 @code {
     private List<UsuarioListaRow> _usuarios = new();
+    private Dictionary<int, UltimaSesionRow> _ultimasSesiones = new();
     private bool _cargando = true;
     private string? _busqueda;
     private bool _verInhabilitados;
     private UsuarioListaRow? _sel;
+
+    // Última sesión de un usuario (o null si nunca ingresó desde Buslink).
+    private UltimaSesionRow? Sesion(int id) =>
+        _ultimasSesiones.TryGetValue(id, out var s) ? s : null;
 
     private IEnumerable<UsuarioListaRow> Filtrados =>
         _usuarios.Where(u =>
@@ -130,6 +164,7 @@ else
         _cargando = true;
         StateHasChanged();
         _usuarios = await Reports.GetUsuariosAsync();
+        _ultimasSesiones = await Reports.GetUltimasSesionesAsync();
         // Mantener la selección si el usuario sigue existiendo tras recargar.
         if (_sel is not null)
             _sel = _usuarios.FirstOrDefault(u => u.Id == _sel.Id);

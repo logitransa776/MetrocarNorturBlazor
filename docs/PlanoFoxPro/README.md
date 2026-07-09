@@ -31,15 +31,20 @@ PlanoFoxPro/
 | `TRAFICO2_TOOLBAR.md` | `trafico2.scx` + `trafico_asigna/_reasigna/_liberar.scx` + `chofer_franco*.scx` | **La ESCRITURA del despacho** (spec de la Fase 3): chequeo, asignar, reasignar, finalizar, francos | Pendiente (Fase 3) |
 | `TRAFICO_HISTORIAL.md` | `trafico_historial.scx` | Bitácora `viaje_log` + cabecera de auditoría | ✅ solo lectura |
 | `GPS_XLM.md` | `procesos.prg` (función global) | La integración GPS (Fase 0.2): 2 vías (XML + SQL externo). **Hoy es no-op: flags apagados** | Decisión del dueño pendiente |
+| `CABECERA_RECORRIDO.md` | `cabecera_recorrido.scx` + `_abm.scx` | Catálogo de cabeceras (código + 3 desc + recorrido largo). 187 filas. **Baja física** | ✅ solo lectura + andamiaje ABM |
+| `CHOFER_FRANCO.md` | `chofer_franco.scx` + `_abm.scx` (alta masiva) + `_auditoria.scx` (informe) | Francos/licencias de choferes (71k filas). Auditoría = matriz chofer×día. **Baja física** | ✅ solo lectura + andamiaje ABM |
+| `CHOFER_VIATICO.md` | `chofer_viatico.scx` + catálogos `_motivo`/`_liquida` | Viáticos de conductores (tablas VACÍAS, sin uso). **Baja física** | ✅ solo lectura + andamiaje ABM |
+| `TRAFICO_VOUCHER_GUARDIA_CONTACTOS.md` | `trafico_voucher.scx` · `trafico_guardia*.scx` · `estacion*.scx` · `trafico_pasajero_planilla.scx` | Los 4 ítems restantes del menú: Voucher Recepción (auditoría + recepción sobre `viaje`), Guardia (`viaje_guardia`, baja física), Contactos y Proveedores (`estacion`/`estacion_rubro`, **compartido con Combustible**, baja física), Lista de pasajeros (buscador → reusa dialog) | ✅ solo lectura + andamiaje ABM (07/07/2026) |
 
 ## Reservas (`reservas/`)
 
 | Doc | Form(s) FoxPro | Qué cubre | Migrado |
 | --- | --- | --- | --- |
-| `RESERVA_TRANSPORTACION.md` | `reserva_transportacion_con_adicional.scx` + 4 subdialogs | Alta manual: 14 validaciones, multiplicación días×servicios, modo ruta, grupos, Valor Especial (permiso F) | Pendiente (Fase 4, puerta 1) |
-| `RESERVA_PLANTILLAS.md` | `reserva_plantilla_crear/_mantenimiento/_abm/_nombre/_armar.scx` | Ciclo de plantillas: crear, mantener, armar (generación masiva), cabecera 16 posiciones, lotes | Pendiente (Fase 4, puerta 2) |
+| `RESERVA_TRANSPORTACION.md` | `reserva_transportacion_con_adicional.scx` + 4 subdialogs | Alta manual: 14 validaciones, multiplicación días×servicios, modo ruta, grupos, Valor Especial (permiso F) | ✅ Solo lectura + andamiaje (07/07/2026) — `ReservasEspeciales.razor`; escritura en Fase 4/día D |
+| `RESERVA_PLANTILLAS.md` | `reserva_plantilla_crear/_mantenimiento/_abm/_nombre/_armar.scx` | Ciclo de plantillas: crear, mantener, armar (generación masiva), cabecera 16 posiciones, lotes | ✅ Mantenimiento + Armado solo lectura + andamiaje (07/07/2026) — `PlantillasMantenimiento`/`ReservasPorPlantillas.razor`; escritura en Fase 4/día D |
 | `IMPORTA_EXCEL_VIAJE.md` | `importa_excel_viaje.scx` | Importación masiva 28 columnas, 3 etapas de validación, transaccional | Pendiente (Fase 4, puerta 3 — candidata a descope) |
 | `RESERVAS_INFORME_BANDA_HORARIA.md` | `trafico_resumen_horario*.scx` | Informe fecha × banda × vehículo | ✅ `ReservasBandaHoraria.razor` |
+| `RESERVAS_INFORME_POR_CLIENTE.md` | `viaje_analisis.scx` (menú Utilitarios) | Informe cliente × mes × tipo (propio/contratado), solo `origen='T'`; modo cancelados (motivo 2) | ✅ `ReservasPorCliente.razor` |
 
 ## Catálogos (`catalogos/`) — los ABMs de la Fase 1
 
@@ -71,6 +76,10 @@ PlanoFoxPro/
 | Doc | Cubre | Migrado |
 | --- | --- | --- |
 | `CHOFER_ABM.md` | ABM de Conductores: ficha 5 pestañas, mapa de columnas truncadas, `vehiculo_chofer` | Lista+ficha solo lectura ✅ |
+| `VIAJES_POR_CHOFER.md` | Informe (menú Utilitarios) chofer × día: viajes, turismo/cabecera, km, francos; solo PROPIO | ✅ `ViajesPorChofer.razor` |
+| `KM_UNIDADES_VS_SERVICIOS.md` | Informe (menú Utilitarios) por unidad: km servicio vs odómetro, km vacío, % vacío; campos cruzados en réplica + bug % corregido | ✅ `KmUnidadesServicios.razor` |
+| `ODOMETROS.md` | Control de Odómetros (`vehiculo_km.scx`): lecturas de km por dominio/mes, filtro por vehículo/todos + rango; km recorridos = km_fin−km_inicio | ✅ `Odometros.razor` (solo lectura) |
+| `SINIESTROS.md` | Partes de accidente (`siniestro.scx`+`siniestro_abm.scx`): ~70 campos en 5 solapas; trampa id_vehicul (NORTUR) vs dominio (tercero) + columnas truncadas | ✅ `Siniestros.razor` + dialog (solo lectura) |
 
 > Los otros 9 docs por pantalla del módulo (VEHICULOS, FLETEROS, ODOMETROS, SINIESTROS,
 > APERCIBIMIENTOS, CAPACITACIONES, AGENDA_VENCIMIENTOS, TIPO_VEHICULOS, CHOFERES) viven en

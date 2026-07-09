@@ -1,0 +1,187 @@
+@inject ReportService Reports
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Ingreso de Francos — réplica del form FoxPro chofer_franco_abm.scx (ALTA MASIVA):
+   se eligen varios choferes (multiselect) × un rango de fechas × un motivo, y se generan
+   los francos (uno por chofer×fecha, salteando los días que ya tienen franco cargado).
+
+   ⚠ ANDAMIAJE (05/07/2026): la ESCRITURA está construida (AbmService.AltaFrancosAsync) pero el
+   botón Generar está DESHABILITADO — la tabla `chofer_franco` sigue con dueño FoxPro. El día que
+   se active: AbmFeatureFlags.FrancosAbmActivo=true + bloquear FoxPro + apagar sync + replicar la
+   tabla al server nuevo. Es una VISTA PREVIEW del alta hasta ese día.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha" Style="max-width:820px;">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.AddCircle" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Ingreso de Francos</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">Alta masiva</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (!_abmActivo)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                <b>Vista previa del ABM.</b> El alta de francos todavía se hace en FoxPro; esta
+                pantalla queda lista para activarse el día que la tabla pase a Buslink.
+            </MudAlert>
+        }
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+        }
+        @if (!string.IsNullOrEmpty(_ok))
+        {
+            <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">@_ok</MudAlert>
+        }
+
+        <MudGrid>
+            @* ── Choferes (multiselect) ── *@
+            <MudItem xs="12" md="6">
+                <div class="zoom-box zoom-box--sec">
+                    <span class="zoom-box__label">Choferes (@_seleccion.Count seleccionados)</span>
+                    <div class="pa-2">
+                        <MudTextField @bind-Value="_buscaChofer" Placeholder="Buscar chofer…"
+                                      Immediate="true" DebounceInterval="150" Adornment="Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" />
+                        <div style="max-height:280px; overflow-y:auto;">
+                            @foreach (var c in ChoferesFiltrados)
+                            {
+                                <div class="d-flex align-center" style="gap:6px;">
+                                    <MudCheckBox T="bool" Value="@_seleccion.Contains(c.IdChofer)"
+                                                 ValueChanged="@(v => ToggleChofer(c.IdChofer, v))"
+                                                 Size="Size.Small" Dense="true" Color="Color.Primary" />
+                                    <span style="font-size:0.83rem;">@c.Nombre</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </MudItem>
+
+            @* ── Motivo + fechas ── *@
+            <MudItem xs="12" md="6">
+                <div class="zoom-box zoom-box--sec">
+                    <span class="zoom-box__label">Motivo y fechas</span>
+                    <div class="pa-2">
+                        <MudSelect T="string" @bind-Value="_codigo" Label="Motivo" Dense="true"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2">
+                            @foreach (var m in _motivos)
+                            {
+                                <MudSelectItem Value="@m.Codigo">@m.Codigo — @m.Motivo</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <div class="d-flex" style="gap:8px;">
+                            <MudDatePicker Label="Desde" @bind-Date="_desde" DateFormat="dd/MM/yyyy"
+                                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            <MudDatePicker Label="Hasta" @bind-Date="_hasta" DateFormat="dd/MM/yyyy"
+                                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </div>
+                        <MudText Typo="Typo.caption" Class="mt-2" Style="color:#7A90AD;">
+                            Se generará un franco por cada chofer y cada día del rango
+                            (@_diasRango @(_diasRango == 1 ? "día" : "días")), salteando los que ya tengan franco cargado.
+                        </MudText>
+                    </div>
+                </div>
+            </MudItem>
+        </MudGrid>
+
+        <div class="cli-footer">
+            <div class="cli-footer__hint">
+                <MudIcon Icon="@(_abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                @(_abmActivo ? "Alta habilitada" : "Escritura preparada · pendiente de activar en Buslink")
+            </div>
+            <div class="cli-footer__btns">
+                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.PlaylistAdd" OnClick="Generar"
+                           Disabled="!_abmActivo || _grabando || _seleccion.Count == 0">
+                    @(_grabando ? "Generando…" : "Generar francos")
+                </MudButton>
+                <MudButton Variant="Variant.Text" Color="Color.Default" Size="Size.Small" OnClick="Cerrar">Cerrar</MudButton>
+            </div>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private static bool _abmActivo => AbmFeatureFlags.FrancosAbmActivo;
+
+    private List<CatalogoSimpleRow> _choferes = new();
+    private List<(string Codigo, string Motivo)> _motivos = new();
+    private readonly HashSet<string> _seleccion = new();
+    private string _buscaChofer = "", _codigo = "FT";
+    private DateTime? _desde = DateTime.Today, _hasta = DateTime.Today;
+    private bool _grabando;
+    private string? _error, _ok;
+
+    private IEnumerable<CatalogoSimpleRow> ChoferesFiltrados =>
+        string.IsNullOrWhiteSpace(_buscaChofer)
+            ? _choferes
+            : _choferes.Where(c => c.Nombre.Contains(_buscaChofer, StringComparison.OrdinalIgnoreCase));
+
+    private int _diasRango
+    {
+        get
+        {
+            var d = _desde ?? DateTime.Today;
+            var h = _hasta ?? DateTime.Today;
+            return h < d ? 0 : (int)(h.Date - d.Date).TotalDays + 1;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _choferes = await Reports.GetChoferesComboAsync();
+        // Motivos canónicos (metrocar.prg aFrancoMotivo). Fallback a los de la data si algo falla.
+        _motivos = new()
+        {
+            ("FT", "FRANCO TOMADO"), ("EX", "DIA DE EXPULSION"), ("E", "ENFERMEDAD"),
+            ("V", "VACACIONES"), ("MT", "MEDIO TURNO"), ("PL", "PERMISO LABORAL"),
+            ("LC", "LICENCIA"), ("LSG", "LICENCIA SIN GOCE DE SUELDO"), ("OT", "OTROS")
+        };
+    }
+
+    private void ToggleChofer(string id, bool v)
+    {
+        if (v) _seleccion.Add(id); else _seleccion.Remove(id);
+    }
+
+    private async Task Generar()
+    {
+        _error = null; _ok = null;
+        if (!_abmActivo) { _error = "El alta de francos todavía no está habilitada (sigue en FoxPro)."; return; }
+        if (_seleccion.Count == 0) { _error = "Elegí al menos un chofer."; return; }
+        if (_diasRango <= 0) { _error = "El rango de fechas es inválido."; return; }
+
+        _grabando = true;
+        var fechas = new List<DateOnly>();
+        var d = (_desde ?? DateTime.Today).Date;
+        var h = (_hasta ?? DateTime.Today).Date;
+        for (var f = d; f <= h; f = f.AddDays(1)) fechas.Add(DateOnly.FromDateTime(f));
+
+        var motivoTexto = _motivos.FirstOrDefault(m => m.Codigo == _codigo).Motivo ?? "";
+        var r = await Abm.AltaFrancosAsync(_seleccion.ToList(), fechas, _codigo, motivoTexto);
+        _grabando = false;
+
+        if (r.Ok)
+        {
+            _ok = $"Se generaron {r.Id} francos.";
+            StateHasChanged();
+            await Task.Delay(900);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        else { _error = r.Error; StateHasChanged(); }
+    }
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+}

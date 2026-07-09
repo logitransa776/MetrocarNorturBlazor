@@ -92,7 +92,7 @@ else
 {
     @* ── KPIs ── (flex: las tarjetas se reparten parejo, sean 4 o 5) *@
     <div class="rfs-kpis mb-3">
-        <KpiCard Label="Total reservas" Value="@Fmt(_totalRes)" Sub="@PeriodoTxt" Color="@NorturColors.Azul" />
+        <KpiCard Label="Total reservas" Value="@Fmt(_totalRes)" Sub="@PeriodoCortoTxt" Color="@NorturColors.Azul" />
         <KpiCard Label="Total pax" Value="@Fmt(_totalPax)" Sub="pasajeros" Color="@NorturColors.Verde" />
         <KpiCard Label="Canceladas" Value="@(CanceladasEnFiltro ? Fmt(_totalCan) : "—")"
                  Sub="@(CanceladasEnFiltro ? $"{_pctCan:0.0}% del total" : "fuera del filtro")"
@@ -126,18 +126,35 @@ else
         <MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
             <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
-                    @* Título + chip de foco (cross-filter) a la derecha, dentro del panel del gráfico. *@
-                    @CabeceraFoco($"{_metrica} por servicio — {TituloTopN}")
-                    @* Selector: cuántos servicios mostrar en las barras (Top 10/15/20/Todos). *@
+                    @* Cabecera del panel de barras: título + selector "Mostrar" (compacto) juntos a la
+                       izquierda, y el chip de foco (cross-filter) a la derecha. *@
                     <div class="rfs-bar-head mb-2">
-                        <MudSelect T="int" Value="_topN" ValueChanged="CambiarTopN"
-                                   Label="Mostrar" Dense="true" Margin="Margin.Dense"
-                                   Variant="Variant.Outlined" Style="width:160px;">
-                            <MudSelectItem T="int" Value="10">Top 10</MudSelectItem>
-                            <MudSelectItem T="int" Value="15">Top 15</MudSelectItem>
-                            <MudSelectItem T="int" Value="20">Top 20</MudSelectItem>
-                            <MudSelectItem T="int" Value="999">Todos (@_pivTotCol.Count)</MudSelectItem>
-                        </MudSelect>
+                        <div class="rfs-bar-title">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@($"{_metrica} por servicio — {TituloTopN}")</MudText>
+                            @* Selector compacto: cuántos servicios mostrar en las barras (Top 10/15/20/Todos). *@
+                            <MudSelect T="int" Value="_topN" ValueChanged="CambiarTopN"
+                                       Label="Mostrar" Dense="true" Margin="Margin.Dense"
+                                       Variant="Variant.Outlined" Class="rfs-topn-select">
+                                <MudSelectItem T="int" Value="10">Top 10</MudSelectItem>
+                                <MudSelectItem T="int" Value="15">Top 15</MudSelectItem>
+                                <MudSelectItem T="int" Value="20">Top 20</MudSelectItem>
+                                <MudSelectItem T="int" Value="999">Todos (@_pivTotCol.Count)</MudSelectItem>
+                            </MudSelect>
+                        </div>
+                        @if (_servicioFocus is not null)
+                        {
+                            <div class="rfs-focus">
+                                <span class="rfs-focus__lbl">Filtrado:</span>
+                                <span class="rfs-focus__val" style="@($"background:{ColorDe(_servicioFocus)};")">@_servicioFocus</span>
+                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                               OnClick="LimpiarFoco" Title="Quitar filtro"
+                                               Style="color:#64748B; padding:2px;" />
+                            </div>
+                        }
+                        else
+                        {
+                            <span class="rfs-focus-hint">💡 Clic en un servicio para enfocar el tablero</span>
+                        }
                     </div>
                     <ApexChart TItem="BarItem" Options="_optsBar" Height="@_altoBarras" @ref="_barChart"
                                OnDataPointSelection="OnBarSelection">
@@ -296,6 +313,8 @@ else
     private double _pctCan;
     private int _cabRes, _cabPax;             // volumen cabecera excluido (KPI aparte)
     private string PeriodoTxt => $"{_fDesdeAp:dd/MM/yyyy} – {_fHastaAp:dd/MM/yyyy}";
+    // Versión compacta para el Sub del KPI (el largo se recortaba en pantallas justas).
+    private string PeriodoCortoTxt => $"{_fDesdeAp:dd/MM} – {_fHastaAp:dd/MM/yyyy}";
     private bool CanceladasEnFiltro => _estAp.Count == 0 || _estAp.Contains("CANCELADO");
     // El KPI de cabecera solo tiene sentido cuando están excluidas Y hay volumen que mostrar.
     // Con foco en un servicio real no aplica (las cabeceras no son ese servicio) → se oculta.
@@ -316,13 +335,15 @@ else
     private ApexChart<PieItem>? _pieChart;
 
     // Paleta categórica validada (dataviz): azul de serie #2058D0 (el corporativo #003AA0
-    // es demasiado oscuro para marcas de gráfico). 10 hues para cubrir el top 10 de barras y
-    // donut con color propio; el gris neutro final queda reservado para "Otros". Los 10 hues
-    // pasan separación CVD (ΔE ≥ 12) — validado con scripts/validate_palette.js de la skill dataviz.
+    // es demasiado oscuro para marcas de gráfico). 15 hues para que el top 15 de barras tenga
+    // color propio (los primeros 10 cubren el donut top 8 + otros); el gris neutro queda
+    // reservado para "Otros" (16º en adelante). Los hues buscan separación CVD — los 5 nuevos
+    // (11-15) son tonos distintos de los primeros 10 para no confundir servicios contiguos.
     private static readonly List<string> _palette = new()
     {
         "#2058D0", "#F99410", "#16A34A", "#DC2626", "#0EA5E9",
-        "#7C3AED", "#B45309", "#DB2777", "#0D9488", "#65A30D"
+        "#7C3AED", "#B45309", "#DB2777", "#0D9488", "#65A30D",
+        "#4F46E5", "#EA580C", "#059669", "#9333EA", "#0891B2"
     };
     private const string _colorOtros = "#94A3B8";   // gris neutro para la categoría "Otros"
 
@@ -429,8 +450,9 @@ else
     private string _ordenColumnas = "PorTotal";
 
     // Cuántos servicios muestra el gráfico de BARRAS (selector "Mostrar"): 10/15/20 o 999=Todos.
-    // El donut siempre queda en top 10 + Otros (24 tajadas serían ilegibles). Sin re-query.
-    private int _topN = 10;
+    // Default Top 15: la paleta tiene 15 hues, así el default muestra todas las barras con color
+    // propio. El donut siempre queda en top 10 + Otros (24 tajadas serían ilegibles). Sin re-query.
+    private int _topN = 15;
     // Título dinámico del panel de barras según cuántos muestra.
     private string TituloTopN => _topN >= 999
         ? $"todos ({_barItems.Count})"
@@ -554,6 +576,9 @@ else
         _pieColors = _pieItems.Select(p => ColorFoco(p.Servicio)).ToList();
         _optsBar.Colors = _barColors;
         _optsPie.Colors = _pieColors;
+        // La evolución diaria toma el color del servicio enfocado (refuerza que la serie ES ese
+        // servicio); sin foco vuelve al azul de serie estándar.
+        _optsArea.Colors = new List<string> { _servicioFocus is null ? "#2058D0" : ColorDe(_servicioFocus) };
 
         // ── KPIs, evolución diaria y tabla: sobre el dataset CON FOCO aplicado ──
         var datos = _servicioFocus is null
@@ -620,7 +645,12 @@ else
     {
         if (_barChart is not null) await _barChart.UpdateOptionsAsync(true, true, false);
         if (_pieChart is not null) await _pieChart.UpdateOptionsAsync(true, true, false);
-        if (_areaChart is not null) await _areaChart.UpdateSeriesAsync(true);
+        if (_areaChart is not null)
+        {
+            // UpdateOptions además de UpdateSeries: con el foco también cambia el COLOR del área.
+            await _areaChart.UpdateOptionsAsync(true, true, false);
+            await _areaChart.UpdateSeriesAsync(true);
+        }
     }
 
     // Color de un servicio ATENUADO si hay foco y no es el enfocado (para barras/donut).
@@ -677,11 +707,11 @@ else
     private Task AbrirDetalleCelda(DateOnly f, string servicio) =>
         AbrirDetalle(r => r.Fecha == f && r.Servicio == servicio, $"{servicio} — {FmtFecha(f)}");
 
+    // El drill del total de fila respeta el foco activo: el número visible ya está filtrado
+    // al servicio enfocado, y el detalle tiene que mostrar EXACTAMENTE esas reservas.
     private Task AbrirDetalleDia(DateOnly f) =>
-        AbrirDetalle(r => r.Fecha == f, $"Todos los servicios — {FmtFecha(f)}");
-
-    private Task AbrirDetalleServicio(string servicio) =>
-        AbrirDetalle(r => r.Servicio == servicio, $"{servicio} — {PeriodoTxt}");
+        AbrirDetalle(r => r.Fecha == f && (_servicioFocus is null || r.Servicio == _servicioFocus),
+                     $"{_servicioFocus ?? "Todos los servicios"} — {FmtFecha(f)}");
 
     private async Task AbrirDetalle(Func<ReservaFsDetalleRow, bool> filtro, string subtitulo)
     {

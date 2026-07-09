@@ -1,0 +1,568 @@
+@page "/km-unidades-servicios"
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject IDialogService DialogService
+@rendermode InteractiveServer
+
+<PageTitle>Km Unidades vs Servicios</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-3">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+        Km Unidades vs Servicios
+    </MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Metrocar Nortur · kilómetros recorridos por unidad (odómetro) vs km de servicio — km vacío y eficiencia
+    </MudText>
+</div>
+
+@* ── Barra de filtros ── *@
+<MudPaper Elevation="1" Class="rfs-filtros mb-4">
+    <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudSize.Small" Style="color:#003AA0; flex-shrink:0;" />
+
+    <div class="rfs-fechas">
+        <MudDatePicker Label="Desde" @bind-Date="_desde"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+        <MudDatePicker Label="Hasta" @bind-Date="_hasta"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+    </div>
+
+    <MudSwitch T="bool" @bind-Value="_internos" Color="MudColor.Primary" Size="MudSize.Small"
+               Label="Internos" LabelPlacement="Placement.End" Style="flex-shrink:0;" />
+    <MudSwitch T="bool" @bind-Value="_contratados" Color="MudColor.Primary" Size="MudSize.Small"
+               Label="Incluir contratados" LabelPlacement="Placement.End" Style="flex-shrink:0;" />
+
+    <div class="rfs-metrica">
+        <MudRadioGroup T="string" Value="_metrica" ValueChanged="CambiarMetrica">
+            <MudRadio T="string" Value="@("KmServicio")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Km servicio</MudRadio>
+            <MudRadio T="string" Value="@("KmVacio")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Km vacío</MudRadio>
+            <MudRadio T="string" Value="@("Servicios")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Servicios</MudRadio>
+        </MudRadioGroup>
+    </div>
+
+    <span style="flex:1 1 auto;"></span>
+
+    <MudButton Variant="Variant.Filled" Color="MudColor.Primary"
+               OnClick="Cargar" Disabled="_cargando" StartIcon="@Icons.Material.Filled.Search"
+               Style="border-radius:8px; height:40px; text-transform:none; flex-shrink:0;">
+        @(_cargando ? "Cargando..." : "Aplicar filtros")
+    </MudButton>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else if (_filas.Count == 0)
+{
+    <MudAlert Severity="Severity.Warning" Style="border-radius:12px;">No hay servicios de unidades propias para los filtros seleccionados.</MudAlert>
+}
+else
+{
+    @if (_sinOdometro > 0)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Style="border-radius:12px;">
+            @_sinOdometro de @_filas.Count unidades no tienen el odómetro del período cerrado
+            (mes en curso o carga pendiente) — su km recorrido, km vacío y % vacío no se muestran.
+        </MudAlert>
+    }
+
+    @* ── KPIs ── *@
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="@KpiTotalLabel" Value="@Fmt(_totalMetrica)"
+                 Sub="@($"{_unidades} unidades · {Fmt(_totalServicios)} servicios")" Color="@NorturColors.Azul" />
+        <KpiCard Label="Km recorridos (odómetro)" Value="@Fmt(_totalRecorrido)"
+                 Sub="@($"{_conOdometro} unidades con odómetro")" Color="@NorturColors.Verde" />
+        <KpiCard Label="Km vacío" Value="@Fmt(_totalVacio)"
+                 Sub="@($"{_pctVacioGlobal} % del recorrido")" Color="@NorturColors.Naranja" />
+        <KpiCard Label="Unidad líder" Value="@_unidadLider"
+                 Sub="@($"{Fmt(_maxUnidad)} {UnidadMetrica}")" Color="@NorturColors.Rojo" />
+    </div>
+
+    <div @key="_chartsKey">
+        <MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
+            @* ── Ranking de unidades ── *@
+            <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
+                <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                    <div class="rfs-bar-head mb-2">
+                        <div class="rfs-bar-title">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@($"{UnidadMetricaCap} por unidad — {TituloTopN}")</MudText>
+                            <MudSelect T="int" Value="_topN" ValueChanged="CambiarTopN"
+                                       Label="Mostrar" Dense="true" Margin="Margin.Dense"
+                                       Variant="Variant.Outlined" Class="rfs-topn-select">
+                                <MudSelectItem T="int" Value="10">Top 10</MudSelectItem>
+                                <MudSelectItem T="int" Value="15">Top 15</MudSelectItem>
+                                <MudSelectItem T="int" Value="20">Top 20</MudSelectItem>
+                                <MudSelectItem T="int" Value="999">Todas (@_rankingUnidades.Count)</MudSelectItem>
+                            </MudSelect>
+                        </div>
+                        @ChipsFoco
+                    </div>
+                    <ApexChart TItem="BarItem" Options="_optsBarUni" Height="@_altoBarras" @ref="_barUniChart"
+                               OnDataPointSelection="OnBarUniSelection">
+                        <ApexPointSeries TItem="BarItem" Items="_barItems" Name="@UnidadMetricaCap"
+                                         SeriesType="SeriesType.Bar" XValue="@(x => x.Etiqueta)" YValue="@(x => x.Valor)" />
+                    </ApexChart>
+                </MudPaper>
+            </MudItem>
+            @* ── Donut por tipo de vehículo ── *@
+            <MudItem xs="12" md="5" Style="display:flex; flex-direction:column;">
+                <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                    @CabeceraFoco("Distribución por tipo de unidad")
+                    <ApexChart TItem="DonutItem" Options="_optsPieTipo" Height="320" @ref="_pieTipoChart"
+                               OnDataPointSelection="OnPieTipoSelection" OnLegendClicked="OnPieTipoLegendClicked">
+                        <ApexPointSeries TItem="DonutItem" Items="_donutTipo" Name="@UnidadMetricaCap"
+                                         SeriesType="SeriesType.Donut" XValue="@(x => x.Label)" YValue="@(x => x.Valor)" />
+                    </ApexChart>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    </div>
+
+    @* ── Tabla por unidad ── *@
+    <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
+        <div class="d-flex justify-space-between align-center flex-wrap mb-3" style="gap:8px;">
+            <div>
+                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                    Detalle por unidad
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                    Click en una fila para ver los viajes uno por uno · click en el dominio para enfocar el tablero · km vacío = recorrido − servicio
+                </MudText>
+            </div>
+            <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                       StartIcon="@Icons.Material.Filled.Download"
+                       OnClick="DescargarExcel" Disabled="_cargandoDet"
+                       Style="border-radius:8px; text-transform:none;">
+                Descargar Excel
+            </MudButton>
+        </div>
+        @if (_cargandoDet)
+        {
+            <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-2" Style="border-radius:4px;" />
+        }
+        <div class="rfs-tabla-wrap">
+            <table class="rfs-tabla">
+                <thead>
+                    <tr>
+                        <th class="rfs-col-fecha" style="min-width:120px;">Dominio</th>
+                        <th class="rfs-th-serv">Interno</th>
+                        <th class="rfs-th-serv">Tipo</th>
+                        <th class="rfs-th-serv" style="text-align:right;">Servicios</th>
+                        <th class="rfs-th-serv" style="text-align:right;">Km servicio</th>
+                        <th class="rfs-th-serv" style="text-align:right;">Km recorrido</th>
+                        <th class="rfs-th-serv" style="text-align:right;">Km vacío</th>
+                        <th class="rfs-th-serv" style="text-align:right;">% vacío</th>
+                        <th class="rfs-th-serv" style="text-align:right;">Días</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <Virtualize Items="_filasVista" Context="u" ItemSize="30" OverscanCount="12" SpacerElement="tr">
+                        @{ var atenua = (_tipoFocus is not null && u.TipoVeh != _tipoFocus) || (_uniFocus is not null && u.Dominio != _uniFocus) ? "rfs-atenua" : ""; }
+                        <tr>
+                            <td class="rfs-col-fecha rfs-click @(_uniFocus == u.Dominio ? "rfs-col-foco" : "") @atenua"
+                                title="Clic para enfocar el tablero en @u.Dominio"
+                                @onclick="() => ToggleFocoUnidad(u.Dominio)">@u.Dominio</td>
+                            <td class="rfs-num rfs-click @atenua" title="Ver viajes de la unidad @u.Dominio"
+                                @onclick="() => AbrirDetalleUnidad(u.Dominio)">@(u.Interno > 0 ? u.Interno.ToString() : "·")</td>
+                            <td class="@atenua" style="padding:4px 8px;">@u.TipoVeh</td>
+                            <td class="rfs-num @atenua">@Fmt((int)u.Servicios)</td>
+                            <td class="rfs-num @atenua">@Fmt((int)u.KmServicio)</td>
+                            <td class="rfs-num @atenua">@(u.TieneOdometro ? Fmt((int)u.KmRecorrido) : "—")</td>
+                            <td class="rfs-num @atenua" style="@(u.TieneOdometro && u.KmVacio < 0 ? "color:#DC2626;" : "")">@(u.TieneOdometro ? Fmt((int)u.KmVacio) : "—")</td>
+                            <td class="rfs-num @atenua" style="@PctStyle(u)">@(u.TieneOdometro ? $"{PctVacio(u):0.0}%" : "—")</td>
+                            <td class="rfs-num @atenua">@u.DiasTrabajados</td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td class="rfs-col-fecha rfs-tot">TOTAL</td>
+                        <td class="rfs-num rfs-tot"></td>
+                        <td class="rfs-num rfs-tot"></td>
+                        <td class="rfs-num rfs-tot">@Fmt(_totalServicios)</td>
+                        <td class="rfs-num rfs-tot">@Fmt((int)_sumKmServicio)</td>
+                        <td class="rfs-num rfs-tot">@Fmt(_totalRecorrido)</td>
+                        <td class="rfs-num rfs-tot">@Fmt(_totalVacio)</td>
+                        <td class="rfs-num rfs-tot">@(_totalRecorrido > 0 ? $"{_pctVacioGlobal}%" : "—")</td>
+                        <td class="rfs-num rfs-tot"></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+
+    // ── Filtros ── Default: el mes cerrado más reciente (dos meses atrás). El km vacío necesita
+    // el odómetro cerrado (km_fin cargado); el cierre del odómetro suele ir un mes por detrás
+    // del calendario, así que el "mes anterior" a veces todavía tiene km_fin=0 (sale "—"). Dos
+    // meses atrás garantiza un mes con odómetro completo, mostrando el informe con todo su valor.
+    private DateTime? _desde = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-2);
+    private DateTime? _hasta = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-1).AddDays(-1);
+    private bool _internos;
+    private bool _contratados;
+    private string _metrica = "KmServicio";             // "KmServicio" | "KmVacio" | "Servicios"
+
+    // ── Foco / cross-filter (dos dimensiones: unidad AND tipo) ──
+    private string? _uniFocus;    // Dominio
+    private string? _tipoFocus;
+
+    // ── Filtros APLICADOS ──
+    private DateOnly _fDesdeAp, _fHastaAp;
+    private bool _internosAp, _contratadosAp;
+
+    private List<KmUnidadRow> _filas = new();
+    private List<KmUnidadDetalleRow>? _detalle;
+    private bool _cargando, _cargandoDet;
+    private Guid _chartsKey = Guid.NewGuid();
+
+    // KPIs
+    private int _totalMetrica, _unidades, _totalServicios, _totalRecorrido, _totalVacio, _pctVacioGlobal, _maxUnidad;
+    private long _sumKmServicio;
+    private int _conOdometro, _sinOdometro;
+    private string _unidadLider = "—";
+    private string UnidadMetrica => _metrica switch { "Servicios" => "servicios", "KmVacio" => "km vacío", _ => "km" };
+    private string UnidadMetricaCap => _metrica switch { "Servicios" => "Servicios", "KmVacio" => "Km vacío", _ => "Km servicio" };
+    private string KpiTotalLabel => _metrica switch { "Servicios" => "Total servicios", "KmVacio" => "Total km vacío", _ => "Total km servicio" };
+
+    // Filas ordenadas por la métrica activa (para la tabla y el ranking).
+    private List<KmUnidadRow> _filasVista = new();
+
+    // ── Gráficos ──
+    private record BarItem(string Dominio, string Etiqueta, decimal Valor);
+    private record DonutItem(string Label, decimal Valor);
+    private List<BarItem> _barItems = new();
+    private List<DonutItem> _donutTipo = new();
+
+    private ApexChart<BarItem>? _barUniChart;
+    private ApexChart<DonutItem>? _pieTipoChart;
+
+    private static readonly List<string> _palette = new()
+    {
+        "#2058D0", "#F99410", "#16A34A", "#DC2626", "#0EA5E9",
+        "#7C3AED", "#B45309", "#DB2777", "#0D9488", "#65A30D",
+        "#4F46E5", "#EA580C", "#059669", "#9333EA", "#0891B2"
+    };
+    private const string _colorOtros = "#94A3B8";
+
+    private Dictionary<string, string> _colorPorUnidad = new();
+    private string ColorUni(string dom) => _colorPorUnidad.TryGetValue(dom, out var c) ? c : _colorOtros;
+    private string ColorFocoUni(string dom) =>
+        (_uniFocus is null || dom == _uniFocus) ? ColorUni(dom) : "#D9E1EC";
+
+    // Color fijo por tipo de vehículo (semántica estable en todo el informe).
+    private static readonly List<string> _tiposOrden = new() { "BUS", "MINI", "VAN", "TRAFIC", "HIACE", "AUTO" };
+    private static readonly Dictionary<string, string> _colorTipoFijo = new()
+    {
+        ["BUS"] = "#2058D0", ["MINI"] = "#F99410", ["VAN"] = "#16A34A",
+        ["TRAFIC"] = "#DC2626", ["HIACE"] = "#0EA5E9", ["AUTO"] = "#7C3AED",
+    };
+    private string ColorTipo(string t) => _colorTipoFijo.TryGetValue(t, out var c) ? c : _colorOtros;
+    private string ColorFocoTipo(string t) =>
+        (_tipoFocus is null || t == _tipoFocus) ? ColorTipo(t) : "#D9E1EC";
+
+    private int _topN = 15;
+    private List<KmUnidadRow> _rankingUnidades = new();
+    private string TituloTopN => _topN >= 999 ? $"todas ({_barItems.Count})" : $"top {Math.Min(_topN, _barItems.Count)}";
+    private int _altoBarras = 360;
+
+    private RenderFragment ChipsFoco => __builder =>
+    {
+        @if (_uniFocus is not null || _tipoFocus is not null)
+        {
+            <div style="display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                @if (_uniFocus is not null)
+                {
+                    <div class="rfs-focus">
+                        <span class="rfs-focus__lbl">Unidad:</span>
+                        <span class="rfs-focus__val" style="@($"background:{ColorUni(_uniFocus)};")">@_uniFocus</span>
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                       OnClick="LimpiarFocoUnidad" Title="Quitar filtro de unidad"
+                                       Style="color:#64748B; padding:2px;" />
+                    </div>
+                }
+                @if (_tipoFocus is not null)
+                {
+                    <div class="rfs-focus">
+                        <span class="rfs-focus__lbl">Tipo:</span>
+                        <span class="rfs-focus__val" style="@($"background:{ColorTipo(_tipoFocus)};")">@_tipoFocus</span>
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                       OnClick="LimpiarFocoTipo" Title="Quitar filtro de tipo"
+                                       Style="color:#64748B; padding:2px;" />
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <span class="rfs-focus-hint">💡 Clic en una unidad o un tipo para enfocar el tablero</span>
+        }
+    };
+
+    private RenderFragment CabeceraFoco(string titulo) => __builder =>
+    {
+        <div class="rfs-bar-head mb-3">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@titulo</MudText>
+            @ChipsFoco
+        </div>
+    };
+
+    private readonly ApexChartOptions<BarItem> _optsBarUni = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        PlotOptions = new()
+        {
+            Bar = new() { Horizontal = true, BorderRadius = 4, BorderRadiusApplication = BorderRadiusApplication.End, Distributed = true }
+        },
+        Legend = new() { Show = false },
+        Colors = new List<string> { "#2058D0" },
+        Xaxis = new() { Labels = new() { Style = new() { FontSize = "11px" } } },
+        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px" }, MaxWidth = 150 } } },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
+        Theme = new() { Mode = Mode.Light },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
+    private readonly ApexChartOptions<DonutItem> _optsPieTipo = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        Colors = new List<string> { "#2058D0", "#F99410", "#16A34A" },
+        Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px", OnItemClick = new() { ToggleDataSeries = false } },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        Theme = new() { Mode = Mode.Light },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
+    private static double PctVacio(KmUnidadRow u) =>
+        u.KmRecorrido > 0 ? 100.0 * u.KmVacio / u.KmRecorrido : 0;
+
+    private static string PctStyle(KmUnidadRow u)
+    {
+        if (!u.TieneOdometro) return "";
+        var p = PctVacio(u);
+        if (p >= 50) return "color:#DC2626; font-weight:600;";   // mucha ineficiencia
+        if (p >= 30) return "color:#B08900;";
+        return "color:#16A34A;";
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('V'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await Cargar();
+    }
+
+    private async Task Cargar()
+    {
+        if (_desde is null || _hasta is null) return;
+        _cargando = true;
+        StateHasChanged();
+
+        _fDesdeAp = DateOnly.FromDateTime(_desde.Value);
+        _fHastaAp = DateOnly.FromDateTime(_hasta.Value);
+        _internosAp = _internos;
+        _contratadosAp = _contratados;
+        _detalle = null;
+        _uniFocus = null;
+        _tipoFocus = null;
+
+        _filas = await Reports.GetKmUnidadesAsync(_fDesdeAp, _fHastaAp, _internosAp, _contratadosAp);
+        Recalcular();
+        _chartsKey = Guid.NewGuid();
+
+        _cargando = false;
+    }
+
+    private void CambiarMetrica(string metrica)
+    {
+        _metrica = metrica;
+        if (_filas.Count > 0) { Recalcular(); _chartsKey = Guid.NewGuid(); }
+    }
+
+    private void CambiarTopN(int topN)
+    {
+        _topN = topN;
+        if (_filas.Count > 0) { Recalcular(); _chartsKey = Guid.NewGuid(); }
+    }
+
+    private long ValMetrica(KmUnidadRow u) => _metrica switch
+    {
+        "Servicios" => u.Servicios,
+        "KmVacio" => u.TieneOdometro && u.KmVacio > 0 ? u.KmVacio : 0,
+        _ => u.KmServicio
+    };
+
+    private void Recalcular()
+    {
+        // El foco de tipo FILTRA la tabla, el ranking y los KPIs; el foco de unidad los resalta.
+        var datosTipo = _tipoFocus is null ? _filas : _filas.Where(f => f.TipoVeh == _tipoFocus).ToList();
+        // KPIs/tabla llevan el foco de tipo (el de unidad es resaltado por CSS).
+        var datos = datosTipo;
+
+        // ── KPIs ──
+        _totalMetrica = (int)datos.Sum(ValMetrica);
+        _unidades = datos.Count;
+        _totalServicios = datos.Sum(f => f.Servicios);
+        _sumKmServicio = datos.Sum(f => f.KmServicio);
+        _conOdometro = datos.Count(f => f.TieneOdometro);
+        _sinOdometro = _filas.Count(f => !f.TieneOdometro);
+        _totalRecorrido = (int)datos.Where(f => f.TieneOdometro).Sum(f => f.KmRecorrido);
+        _totalVacio = (int)datos.Where(f => f.TieneOdometro).Sum(f => f.KmVacio);
+        _pctVacioGlobal = _totalRecorrido > 0 ? (int)Math.Round(100.0 * _totalVacio / _totalRecorrido) : 0;
+
+        var porUnidad = datos.Select(f => (f.Dominio, Total: (int)ValMetrica(f)))
+            .OrderByDescending(x => x.Total).ToList();
+        _unidadLider = porUnidad.Count > 0 ? porUnidad[0].Dominio : "—";
+        _maxUnidad = porUnidad.Count > 0 ? porUnidad[0].Total : 0;
+
+        // ── Tabla: ordenada por la métrica activa, filtrada por el foco de tipo ──
+        _filasVista = datosTipo.OrderByDescending(ValMetrica).ThenBy(f => f.Dominio).ToList();
+
+        // ── Ranking / colores del dataset COMPLETO (orden/color estables) ──
+        _rankingUnidades = _filas.OrderByDescending(ValMetrica).ThenBy(f => f.Dominio).ToList();
+        _colorPorUnidad = _rankingUnidades
+            .Select((x, i) => (x.Dominio, i))
+            .ToDictionary(t => t.Dominio, t => t.i < _palette.Count ? _palette[t.i] : _colorOtros);
+
+        // Valores de las barras con el foco de tipo (unidad = resaltado por color).
+        var valoresPorTipo = datosTipo.ToDictionary(f => f.Dominio, f => (decimal)ValMetrica(f));
+        _barItems = _rankingUnidades.Take(_topN)
+            .Select(x => new BarItem(x.Dominio,
+                x.Interno > 0 ? $"{x.Dominio} · {x.Interno}" : x.Dominio,
+                valoresPorTipo.TryGetValue(x.Dominio, out var v) ? v : 0))
+            .ToList();
+        _altoBarras = Math.Max(360, _barItems.Count * 30);
+
+        // ── Donut por tipo: categorías completas en orden fijo, valores con foco de UNIDAD ──
+        var datosUnidad = _uniFocus is null ? _filas : _filas.Where(f => f.Dominio == _uniFocus).ToList();
+        var tiposPresentes = _tiposOrden.Where(t => _filas.Any(f => f.TipoVeh == t)).ToList();
+        // sumar tipos no listados también (por si aparece uno nuevo)
+        foreach (var t in _filas.Select(f => f.TipoVeh).Distinct())
+            if (!tiposPresentes.Contains(t) && !string.IsNullOrEmpty(t)) tiposPresentes.Add(t);
+        var valPorTipo = datosUnidad.GroupBy(f => f.TipoVeh).ToDictionary(g => g.Key, g => (decimal)g.Sum(ValMetrica));
+        _donutTipo = tiposPresentes
+            .Select(t => new DonutItem(t, valPorTipo.TryGetValue(t, out var v) ? v : 0))
+            .ToList();
+
+        _optsBarUni.Colors = _barItems.Select(b => ColorFocoUni(b.Dominio)).ToList();
+        _optsPieTipo.Colors = _donutTipo.Select(d => ColorFocoTipo(d.Label)).ToList();
+    }
+
+    // ── Cross-filter ──
+    private async Task ToggleFocoUnidad(string dom)
+    {
+        _uniFocus = _uniFocus == dom ? null : dom;
+        Recalcular();
+        await ActualizarGraficos();
+    }
+
+    private async Task ToggleFocoTipo(string tipo)
+    {
+        _tipoFocus = _tipoFocus == tipo ? null : tipo;
+        Recalcular();
+        await ActualizarGraficos();
+    }
+
+    private Task LimpiarFocoUnidad() => ToggleFocoUnidad(_uniFocus ?? "");
+    private Task LimpiarFocoTipo() => ToggleFocoTipo(_tipoFocus ?? "");
+
+    private async Task ActualizarGraficos()
+    {
+        if (_barUniChart is not null) { await _barUniChart.UpdateOptionsAsync(true, true, false); await _barUniChart.UpdateSeriesAsync(true); }
+        if (_pieTipoChart is not null) { await _pieTipoChart.UpdateOptionsAsync(true, true, false); await _pieTipoChart.UpdateSeriesAsync(true); }
+    }
+
+    private async Task OnBarUniSelection(SelectedData<BarItem> e)
+    {
+        var dom = e.DataPoint?.Items?.FirstOrDefault()?.Dominio;
+        if (dom is not null) await ToggleFocoUnidad(dom);
+    }
+
+    private async Task OnPieTipoSelection(SelectedData<DonutItem> e)
+    {
+        var tipo = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (tipo is not null) await ToggleFocoTipo(tipo);
+    }
+
+    private async Task OnPieTipoLegendClicked(LegendClicked<DonutItem> e)
+    {
+        var tipo = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (tipo is not null) await ToggleFocoTipo(tipo);
+    }
+
+    // ── Drill-down ──
+    private async Task<List<KmUnidadDetalleRow>> GetDetalleAsync()
+    {
+        if (_detalle is null)
+        {
+            _cargandoDet = true;
+            StateHasChanged();
+            _detalle = await Reports.GetKmUnidadesDetalleAsync(_fDesdeAp, _fHastaAp, _internosAp, _contratadosAp);
+            _cargandoDet = false;
+        }
+        return _detalle;
+    }
+
+    private async Task AbrirDetalleUnidad(string dom)
+    {
+        var todas = await GetDetalleAsync();
+        var items = todas.Where(d => d.Dominio == dom).Select(d => d.Reserva).ToList();
+        if (items.Count == 0) return;
+
+        var parametros = new DialogParameters<ReservasFsDetalleDialog>
+        {
+            { x => x.Items, items },
+            { x => x.Subtitulo, $"Unidad {dom} — {_fDesdeAp:dd/MM/yyyy} a {_fHastaAp:dd/MM/yyyy}" }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.ExtraLarge, FullWidth = true,
+            CloseButton = false, CloseOnEscapeKey = true, BackdropClick = true
+        };
+        await DialogService.ShowAsync<ReservasFsDetalleDialog>("Detalle de viajes", parametros, opciones);
+    }
+
+    private async Task DescargarExcel()
+    {
+        var viajes = await GetDetalleAsync();
+        var bytes = Excel.KmUnidadesServicios(_filas, _fDesdeAp, _fHastaAp, viajes);
+        var nombre = $"km_unidades_servicios_{_fDesdeAp:yyyyMMdd}_{_fHastaAp:yyyyMMdd}.xlsx";
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    private static string Fmt(int n) => n.ToString("#,0", System.Globalization.CultureInfo.GetCultureInfo("es-AR"));
+}

@@ -97,11 +97,45 @@ CONTROL: trafico_vehiculo_combustible (desde la planilla) — días sin cargar p
 también PDF), `vehiculo_estacion_saldo.frx`, `vehiculo_combustible_saldo_fc.frx` (era 1).
 En `C:\MetroCarSys\Reports`.
 
-## Informes candidatos para Blazor (orden sugerido)
+## Estado de migración a Blazor (07/07/2026)
 
-0. **Replicar `vehiculo_sobre` a SQL** — prerrequisito de todo.
-1. **Dashboard de Consumos** — litros/100km entre cargas LLENO, ranking de flota,
-   evolución mensual, costo por km.
-2. **Control de cargas** — días sin cargar + cargas sin conciliar.
-3. **Costo mensual de combustible** por vehículo/estación/tipo (hoy no existe en FoxPro).
-4. **Conciliación por lote** (escritura) — recién con la regla strangler cumplida.
+**MENÚ COMBUSTIBLE COMPLETO (10/10 ítems, sin placeholders)** — 3 entregas, solo lectura + andamiaje
+ABM (patrón Fleteros/Contactos). Detalle en CLAUDE.md § Módulo Combustible y
+`docs/PlanoFoxPro/combustible/COMBUSTIBLE_ABM_MENU.md`. **1ª entrega** (5 pantallas base):
+
+- ✅ **Promedio de Consumos** (`/promedio-consumos`) — l/100km con el método correcto (entre cargas
+  LLENO, no el media-de-medias del FoxPro), cross-filter 1D, drill-down, Excel.
+- ✅ **ABM y Conciliación cargas** (`/combustible-conciliacion`) — grilla `vehiculo_sobre` + barra de
+  lotes (Nuevo/Marcar/Desmarcar/Todo) andamiaje (`ConciliacionCombustibleAbmActivo=false`).
+- ✅ **Saldos de Estaciones** (`/saldos-estaciones`) — informe histórico debe/haber/saldo (2013-2017).
+- ✅ **Carga / Mantenimiento de Depósitos** — `vehiculo_estacion_saldo`, baja física, andamiaje
+  (`DepositosCombustibleAbmActivo=false`).
+
+**2ª entrega (07/07/2026) — informes:**
+- ✅ **Control de cargas** (`/control-cargas`) — réplica de `trafico_vehiculo_combustible`: días sin
+  cargar por unidad propia activa. Link `vehiculo.id_vehicul=vehiculo_sobre.dominio`.
+- ✅ **Consumo Mensual** (`/consumo-mensual`) — informe NUEVO: litros por mes × unidad × estación ×
+  tipo. Métrica **litros** (importe 0 con prepaga → NO hay costo real, verificado 2020-2026).
+
+**3ª entrega (07/07/2026) — los 3 catálogos → menú Combustible COMPLETO (10/10):**
+- Estaciones (BAR 8 → `estacion`) y Rubro de Consumos (BAR 9 → `estacion_rubro`) son el MISMO form
+  que ya migró Tráfico → los links REUTILIZAN `/contactos` y `/rubros-contacto` (DRY, no duplicar).
+- ✅ **Artículos por Rubro de Consumo** (`/articulos-rubro`, NUEVO) — `estacion_rubro_articulo`
+  (combo rubro + nombre; rubro 1 = tipos de combustible). Solo lectura + andamiaje
+  (`ArticulosRubroAbmActivo`). 🐛 baja física, id no-identity, `nombre` truncado a 30.
+
+**🐛 Trampas que se repiten (recordar):**
+- Los métodos de combustible usan `ClampComb` (rango 2009-2027), **NO `ClampFecha`** (acota a 2021 y
+  vacía los informes históricos). Ver [[combustible-migrado]].
+- **No hay "costo" de combustible**: `importe` viene 0 en todas las cargas 2020-2026 (tarjeta prepaga).
+  Cualquier informe monetario da $0 → usar **litros** como métrica.
+- **La réplica está atrasada ~1 mes** (última carga 08/06/2026 al 07/07): el Control de cargas muestra
+  todas las unidades "atrasadas" por eso — es real, no bug.
+
+### Pendientes / próximos
+
+- **Cargas sin conciliar** (`n_sobre=0`) ya visible en la pantalla de Conciliación (KPI dedicado).
+- **Catálogos 8/9/10** (Estaciones / Rubro de Consumos / Artículos) — reusar `Contactos`/
+  `RubrosContacto` de Tráfico filtrando `rubro=1`; `estacion_rubro_articulo` sin ABM aún.
+- **Activar escritura** (conciliación + depósitos) — regla strangler cumplida + coordinar dueño de
+  `vehiculo_sobre`/`parametro`/`estacion` (compartidas) + apagar sync. Es circuito del día D.

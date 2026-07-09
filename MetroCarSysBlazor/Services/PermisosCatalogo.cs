@@ -41,6 +41,31 @@ public static class PermisosCatalogo
     public static bool Tiene(string? acceso, char letra) =>
         (acceso ?? "").ToUpperInvariant().Contains(char.ToUpperInvariant(letra));
 
+    /// <summary>Busca un permiso por su letra (o null si no es una letra conocida).</summary>
+    public static Permiso? Buscar(char letra)
+    {
+        var l = char.ToUpperInvariant(letra);
+        foreach (var p in Todos) if (p.Letra == l) return p;
+        return null;
+    }
+
+    /// <summary>
+    /// Color de fondo del chip de cada letra. Agrupado por FAMILIA de módulo (mismo color para
+    /// permisos relacionados) para que la lectura tenga sentido, no sea arbitraria. Letra
+    /// desconocida → gris.
+    /// </summary>
+    public static string Color(char letra) => char.ToUpperInvariant(letra) switch
+    {
+        'S' or 'A' or 'X'       => "#7C3AED",  // Sistema / administración (violeta)
+        'R'                     => "#0EA5E9",  // Reservas (celeste)
+        'T' or 'C' or 'D'       => "#003AA0",  // Tráfico y sus funciones (azul NORTUR)
+        'V' or 'L'             => "#16A34A",  // Flota / Taller (verde)
+        'F' or 'N'             => "#B45309",  // Facturación / Ctas Ctes (ocre — dinero)
+        'M'                     => "#DB2777",  // Combustible (magenta)
+        'U' or 'B' or 'H' or 'E' => "#64748B", // Utilitarios / servicio / reservado (gris azulado)
+        _                       => "#94A3B8",
+    };
+
     /// <summary>
     /// Arma el string <c>acceso</c> a partir del set de letras tildadas, respetando el orden fijo
     /// del catálogo. Filtra cualquier letra desconocida. Es la operación inversa a decodificar.

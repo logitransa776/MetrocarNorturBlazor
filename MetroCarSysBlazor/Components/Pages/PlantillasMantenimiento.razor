@@ -1,0 +1,263 @@
+@page "/plantillas-mantenimiento"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Mantenimiento de Plantillas — réplica de reserva_plantilla_mantenimiento.scx.
+   Combo de plantillas (id_reserva) + grilla de sus filas (reserva_plantilla). ABM de filas +
+   Renombrar/Duplicar/Eliminar Todo = ANDAMIAJE (AbmFeatureFlags.PlantillasAbmActivo=false hasta
+   el día D). Baja FÍSICA (DELETE, sin f_delete). Plano: RESERVA_PLANTILLAS.md.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<PageTitle>Mantenimiento de Plantillas — NORTUR</PageTitle>
+
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Mantenimiento de Plantillas</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Reservas · Plantillas de reservas por servicio-tipo — vista de solo lectura (lista para el ABM)
+    </MudText>
+</div>
+
+@* ── Barra de filtros (izquierda) + acciones (derecha) ── *@
+<MudPaper Class="pa-2 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudSelect T="string" Label="Plantilla" @bind-Value="_plantillaSel" Dense="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:280px;"
+                   ToStringFunc="@(p => p ?? "")">
+            @foreach (var p in _resumen)
+            {
+                <MudSelectItem T="string" Value="@p.IdReserva">@p.IdReserva (@p.Filas)</MudSelectItem>
+            }
+        </MudSelect>
+        <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">
+            @_resumen.Count plantillas · @_resumen.Sum(p => p.Filas) filas
+        </MudChip>
+
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">
+                Actualizar
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || _filas.Count == 0">
+                Excel
+            </MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="_filas" Dense="true" Hover="true" Striped="true"
+                  FixedHeader="true" Height="calc(100vh - 330px)"
+                  Bordered="false" Class="cli-grid grid-compacta"
+                  RowClass="cli-grid__row" RowClassFunc="@RowClass"
+                  OnRowClick="@OnRowClick" T="PlantillaFilaRow" Virtualize="true">
+            <HeaderContent>
+                <MudTh>Hora</MudTh>
+                <MudTh>Servicio</MudTh>
+                <MudTh>T. Veh</MudTh>
+                <MudTh>Desde</MudTh>
+                <MudTh>Hasta</MudTh>
+                <MudTh Style="text-align:right;">Pax</MudTh>
+                <MudTh Style="text-align:right;">Km</MudTh>
+                <MudTh>Cabecera</MudTh>
+                <MudTh>Guía</MudTh>
+                <MudTh>Adicionales</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Hora" Style="font-weight:600;">@Dash(context.HoraIni)</MudTd>
+                <MudTd DataLabel="Servicio" title="@context.Servicio">@Dash(context.Servicio)</MudTd>
+                <MudTd DataLabel="T. Veh">@Dash(context.TipoVeh)</MudTd>
+                <MudTd DataLabel="Desde" title="@context.Desde">@Dash(context.Desde)</MudTd>
+                <MudTd DataLabel="Hasta" title="@context.Hasta">@Dash(context.Hasta)</MudTd>
+                <MudTd DataLabel="Pax" Style="text-align:right;">@context.Pax</MudTd>
+                <MudTd DataLabel="Km" Style="text-align:right;">@context.Km</MudTd>
+                <MudTd DataLabel="Cabecera" Style="font-family:monospace;">@Dash(context.Cabecera)</MudTd>
+                <MudTd DataLabel="Guía">@Dash(context.Guia)</MudTd>
+                <MudTd DataLabel="Adicionales">@Dash(context.Adicionales)</MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">
+                    @(string.IsNullOrEmpty(_plantillaSel) ? "Elegí una plantilla del combo." : "La plantilla no tiene filas.")
+                </MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        @* ── Botonera réplica FoxPro — ANDAMIAJE: se habilita con PlantillasAbmActivo (hoy false) ── *@
+        <div class="cli-toolbar usr-toolbar">
+            <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.Add"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Agregar"
+                       Disabled="!_abmActivo || string.IsNullOrEmpty(_plantillaSel)">Agregar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Modificar" Disabled="!_abmActivo || _sel is null">Modificar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Eliminar" Disabled="!_abmActivo || _sel is null">Eliminar</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.DeleteSweep"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="EliminarTodo"
+                       Disabled="!_abmActivo || string.IsNullOrEmpty(_plantillaSel)">Eliminar Todo</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.DriveFileRenameOutline"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="@(() => Nombre("renombra"))"
+                       Disabled="!_abmActivo || string.IsNullOrEmpty(_plantillaSel)">Renombrar</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.ContentCopy"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="@(() => Nombre("duplica"))"
+                       Disabled="!_abmActivo || string.IsNullOrEmpty(_plantillaSel)">Duplicar</MudButton>
+            <MudButton Variant="Variant.Text" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Visibility"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Ver" Disabled="_sel is null">Ver ficha</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                @(_abmActivo ? "ABM habilitado · doble clic para ver la ficha"
+                             : "Solo lectura · el ABM de plantillas se activa el día del corte a Buslink")
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private static bool _abmActivo => AbmFeatureFlags.PlantillasAbmActivo;
+
+    private List<PlantillaResumenRow> _resumen = new();
+    private List<PlantillaFilaRow> _filas = new();
+    private string? _plantillaSel;
+    private PlantillaFilaRow? _sel;
+    private bool _cargando = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('R'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        _resumen = await Reports.GetPlantillasResumenAsync();
+        _plantillaSel = _resumen.FirstOrDefault()?.IdReserva;
+        await CargarFilasAsync();
+        _cargando = false;
+    }
+
+    // Recarga las filas al cambiar el combo (bind → cambio de _plantillaSel).
+    private string? _ultimaPlantilla;
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_plantillaSel != _ultimaPlantilla)
+        {
+            _ultimaPlantilla = _plantillaSel;
+            await CargarFilasAsync();
+        }
+    }
+
+    private async Task CargarFilasAsync()
+    {
+        _filas = string.IsNullOrEmpty(_plantillaSel)
+            ? new()
+            : await Reports.GetPlantillaFilasAsync(_plantillaSel);
+        if (_sel is not null)
+            _sel = _filas.FirstOrDefault(f => f.Id == _sel.Id);
+        StateHasChanged();
+    }
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        _resumen = await Reports.GetPlantillasResumenAsync();
+        await CargarFilasAsync();
+    }
+
+    private string RowClass(PlantillaFilaRow f, int _) =>
+        _sel is not null && _sel.Id == f.Id ? "cli-grid__row--sel" : "";
+
+    private void OnRowClick(TableRowClickEventArgs<PlantillaFilaRow> args)
+    {
+        _sel = args.Item;
+        if (args.MouseEventArgs.Detail >= 2 && _sel is not null)
+            _ = AbrirEditor("ver", _sel.Id);
+    }
+
+    private Task Agregar() => AbrirEditor("alta", 0);
+    private Task Ver() => _sel is null ? Task.CompletedTask : AbrirEditor("ver", _sel.Id);
+    private Task Modificar() => _sel is null ? Task.CompletedTask : AbrirEditor("modifica", _sel.Id);
+    private Task Eliminar() => _sel is null ? Task.CompletedTask : AbrirEditor("baja", _sel.Id);
+
+    private async Task AbrirEditor(string modo, int id)
+    {
+        var parametros = new DialogParameters<PlantillaFilaEditorDialog>
+        {
+            { x => x.Modo, modo },
+            { x => x.Id, id },
+            { x => x.IdReserva, _plantillaSel ?? "" }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large, FullWidth = true,
+            CloseButton = false, CloseOnEscapeKey = true, BackdropClick = false
+        };
+        var dlg = await DialogService.ShowAsync<PlantillaFilaEditorDialog>("Fila de plantilla", parametros, opciones);
+        var res = await dlg.Result;
+        if (res is not null && !res.Canceled && res.Data is bool grabo && grabo)
+            await Refrescar();
+    }
+
+    private async Task EliminarTodo()
+    {
+        if (string.IsNullOrEmpty(_plantillaSel)) return;
+        // Andamiaje: el service aborta por el flag; igualmente confirmamos como el FoxPro.
+        var res = await Abm_BajaCompleta();
+        if (res) await Refrescar();
+    }
+
+    private async Task<bool> Abm_BajaCompleta()
+    {
+        // Se deja el llamado listo (abortará por el flag hoy). Inyectamos AbmService abajo.
+        var r = await AbmSvc.BajaPlantillaCompletaAsync(_plantillaSel!);
+        if (!r.Ok) { await AvisarError(r.Error!); return false; }
+        return true;
+    }
+
+    private async Task Nombre(string modo)
+    {
+        var parametros = new DialogParameters<PlantillaNombreDialog>
+        {
+            { x => x.Modo, modo },
+            { x => x.Origen, _plantillaSel ?? "" },
+            { x => x.Existentes, _resumen.Select(p => p.IdReserva).ToList() }
+        };
+        var opciones = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = false };
+        var dlg = await DialogService.ShowAsync<PlantillaNombreDialog>(modo == "renombra" ? "Renombrar plantilla" : "Duplicar plantilla", parametros, opciones);
+        var res = await dlg.Result;
+        if (res is not null && !res.Canceled && res.Data is bool grabo && grabo)
+            await Refrescar();
+    }
+
+    private async Task AvisarError(string msg) =>
+        await DialogService.ShowMessageBoxAsync("Atención", msg, yesText: "Entendido");
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.Plantillas(_resumen, _filas, _plantillaSel ?? "");
+        await JS.InvokeVoidAsync("downloadFile", "Plantillas.xlsx", Convert.ToBase64String(bytes));
+    }
+
+    private static string Dash(string? s) => string.IsNullOrWhiteSpace(s) ? "·" : s;
+
+    [Inject] private AbmService AbmSvc { get; set; } = default!;
+}

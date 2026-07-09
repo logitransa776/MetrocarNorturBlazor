@@ -1,0 +1,362 @@
+@inject ReportService Reports
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Contactos y Proveedores — réplica del form FoxPro estacion_abm.scx. 4 modos:
+   ver/alta/modifica/baja. `estacion` es el catálogo de PROVEEDORES de toda la empresa
+   (estaciones de servicio, gomerías, grúas, fleteros, cristales…), COMPARTIDO con Combustible.
+   Campos: razón social, rubro (combo), domicilio, localidad, provincia, teléfono, celular,
+   radio, email (valida @), contacto1/2, medio de pago, + flags legacy de combustible
+   (controla saldos, ult. lote, YPF en ruta, Esso card, cta.cte, códigos Cairo).
+
+   ⚠ ANDAMIAJE (07/07/2026): la ESCRITURA está construida (AbmService.*ContactoAsync) pero el
+   botón Grabar está DESHABILITADO — la tabla `estacion` sigue con dueño FoxPro (178 filas).
+   El día que se active: AbmFeatureFlags.ContactosAbmActivo=true + bloquear FoxPro + apagar sync
+   + COORDINAR dueño único con Combustible (catálogo compartido). 🐛 Baja FÍSICA (DELETE).
+   Truncados: control_sa, cairo_codi. rubro es bigint (FK a estacion_rubro.id).
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@_icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@_titulo</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">@_chip</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:180px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_noExiste)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">El contacto ya no existe.</MudAlert>
+        }
+        else
+        {
+            @if (SoloEscritura && !_abmActivo)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    <b>Vista previa del ABM.</b> La edición de proveedores todavía se hace en FoxPro;
+                    esta pantalla queda lista para activarse el día que la tabla pase a Buslink.
+                    <br /><small>Ojo: <b>catálogo compartido con Combustible</b> — coordinar dueño único al activar.</small>
+                </MudAlert>
+            }
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+            }
+
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Datos del contacto</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Razón social</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_nombre" MaxLength="40" Immediate="true"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_nombre">@V(_nombre)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Rubro</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudSelect T="long" @bind-Value="_rubroId" Dense="true"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense">
+                                @foreach (var r in _rubros)
+                                {
+                                    <MudSelectItem Value="@((long)r.Id)">@r.Rubro</MudSelectItem>
+                                }
+                            </MudSelect>
+                        }
+                        else { <div class="zoom-field__value" title="@_rubroTexto">@V(_rubroTexto)</div> }
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Domicilio</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_domicilio" MaxLength="50" Variant="Variant.Outlined"
+                                          Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_domicilio">@V(_domicilio)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Localidad</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_localidad" MaxLength="20" Variant="Variant.Outlined"
+                                          Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_localidad">@V(_localidad)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Provincia</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_provincia" MaxLength="20" Variant="Variant.Outlined"
+                                          Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_provincia">@V(_provincia)</div> }
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Teléfono</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_telefono" MaxLength="20" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value" title="@_telefono">@V(_telefono)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Celular</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_celular" MaxLength="30" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value" title="@_celular">@V(_celular)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Radio</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_radio" MaxLength="30" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value" title="@_radio">@V(_radio)</div> }
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">E-mail</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_email" MaxLength="70" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value" title="@_email">@V(_email)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Medio de pago</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudSelect T="string" @bind-Value="_medioPago" Dense="true"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true">
+                                @foreach (var m in _mediosPago)
+                                {
+                                    <MudSelectItem Value="@m">@m</MudSelectItem>
+                                }
+                            </MudSelect>
+                        }
+                        else { <div class="zoom-field__value">@V(_medioPago)</div> }
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Contacto 1</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_contacto1" MaxLength="70" Variant="Variant.Outlined"
+                                          Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_contacto1">@V(_contacto1)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Contacto 2</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_contacto2" MaxLength="70" Variant="Variant.Outlined"
+                                          Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_contacto2">@V(_contacto2)</div> }
+                    </div>
+                </div>
+            </div>
+
+            @* Bloque legacy de Combustible: solo se muestra si hay algún dato o en edición. *@
+            @if (SoloEscritura || _tieneDatosComb)
+            {
+                <div class="zoom-box zoom-box--sec">
+                    <span class="zoom-box__label">Combustible (legacy)</span>
+                    <div class="zoom-row pa-2" style="gap:16px; flex-wrap:wrap;">
+                        @if (SoloEscritura)
+                        {
+                            <MudCheckBox T="bool" @bind-Value="_controlSaldo" Label="Controla saldos" Color="Color.Primary" Size="Size.Small" Dense="true" />
+                            <MudCheckBox T="bool" @bind-Value="_ypfRuta" Label="YPF en ruta" Color="Color.Primary" Size="Size.Small" Dense="true" />
+                            <MudCheckBox T="bool" @bind-Value="_essoCard" Label="Esso card" Color="Color.Primary" Size="Size.Small" Dense="true" />
+                            <MudCheckBox T="bool" @bind-Value="_ctaCte" Label="Cta. cte." Color="Color.Primary" Size="Size.Small" Dense="true" />
+                        }
+                        else
+                        {
+                            <div class="zoom-field zoom-field--sm">
+                                <div class="zoom-field__label">Controla saldos</div>
+                                <div class="zoom-field__value">@(_controlSaldo ? "Sí" : "No")</div>
+                            </div>
+                            <div class="zoom-field zoom-field--sm">
+                                <div class="zoom-field__label">YPF ruta / Esso / Cta.cte.</div>
+                                <div class="zoom-field__value">@(_ypfRuta ? "YPF " : "")@(_essoCard ? "Esso " : "")@(_ctaCte ? "CtaCte" : "")@(!_ypfRuta && !_essoCard && !_ctaCte ? "—" : "")</div>
+                            </div>
+                        }
+                    </div>
+                    <div class="zoom-row pa-2">
+                        <div class="zoom-field zoom-field--sm">
+                            <div class="zoom-field__label">Cairo: código</div>
+                            @if (SoloEscritura)
+                            {
+                                <MudTextField @bind-Value="_cairoCodigo" MaxLength="15" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            }
+                            else { <div class="zoom-field__value">@V(_cairoCodigo)</div> }
+                        </div>
+                        <div class="zoom-field zoom-field--sm">
+                            <div class="zoom-field__label">Cairo: IIBB</div>
+                            @if (SoloEscritura)
+                            {
+                                <MudTextField @bind-Value="_cairoIibb" MaxLength="15" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            }
+                            else { <div class="zoom-field__value">@V(_cairoIibb)</div> }
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@(SoloEscritura && _abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                    @(SoloEscritura && !_abmActivo
+                        ? "Escritura preparada · pendiente de activar en Buslink"
+                        : SoloEscritura ? "Edición habilitada" : "Vista de solo lectura")
+                </div>
+                <div class="cli-footer__btns">
+                    @if (EsAlta)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Grabando…" : "Agregar")
+                        </MudButton>
+                    }
+                    else if (EsModifica)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Grabando…" : "Modificar")
+                        </MudButton>
+                    }
+                    else if (EsBaja)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Delete" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Procesando…" : "Eliminar")
+                        </MudButton>
+                    }
+                    <MudButton Variant="@(SoloLectura ? Variant.Filled : Variant.Text)"
+                               Color="@(SoloLectura ? Color.Primary : Color.Default)" Size="Size.Small"
+                               OnClick="Cerrar">@(SoloLectura ? "Cerrar" : "Cancelar")</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Modo { get; set; } = "ver";
+    [Parameter] public int Id { get; set; }
+
+    private static bool _abmActivo => AbmFeatureFlags.ContactosAbmActivo;
+
+    private static readonly string[] _mediosPago =
+        { "CUENTA CORRIENTE", "TARJETA PREPAGO", "TARJETA DE CREDITO", "EFECTIVO", "AUDITOR", "OTRA" };
+
+    private List<RubroContactoRow> _rubros = new();
+    private long _rubroId;
+    private string _nombre = "", _domicilio = "", _localidad = "", _provincia = "",
+        _telefono = "", _celular = "", _radio = "", _email = "", _contacto1 = "", _contacto2 = "",
+        _medioPago = "", _cairoCodigo = "", _cairoIibb = "", _rubroTexto = "";
+    private bool _controlSaldo, _ypfRuta, _essoCard, _ctaCte;
+    private long _ultLote;
+    private bool _cargando = true, _grabando, _noExiste;
+    private string? _error;
+
+    private bool EsAlta => Modo == "alta";
+    private bool EsModifica => Modo == "modifica";
+    private bool EsBaja => Modo == "baja";
+    private bool SoloLectura => Modo == "ver" || EsBaja;
+    private bool SoloEscritura => EsAlta || EsModifica;
+    private bool _tieneDatosComb => _controlSaldo || _ypfRuta || _essoCard || _ctaCte
+        || !string.IsNullOrWhiteSpace(_cairoCodigo) || !string.IsNullOrWhiteSpace(_cairoIibb);
+
+    private string _titulo => EsAlta ? "Alta de Contacto"
+        : EsModifica ? "Modificar Contacto" : EsBaja ? "Eliminar Contacto" : "Datos del Contacto";
+    private string _chip => EsAlta ? "Nuevo" : EsModifica ? "Edición" : EsBaja ? "Baja física" : "Solo lectura";
+    private string _icono => EsAlta ? Icons.Material.Filled.AddCircle
+        : EsBaja ? Icons.Material.Filled.RemoveCircle : Icons.Material.Filled.ContactPage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _rubros = await Reports.GetRubrosContactoAsync();
+
+        if (!EsAlta)
+        {
+            var d = await Reports.GetContactoRowAsync(Id);
+            if (d is null) { _noExiste = true; _cargando = false; return; }
+            _rubroId = d.RubroId;
+            _nombre = d.Nombre; _domicilio = d.Domicilio; _localidad = d.Localidad; _provincia = d.Provincia;
+            _telefono = d.Telefono; _celular = d.Celular; _radio = d.Radio; _email = d.Email;
+            _contacto1 = d.Contacto1; _contacto2 = d.Contacto2; _medioPago = d.MedioPago;
+            _controlSaldo = d.ControlSaldo; _ultLote = d.UltLote; _cairoCodigo = d.CairoCodigo;
+            _cairoIibb = d.CairoIibb; _ypfRuta = d.YpfRuta; _essoCard = d.EssoCard; _ctaCte = d.CtaCte;
+            _rubroTexto = _rubros.FirstOrDefault(r => r.Id == d.RubroId)?.Rubro ?? "";
+        }
+        else if (_rubros.Count > 0)
+        {
+            _rubroId = _rubros[0].Id;  // preselecciona el primer rubro en alta
+        }
+        _cargando = false;
+    }
+
+    private async Task Grabar()
+    {
+        if (!_abmActivo)
+        {
+            _error = "La escritura de contactos todavía no está habilitada (sigue en FoxPro).";
+            return;
+        }
+        _error = null; _grabando = true;
+
+        if (EsBaja)
+        {
+            Finalizar(await Abm.BajaContactoAsync(Id));
+            return;
+        }
+
+        var input = new ContactoInput(
+            _rubroId, _nombre, _domicilio, _localidad, _provincia, _telefono, _celular, _radio,
+            _email, _contacto1, _contacto2, _medioPago, _controlSaldo, _ultLote,
+            _cairoCodigo, _cairoIibb, _ypfRuta, _essoCard, _ctaCte);
+
+        Finalizar(EsAlta
+            ? await Abm.AltaContactoAsync(input)
+            : await Abm.ModificaContactoAsync(Id, input));
+    }
+
+    private void Finalizar(AbmService.AbmResult r)
+    {
+        _grabando = false;
+        if (r.Ok) MudDialog.Close(DialogResult.Ok(true));
+        else { _error = r.Error; StateHasChanged(); }
+    }
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+    private static string V(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+}

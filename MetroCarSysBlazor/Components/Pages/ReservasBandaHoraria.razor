@@ -85,8 +85,8 @@ else if (_filas.Count == 0)
 }
 else
 {
-    @* ── KPIs ── (flex: se reparten parejo). Cuatro tarjetas: dos llevan valor de texto
-       largo (banda/vehículo), por eso no forzamos una quinta que las apretaría y recortaría. *@
+    @* ── KPIs ── (flex: se reparten parejo). Con foco activo se recalculan al subconjunto
+       enfocado (cross-filter): el total, los días y los líderes son del recorte. *@
     <div class="rfs-kpis mb-3">
         <KpiCard Label="@(_metrica == "Pax" ? "Total pax" : "Total viajes")" Value="@Fmt(_totalMetrica)"
                  Sub="@($"prom. {Fmt(_promedioDiario)} {UnidadMetrica}/día")" Color="@NorturColors.Azul" />
@@ -100,10 +100,9 @@ else
     <div @key="_chartsKey">
         @* ── Gráfico barras apiladas por fecha × banda ── *@
         <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
-            <MudText Typo="Typo.subtitle2" Class="mb-2" Style="font-weight:700; color:#112F5B;">
-                @(_metrica == "Pax" ? "Pax" : "Viajes") por día y banda horaria
-            </MudText>
-            <ApexChart TItem="ChartItem" Options="_optsBar" Height="320">
+            @CabeceraFoco($"{(_metrica == "Pax" ? "Pax" : "Viajes")} por día y banda horaria")
+            <ApexChart TItem="ChartItem" Options="_optsBar" Height="320" @ref="_barChart"
+                       OnDataPointSelection="OnBarSelection" OnLegendClicked="OnBarLegendClicked">
                 @foreach (var banda in _bandasPresentes)
                 {
                     var b = banda;
@@ -121,10 +120,9 @@ else
         <MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
             <MudItem xs="12" md="6" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
-                    <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:700; color:#112F5B;">
-                        Distribución por banda horaria
-                    </MudText>
-                    <ApexChart TItem="DonutItem" Options="_optsPieBanda" Height="320">
+                    @CabeceraFoco("Distribución por banda horaria")
+                    <ApexChart TItem="DonutItem" Options="_optsPieBanda" Height="320" @ref="_pieBandaChart"
+                               OnDataPointSelection="OnPieBandaSelection" OnLegendClicked="OnPieBandaLegendClicked">
                         <ApexPointSeries TItem="DonutItem"
                                          Items="_donutBanda"
                                          Name="@UnidadMetrica"
@@ -136,10 +134,9 @@ else
             </MudItem>
             <MudItem xs="12" md="6" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
-                    <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:700; color:#112F5B;">
-                        Distribución por tipo de vehículo
-                    </MudText>
-                    <ApexChart TItem="DonutItem" Options="_optsPieVeh" Height="320">
+                    @CabeceraFoco("Distribución por tipo de vehículo")
+                    <ApexChart TItem="DonutItem" Options="_optsPieVeh" Height="320" @ref="_pieVehChart"
+                               OnDataPointSelection="OnPieVehSelection" OnLegendClicked="OnPieVehLegendClicked">
                         <ApexPointSeries TItem="DonutItem"
                                          Items="_donutVehiculo"
                                          Name="@UnidadMetrica"
@@ -160,7 +157,7 @@ else
                     Detalle: @(_metrica == "Pax" ? "pax" : "viajes") por fecha y banda horaria
                 </MudText>
                 <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
-                    Click en una celda para ver los viajes uno por uno
+                    Click en una celda para ver los viajes uno por uno · click en el encabezado de una banda para enfocar el tablero
                 </MudText>
             </div>
             <MudButton Variant="Variant.Filled" Color="MudColor.Success"
@@ -182,8 +179,9 @@ else
                         @foreach (var b in _bandas)
                         {
                             var banda = b;
-                            <th class="rfs-th-serv rfs-click" title="Ver todos los viajes de la banda @banda en el período"
-                                @onclick="() => AbrirDetalleBanda(banda)">
+                            <th class="rfs-th-serv rfs-click @(EnFocoBanda(banda) ? "rfs-th-foco" : "")"
+                                title="Clic para enfocar el tablero en la banda @banda"
+                                @onclick="() => ToggleFocoBanda(banda)">
                                 <span class="rbh-legend-dot" style="background:@ColorBanda(banda);"></span>@banda
                             </th>
                         }
@@ -201,14 +199,15 @@ else
                             {
                                 var banda = b;
                                 var v = PivVal(f, banda);
+                                var atenua = _bandaFocus is not null && !EnFocoBanda(banda) ? "rfs-atenua" : "";
                                 if (v > 0)
                                 {
-                                    <td class="rfs-num rfs-click" title="Ver viajes de la banda @banda el @f.ToString("dd/MM")"
+                                    <td class="rfs-num rfs-click @atenua" title="Ver viajes de la banda @banda el @f.ToString("dd/MM")"
                                         @onclick="() => AbrirDetalleCelda(f, banda)">@Fmt(v)</td>
                                 }
                                 else
                                 {
-                                    <td class="rfs-num rfs-cero">·</td>
+                                    <td class="rfs-num rfs-cero @atenua">·</td>
                                 }
                             }
                             <td class="rfs-num rfs-tot rfs-click" title="Ver todos los viajes del día"
@@ -222,8 +221,9 @@ else
                         @foreach (var b in _bandas)
                         {
                             var banda = b;
-                            <td class="rfs-num rfs-tot rfs-click" title="Ver todos los viajes de la banda @banda en el período"
-                                @onclick="() => AbrirDetalleBanda(banda)">@Fmt(PivTotCol(banda))</td>
+                            <td class="rfs-num rfs-tot rfs-click @(EnFocoBanda(banda) ? "rfs-col-foco" : "")"
+                                title="Clic para enfocar el tablero en la banda @banda"
+                                @onclick="() => ToggleFocoBanda(banda)">@Fmt(PivTotCol(banda))</td>
                         }
                         <td class="rfs-num rfs-tot rfs-grantot">@Fmt(_granTotal)</td>
                     </tr>
@@ -246,6 +246,15 @@ else
         new HashSet<string>(ReportService.EstadosViaje.Where(e => e != "CANCELADO"));
     private string _metrica = "Reservas";   // "Reservas" (viajes) | "Pax"
     private bool _todosVehiculos => _vehiculos.Count > 0 && _vehiculosSel.Count == _vehiculos.Count;
+
+    // ── Foco / cross-filter (estilo Power BI) — DOS dimensiones combinables ──
+    // Cada dimensión enfocada RESALTA en sus propios visuales (las demás categorías se atenúan,
+    // para poder cambiar de foco) y FILTRA los visuales de la otra dimensión, los KPIs y la
+    // tabla. Los dos focos se combinan (banda AND vehículo), como en Power BI. Todo en memoria,
+    // sin re-query. null = sin foco.
+    private string? _bandaFocus;
+    private string? _vehiculoFocus;
+    private bool EnFocoBanda(string banda) => _bandaFocus is null || _bandaFocus == banda;
 
     // ── Filtros APLICADOS (snapshot al tocar "Aplicar"): el drill-down y el Excel
     //    tienen que corresponder a lo que se está viendo, no a lo editado a medias ──
@@ -283,6 +292,12 @@ else
     private List<DonutItem> _donutBanda = new();
     private List<DonutItem> _donutVehiculo = new();
 
+    // Referencias a los charts para actualizarlos EN SU LUGAR al cambiar el foco (sin remontar
+    // → sin parpadeo). El @key/_chartsKey se reserva para cuando cambian los datos (Aplicar/métrica).
+    private ApexChart<ChartItem>? _barChart;
+    private ApexChart<DonutItem>? _pieBandaChart;
+    private ApexChart<DonutItem>? _pieVehChart;
+
     // Paleta por banda (una por franja, orden fijo). Frío → cálido siguiendo la hora del día.
     private static readonly List<string> _paletteBanda = new()
     {
@@ -301,6 +316,57 @@ else
         return i >= 0 && i < _paletteBanda.Count ? _paletteBanda[i] : "#94A3B8";
     }
 
+    // Mapa vehículo → color por ranking del dataset COMPLETO (color y orden estables: no
+    // cambian al enfocar). Color por entidad, no por posición (regla dataviz).
+    private Dictionary<string, string> _colorPorVehiculo = new();
+    private string ColorVeh(string veh) => _colorPorVehiculo.TryGetValue(veh, out var c) ? c : "#94A3B8";
+
+    // Color ATENUADO (gris claro) si hay foco en esa dimensión y no es la categoría enfocada —
+    // efecto highlight de Power BI. Sin foco → color pleno.
+    private string ColorFocoBanda(string banda) =>
+        (_bandaFocus is null || banda == _bandaFocus) ? ColorBanda(banda) : "#D9E1EC";
+    private string ColorFocoVeh(string veh) =>
+        (_vehiculoFocus is null || veh == _vehiculoFocus) ? ColorVeh(veh) : "#D9E1EC";
+
+    // Cabecera de un panel de gráfico: título a la izquierda + chips de foco (o hint) a la
+    // derecha. Duplicada en los tres paneles (control repetido, como en Reservas por fecha y
+    // servicio): la ✕ de cualquier chip limpia ESE foco en todo el tablero.
+    private RenderFragment CabeceraFoco(string titulo) => __builder =>
+    {
+        <div class="rfs-bar-head mb-3">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@titulo</MudText>
+            @if (_bandaFocus is not null || _vehiculoFocus is not null)
+            {
+                <div style="display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                    @if (_bandaFocus is not null)
+                    {
+                        <div class="rfs-focus">
+                            <span class="rfs-focus__lbl">Banda:</span>
+                            <span class="rfs-focus__val" style="@($"background:{ColorBanda(_bandaFocus)};")">@_bandaFocus</span>
+                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                           OnClick="LimpiarFocoBanda" Title="Quitar filtro de banda"
+                                           Style="color:#64748B; padding:2px;" />
+                        </div>
+                    }
+                    @if (_vehiculoFocus is not null)
+                    {
+                        <div class="rfs-focus">
+                            <span class="rfs-focus__lbl">Vehículo:</span>
+                            <span class="rfs-focus__val" style="@($"background:{ColorVeh(_vehiculoFocus)};")">@_vehiculoFocus</span>
+                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                           OnClick="LimpiarFocoVehiculo" Title="Quitar filtro de vehículo"
+                                           Style="color:#64748B; padding:2px;" />
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <span class="rfs-focus-hint">💡 Clic en una banda o un tipo de vehículo para enfocar el tablero</span>
+            }
+        </div>
+    };
+
     private readonly ApexChartOptions<ChartItem> _optsBar = new()
     {
         Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Stacked = true, Animations = new() { Enabled = false } },
@@ -310,24 +376,42 @@ else
         Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px", Colors = "#7A90AD" } } } },
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
         Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
-        Legend = new() { Position = LegendPosition.Top, FontSize = "11px" },
+        // Click en la leyenda = foco (no ocultar la serie, que es el default de ApexCharts).
+        Legend = new() { Position = LegendPosition.Top, FontSize = "11px", OnItemClick = new() { ToggleDataSeries = false } },
         Theme = new() { Mode = Mode.Light },
+        // Sin realce interno de ApexCharts (selección/hover): el highlight del foco es por color.
+        // Evita el doble-resaltado al clickear (regla del cross-filter, skill blazor-nortur).
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
     };
 
     private readonly ApexChartOptions<DonutItem> _optsPieBanda = new()
     {
         Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
         Colors = _paletteBanda,
-        Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px" },
+        Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px", OnItemClick = new() { ToggleDataSeries = false } },
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
     };
 
     private readonly ApexChartOptions<DonutItem> _optsPieVeh = new()
     {
         Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
         Colors = _paletteVeh,
-        Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px" },
+        Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px", OnItemClick = new() { ToggleDataSeries = false } },
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
     };
 
     // ── Pivote ──
@@ -370,72 +454,193 @@ else
         _vehAp = _todosVehiculos ? new List<string>() : _vehiculosSel.ToList();
         _estAp = _estadosSel.Count == ReportService.EstadosViaje.Count ? new List<string>() : _estadosSel.ToList();
         _detalle = null;
+        // Un nuevo conjunto de filtros descarta los focos anteriores (el dataset puede no contenerlos).
+        _bandaFocus = null;
+        _vehiculoFocus = null;
 
         _filas = await Reports.GetReservasPorBandaHorariaAsync(_fDesdeAp, _fHastaAp, _vehAp, _estAp);
         _yaConsultado = true;
         Recalcular();
+        _chartsKey = Guid.NewGuid();   // datos nuevos → remontar los charts (el key fuerza el remount)
 
         _cargando = false;
     }
 
-    // Cambio de métrica: recálculo en memoria, sin nueva query.
+    // Cambio de métrica: recálculo en memoria, sin nueva query. Cambia la forma de los gráficos
+    // (valores y escala) → se remontan con un key nuevo.
     private void CambiarMetrica(string metrica)
     {
         _metrica = metrica;
-        if (_filas.Count > 0) Recalcular();
+        if (_filas.Count > 0)
+        {
+            Recalcular();
+            _chartsKey = Guid.NewGuid();
+        }
     }
 
     private void Recalcular()
     {
         Func<BandaHorariaRow, int> val = _metrica == "Pax" ? f => f.Pax : f => f.Reservas;
 
-        _totalMetrica = _filas.Sum(val);
-        _diasConActividad = _filas.Select(f => f.Fecha).Distinct().Count();
+        // Subconjuntos según el foco (modelo Power BI: donde clickeás resalta, en el resto
+        // filtra): los visuales de BANDA usan los datos filtrados por vehículo (el foco de banda
+        // en ellos se expresa como resaltado por color), el visual de VEHÍCULO usa los filtrados
+        // por banda, y los KPIs / totales de fila usan AMBOS focos combinados.
+        var datosVeh = _vehiculoFocus is null ? _filas : _filas.Where(f => f.TipoVehiculo == _vehiculoFocus).ToList();
+        var datosBanda = _bandaFocus is null ? _filas : _filas.Where(f => f.Banda == _bandaFocus).ToList();
+        var datos = _bandaFocus is null ? datosVeh : datosVeh.Where(f => f.Banda == _bandaFocus).ToList();
+
+        // ── KPIs: sobre el dataset con ambos focos ──
+        _totalMetrica = datos.Sum(val);
+        _diasConActividad = datos.Select(f => f.Fecha).Distinct().Count();
         _promedioDiario = _diasConActividad > 0 ? (int)Math.Round((double)_totalMetrica / _diasConActividad) : 0;
 
         // Banda más cargada
-        var porBanda = _filas.GroupBy(f => f.Banda)
+        var porBanda = datos.GroupBy(f => f.Banda)
             .Select(g => (Banda: g.Key, Total: g.Sum(val)))
             .OrderByDescending(x => x.Total).ToList();
         _bandaMasCargada = porBanda.FirstOrDefault().Banda ?? "—";
         _maxBanda = porBanda.FirstOrDefault().Total;
 
         // Vehículo líder
-        var porVeh = _filas.GroupBy(f => f.TipoVehiculo)
+        var porVeh = datos.GroupBy(f => f.TipoVehiculo)
             .Select(g => (Veh: g.Key, Total: g.Sum(val)))
             .OrderByDescending(x => x.Total).ToList();
         _vehiculoLider = porVeh.FirstOrDefault().Veh ?? "—";
         _maxVehiculo = porVeh.FirstOrDefault().Total;
 
-        // Pivote
-        _pivFechas = _filas.Select(f => f.Fecha).Distinct().OrderBy(d => d).ToList();
-        _pivMap = _filas
+        // ── Pivote: celdas y totales de columna con foco de VEHÍCULO (las columnas de banda
+        //    quedan todas visibles — el foco de banda se expresa atenuando por CSS); las filas,
+        //    el total de fila y el gran total llevan AMBOS focos (como los KPIs) ──
+        _pivFechas = datos.Select(f => f.Fecha).Distinct().OrderBy(d => d).ToList();
+        _pivMap = datosVeh
             .GroupBy(f => (f.Fecha, f.Banda))
             .ToDictionary(g => g.Key, g => g.Sum(val));
-        _pivTotFila = _filas.GroupBy(f => f.Fecha).ToDictionary(g => g.Key, g => g.Sum(val));
-        _pivTotCol = _filas.GroupBy(f => f.Banda).ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivTotFila = datos.GroupBy(f => f.Fecha).ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivTotCol = datosVeh.GroupBy(f => f.Banda).ToDictionary(g => g.Key, g => g.Sum(val));
         _granTotal = _totalMetrica;
 
-        // Gráfico de barras apiladas (solo las bandas con datos, en orden fijo)
+        // ── Barras apiladas: las series son las bandas del dataset COMPLETO (cantidad estable
+        //    para poder actualizar en el lugar, sin remontar) con valores del foco de vehículo.
+        //    El eje de fechas NO se recorta con el foco de banda (highlight, no filter). ──
         _bandasPresentes = _bandas.Where(b => _filas.Any(f => f.Banda == b)).ToList();
-        _chartData = _pivFechas
+        var chartFechas = datosVeh.Select(f => f.Fecha).Distinct().OrderBy(d => d).ToList();
+        _chartData = chartFechas
             .SelectMany(fecha => _bandasPresentes.Select(banda =>
                 new ChartItem(fecha.ToString("dd/MM"), banda, PivVal(fecha, banda))))
             .ToList();
 
-        // Donuts — banda en orden fijo (colores estables), vehículo por volumen
-        _donutBanda = _bandas
-            .Where(b => porBanda.Any(x => x.Banda == b))
-            .Select(b => new DonutItem(b, porBanda.First(x => x.Banda == b).Total))
+        // ── Donuts: categorías SIEMPRE completas y en orden estable (con 0 si el foco de la
+        //    otra dimensión las vacía) — así el update en el lugar no reordena las porciones ──
+        _donutBanda = _bandasPresentes
+            .Select(b => new DonutItem(b, PivTotCol(b)))
             .ToList();
-        _donutVehiculo = porVeh.Select(x => new DonutItem(x.Veh, x.Total)).ToList();
 
-        _chartsKey = Guid.NewGuid();   // fuerza el remount de los ApexChart con los datos nuevos
+        // Vehículos: ranking por volumen del dataset COMPLETO (color y orden estables) con
+        // valores del foco de banda.
+        var rankingVeh = _filas.GroupBy(f => f.TipoVehiculo)
+            .Select(g => (Veh: g.Key, Total: g.Sum(val)))
+            .OrderByDescending(x => x.Total).ThenBy(x => x.Veh).ToList();
+        _colorPorVehiculo = rankingVeh
+            .Select((x, i) => (x.Veh, i))
+            .ToDictionary(t => t.Veh, t => t.i < _paletteVeh.Count ? _paletteVeh[t.i] : "#94A3B8");
+        var vehValores = datosBanda.GroupBy(f => f.TipoVehiculo).ToDictionary(g => g.Key, g => g.Sum(val));
+        _donutVehiculo = rankingVeh
+            .Select(x => new DonutItem(x.Veh, vehValores.TryGetValue(x.Veh, out var v) ? v : 0))
+            .ToList();
+
+        // Colores de cada gráfico, atenuando lo no enfocado (efecto highlight de Power BI).
+        _optsBar.Colors = _bandasPresentes.Select(ColorFocoBanda).ToList();
+        _optsPieBanda.Colors = _donutBanda.Select(d => ColorFocoBanda(d.Label)).ToList();
+        _optsPieVeh.Colors = _donutVehiculo.Select(d => ColorFocoVeh(d.Label)).ToList();
     }
 
     private int PivVal(DateOnly f, string b) => _pivMap.TryGetValue((f, b), out var v) ? v : 0;
     private int PivTotFila(DateOnly f) => _pivTotFila.TryGetValue(f, out var v) ? v : 0;
     private int PivTotCol(string b) => _pivTotCol.TryGetValue(b, out var v) ? v : 0;
+
+    // ── Cross-filter: toggles y actualización de los charts ──
+
+    private async Task ToggleFocoBanda(string banda)
+    {
+        // Toggle: clic en la misma banda enfocada la quita.
+        _bandaFocus = _bandaFocus == banda ? null : banda;
+        Recalcular();                 // recalcula KPIs/tabla/valores/colores (en memoria, sin re-query)
+        await ActualizarGraficos();   // repinta los charts EN SU LUGAR (sin remontar → sin parpadeo)
+    }
+
+    private async Task ToggleFocoVehiculo(string veh)
+    {
+        _vehiculoFocus = _vehiculoFocus == veh ? null : veh;
+        Recalcular();
+        await ActualizarGraficos();
+    }
+
+    private Task LimpiarFocoBanda() => ToggleFocoBanda(_bandaFocus ?? "");
+    private Task LimpiarFocoVehiculo() => ToggleFocoVehiculo(_vehiculoFocus ?? "");
+
+    // A diferencia de Reservas por fecha y servicio (donde el foco solo cambiaba COLORES),
+    // acá el foco de una dimensión también cambia los VALORES de los otros gráficos →
+    // UpdateOptions (colores) + UpdateSeries (valores) en los tres.
+    private async Task ActualizarGraficos()
+    {
+        if (_barChart is not null)
+        {
+            await _barChart.UpdateOptionsAsync(true, true, false);
+            await _barChart.UpdateSeriesAsync(true);
+        }
+        if (_pieBandaChart is not null)
+        {
+            await _pieBandaChart.UpdateOptionsAsync(true, true, false);
+            await _pieBandaChart.UpdateSeriesAsync(true);
+        }
+        if (_pieVehChart is not null)
+        {
+            await _pieVehChart.UpdateOptionsAsync(true, true, false);
+            await _pieVehChart.UpdateSeriesAsync(true);
+        }
+    }
+
+    // ApexCharts entrega el punto clickeado en e.DataPoint; sus Items son los TItem agrupados
+    // en ese punto. En el apilado cada serie ya viene filtrada por banda → el primer item trae
+    // la banda de la serie clickeada.
+    private async Task OnBarSelection(SelectedData<ChartItem> e)
+    {
+        var banda = e.DataPoint?.Items?.FirstOrDefault()?.Banda;
+        if (banda is not null) await ToggleFocoBanda(banda);
+    }
+
+    // Click en un ítem de la leyenda del apilado = mismo foco que clickear la serie
+    // (el ToggleDataSeries de ApexCharts está apagado para que no oculte la serie).
+    private async Task OnBarLegendClicked(LegendClicked<ChartItem> e)
+    {
+        var banda = e.Series?.Name;
+        if (!string.IsNullOrEmpty(banda)) await ToggleFocoBanda(banda);
+    }
+
+    private async Task OnPieBandaSelection(SelectedData<DonutItem> e)
+    {
+        var banda = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (banda is not null) await ToggleFocoBanda(banda);
+    }
+
+    private async Task OnPieBandaLegendClicked(LegendClicked<DonutItem> e)
+    {
+        var banda = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (banda is not null) await ToggleFocoBanda(banda);
+    }
+
+    private async Task OnPieVehSelection(SelectedData<DonutItem> e)
+    {
+        var veh = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (veh is not null) await ToggleFocoVehiculo(veh);
+    }
+
+    private async Task OnPieVehLegendClicked(LegendClicked<DonutItem> e)
+    {
+        var veh = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (veh is not null) await ToggleFocoVehiculo(veh);
+    }
 
     // ── Drill-down: los viajes uno por uno detrás del número ──
 
@@ -453,14 +658,19 @@ else
         return _detalle;
     }
 
+    // Los drills respetan el foco activo: el número visible en la celda/fila corresponde al
+    // subconjunto enfocado y el detalle tiene que mostrar EXACTAMENTE esos viajes.
+    private bool PasaFocoVeh(BandaHorariaDetalleRow d) => _vehiculoFocus is null || d.TipoVehiculo == _vehiculoFocus;
+    private bool PasaFocoBanda(BandaHorariaDetalleRow d) => _bandaFocus is null || d.Banda == _bandaFocus;
+    private string SufijoFocoVeh => _vehiculoFocus is null ? "" : $" · {_vehiculoFocus}";
+
     private Task AbrirDetalleCelda(DateOnly f, string banda) =>
-        AbrirDetalle(d => d.Reserva.Fecha == f && d.Banda == banda, $"Banda {banda} — {FmtFecha(f)}");
+        AbrirDetalle(d => d.Reserva.Fecha == f && d.Banda == banda && PasaFocoVeh(d),
+                     $"Banda {banda} — {FmtFecha(f)}{SufijoFocoVeh}");
 
     private Task AbrirDetalleDia(DateOnly f) =>
-        AbrirDetalle(d => d.Reserva.Fecha == f, $"Todas las bandas — {FmtFecha(f)}");
-
-    private Task AbrirDetalleBanda(string banda) =>
-        AbrirDetalle(d => d.Banda == banda, $"Banda {banda} — {PeriodoTxt}");
+        AbrirDetalle(d => d.Reserva.Fecha == f && PasaFocoBanda(d) && PasaFocoVeh(d),
+                     $"{(_bandaFocus is null ? "Todas las bandas" : $"Banda {_bandaFocus}")} — {FmtFecha(f)}{SufijoFocoVeh}");
 
     private async Task AbrirDetalle(Func<BandaHorariaDetalleRow, bool> filtro, string subtitulo)
     {

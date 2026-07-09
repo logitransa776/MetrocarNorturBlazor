@@ -10,7 +10,7 @@ namespace MetroCarSysBlazor.Services;
 /// de los models de FoxPro (80+ propiedades por tabla), y proyecta
 /// directamente a DTOs tipados.
 /// </summary>
-public class ReportService
+public partial class ReportService
 {
     private readonly IDbContextFactory<NorturDbContext> _dbFactory;
     private readonly IMemoryCache _cache;
@@ -718,6 +718,19 @@ public class ReportService
         _cache.Remove("clientes-lista");
         _cache.Remove("vehiculos-lista");
         _cache.Remove("usuarios-lista");
+        _cache.Remove("usuarios-ultima-sesion");
+        _cache.Remove("siniestros-lista");
+        _cache.Remove("fleteros-lista");
+        _cache.Remove("tipos-vehiculo-lista");
+        // Módulo Reservas: catálogos Operadores / Grupos / Destinos.
+        _cache.Remove("operadores-lista");
+        _cache.Remove("destinos-lista");
+        _cache.Remove("destino-localidades");
+        _cache.Remove("plantillas-resumen");   // Mantenimiento de Plantillas
+        for (int f = 0; f <= 2; f++) _cache.Remove($"grupos-lista|{f}");   // los 3 filtros del combo
+        // Reservas Especiales (grilla 'T') se cachea por filtros ("resesp|..."): se deja expirar por TTL.
+        // Odómetros y Agenda de Vencimientos no se cachean por lista (dependen de filtros);
+        // sus claves ("odometros|...", "agenda-venc|...") se dejan expirar por TTL.
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -809,6 +822,194 @@ public class ReportService
             FModify = rd.IsDBNull(7) ? null : DateOnly.FromDateTime(rd.GetDateTime(7)),
             FDelete = rd.IsDBNull(8) ? null : DateOnly.FromDateTime(rd.GetDateTime(8)),
         };
+    }
+
+    // ── Sesiones (historial de ingresos/egresos — tabla usuario_sesion) ──────────
+
+    /// <summary>
+    /// Última sesión de CADA usuario, indexada por id_usuario (para la grilla del ABM:
+    /// último ingreso, última IP, y si está conectado ahora). Una sola query con la fila
+    /// de f_inicio más reciente por usuario. Si la tabla no existe aún (server sin migrar),
+    /// devuelve un diccionario vacío en vez de romper la grilla.
+    /// </summary>
+    public async Task<Dictionary<int, UltimaSesionRow>> GetUltimasSesionesAsync()
+    {
+        return await _cache.GetOrCreateAsync("usuarios-ultima-sesion", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            var result = new Dictionary<int, UltimaSesionRow>();
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            // Tabla nueva: si no existe en este server, no fallar (server viejo sin migrar).
+            using (var chk = conn.CreateCommand())
+            {
+                chk.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_name = 'usuario_sesion'";
+                if ((int)(await chk.ExecuteScalarAsync() ?? 0) == 0)
+                    return result;
+            }
+
+            using var cmd = conn.CreateCommand();
+            // La última fila por usuario (mayor f_inicio). ROW_NUMBER es válido en SQL 2012.
+            cmd.CommandText = """
+                SELECT id_usuario, f_inicio, f_fin, activa,
+                       RTRIM(ISNULL(ip, '')), RTRIM(ISNULL(hostname, ''))
+                FROM (
+                    SELECT id_usuario, f_inicio, f_fin, activa, ip, hostname,
+                           ROW_NUMBER() OVER (PARTITION BY id_usuario ORDER BY f_inicio DESC, id DESC) AS rn
+                    FROM usuario_sesion
+                    WHERE _deleted = 0
+                ) t
+                WHERE rn = 1
+                """;
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                var idu = rd.GetInt32(0);
+                result[idu] = new UltimaSesionRow(
+                    idu,
+                    rd.IsDBNull(1) ? null : rd.GetDateTime(1),
+                    rd.IsDBNull(2) ? null : rd.GetDateTime(2),
+                    !rd.IsDBNull(3) && rd.GetBoolean(3),
+                    rd.GetString(4),
+                    rd.GetString(5));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>
+    /// Historial completo de sesiones de un usuario (para la ficha del ABM), más reciente
+    /// primero. Cada fila = un ingreso, con su egreso (f_fin) y el detalle de IP/host/terminal.
+    /// </summary>
+    public async Task<List<SesionRow>> GetSesionesUsuarioAsync(int idUsuario, int tope = 100)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        using (var chk = conn.CreateCommand())
+        {
+            chk.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_name = 'usuario_sesion'";
+            if ((int)(await chk.ExecuteScalarAsync() ?? 0) == 0)
+                return new();
+        }
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT TOP {tope}
+                   f_inicio, f_fin, activa,
+                   RTRIM(ISNULL(ip, '')), RTRIM(ISNULL(hostname, '')),
+                   ISNULL(terminal, 0), RTRIM(ISNULL(motivo_fin, ''))
+            FROM usuario_sesion
+            WHERE id_usuario = @id AND _deleted = 0
+            ORDER BY f_inicio DESC, id DESC
+            """;
+        var pId = cmd.CreateParameter();
+        pId.ParameterName = "@id";
+        pId.Value = idUsuario;
+        cmd.Parameters.Add(pId);
+
+        var result = new List<SesionRow>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+        {
+            result.Add(new SesionRow(
+                rd.IsDBNull(0) ? null : rd.GetDateTime(0),
+                rd.IsDBNull(1) ? null : rd.GetDateTime(1),
+                !rd.IsDBNull(2) && rd.GetBoolean(2),
+                rd.GetString(3), rd.GetString(4),
+                rd.GetInt32(5), rd.GetString(6)));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Bitácora de accesos (tabla usuarios_logs) para la pantalla de Auditoría de accesos.
+    /// Filtra por rango de fecha (obligatorio, acota el volumen), opcionalmente por usuario y
+    /// por tipo de evento (lista vacía = todos). Devuelve un evento por fila, más reciente
+    /// primero. Si la tabla no existe (server sin migrar), devuelve vacío.
+    /// </summary>
+    public async Task<List<AccesoLogRow>> GetAuditoriaAccesosAsync(
+        DateOnly desde, DateOnly hasta, string? usuario, IEnumerable<string>? eventos, int tope = 5000)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        using (var chk = conn.CreateCommand())
+        {
+            chk.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_name = 'usuarios_logs'";
+            if ((int)(await chk.ExecuteScalarAsync() ?? 0) == 0)
+                return new();
+        }
+
+        // Filtro de eventos (lista blanca de valores conocidos → seguro para concatenar).
+        var permitidos = new[] { "LOGIN", "LOGOUT", "EXPIRADA", "VENCIDA", "LOGIN_FALLIDO" };
+        var evFiltro = (eventos ?? Enumerable.Empty<string>())
+            .Select(e => (e ?? "").Trim().ToUpperInvariant())
+            .Where(e => permitidos.Contains(e))
+            .Distinct().ToList();
+        var evClause = evFiltro.Count > 0
+            ? " AND evento IN (" + string.Join(",", evFiltro.Select(e => $"'{e}'")) + ")"
+            : "";
+        var usuClause = string.IsNullOrWhiteSpace(usuario)
+            ? "" : $" AND usuario = '{usuario.Trim().Replace("'", "''")}'";
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT TOP {tope}
+                   id, session_id, evento, f_evento,
+                   id_usuario, RTRIM(ISNULL(usuario, '')),
+                   RTRIM(ISNULL(nivel, '')), RTRIM(ISNULL(acceso, '')),
+                   RTRIM(ISNULL(ip, '')), RTRIM(ISNULL(hostname, '')), RTRIM(ISNULL(motivo, ''))
+            FROM usuarios_logs
+            WHERE _deleted = 0
+              AND f_evento >= '{desde:yyyy-MM-dd}' AND f_evento < DATEADD(day, 1, '{hasta:yyyy-MM-dd}')
+              {usuClause}{evClause}
+            ORDER BY f_evento DESC, id DESC
+            """;
+
+        var result = new List<AccesoLogRow>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+        {
+            result.Add(new AccesoLogRow(
+                rd.GetInt32(0),
+                rd.IsDBNull(1) ? (Guid?)null : rd.GetGuid(1),
+                rd.GetString(2),
+                rd.GetDateTime(3),
+                rd.IsDBNull(4) ? (int?)null : rd.GetInt32(4),
+                rd.GetString(5), rd.GetString(6), rd.GetString(7),
+                rd.GetString(8), rd.GetString(9), rd.GetString(10)));
+        }
+        return result;
+    }
+
+    /// <summary>Nombres de usuario que aparecen en la bitácora (para el combo de filtro
+    /// de la pantalla de Auditoría). Ordenados alfabéticamente.</summary>
+    public async Task<List<string>> GetUsuariosDeLogsAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using (var chk = conn.CreateCommand())
+        {
+            chk.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_name = 'usuarios_logs'";
+            if ((int)(await chk.ExecuteScalarAsync() ?? 0) == 0)
+                return new();
+        }
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT DISTINCT RTRIM(ISNULL(usuario,'')) FROM usuarios_logs WHERE _deleted = 0 ORDER BY 1";
+        var result = new List<string>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+        {
+            var u = rd.GetString(0);
+            if (!string.IsNullOrWhiteSpace(u)) result.Add(u);
+        }
+        return result;
     }
 
     /// <summary>
@@ -1609,6 +1810,572 @@ public class ReportService
         }) ?? new();
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Informe "Reservas por cliente" (FoxPro: viaje_analisis.scx, menú Utilitarios).
+    // Cuenta viajes de transportación (origen='T') por cliente × mes × tipo de unidad.
+    // Plano completo: docs/PlanoFoxPro/reservas/RESERVAS_INFORME_POR_CLIENTE.md
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Los 3 tipos del informe por cliente, en orden fijo de columnas/series.</summary>
+    public static readonly IReadOnlyList<string> TiposReservaCliente =
+        new[] { "PROPIO", "CONTRATADO", "SIN REALIZAR" };
+
+    // Clasificación del FoxPro por el interno de la unidad asignada al viaje:
+    // 0 (o NULL en la réplica) = sin unidad todavía; <1000 = flota propia; >=1000 = fletero.
+    private const string TipoReservaClienteCaseSql = """
+        CASE WHEN ISNULL(v.interno, 0) = 0 THEN 'SIN REALIZAR'
+             WHEN v.interno < 1000 THEN 'PROPIO'
+             ELSE 'CONTRATADO' END
+        """;
+
+    /// <summary>Catálogo de motivos de cancelación (viaje_motivo_cancela, 6 filas).</summary>
+    public async Task<List<MotivoCancelaDto>> GetMotivosCancelacionAsync()
+    {
+        return await _cache.GetOrCreateAsync("motivos-cancela", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT id, RTRIM(ISNULL(motivo, '')) AS motivo
+                FROM viaje_motivo_cancela
+                WHERE _deleted = 0
+                ORDER BY id
+                """;
+            var result = new List<MotivoCancelaDto>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                result.Add(new MotivoCancelaDto(Convert.ToInt32(reader.GetValue(0)), reader.GetString(1)));
+            return result;
+        }) ?? new();
+    }
+
+    // WHERE compartido del informe por cliente (agregado + detalle). Fiel al FoxPro en lo
+    // esencial (origen='T'); las mejoras acordadas con el usuario (03/07/2026):
+    //  - incluirInterno: el cliente de parametro.id_cliente (NORTUR, ~30% del volumen acá)
+    //    se excluye por defecto — el FoxPro lo incluía.
+    //  - canceladas=false → viajes NO cancelados (ISNULL(id_motivo,0)=0 — en la réplica el
+    //    campo viene NULL donde el DBF tenía 0).
+    //  - canceladas=true → SIEMPRE respeta el período (el FoxPro barría todo el histórico) y
+    //    filtra por los motivos elegidos (lista vacía = todos los motivos, no solo el 2).
+    private static string WhereReservasPorCliente(
+        DateOnly desde,
+        DateOnly hasta,
+        bool incluirInterno,
+        bool canceladas,
+        IReadOnlyCollection<int> motivosSel)
+    {
+        var where = new List<string>
+        {
+            "v._deleted = 0",
+            $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'",
+            "v.origen = 'T'"
+        };
+        if (!incluirInterno)
+            where.Add("v.id_cliente <> (SELECT TOP 1 RTRIM(ISNULL(id_cliente, '')) FROM parametro)");
+        if (!canceladas)
+            where.Add("ISNULL(v.id_motivo, 0) = 0");
+        else if (motivosSel.Count > 0)
+            where.Add($"v.id_motivo IN ({string.Join(",", motivosSel)})");
+        else
+            where.Add("ISNULL(v.id_motivo, 0) > 0");
+        return string.Join(" AND ", where);
+    }
+
+    // Vista agregada: viajes + pax por mes × cliente × tipo. Agrupa por id_cliente (no por el
+    // nombre desnormalizado del FoxPro: un cliente renombrado partía en dos filas del pivot)
+    // y muestra el nombre más reciente. Trae ambas métricas para el toggle Viajes↔Pax en
+    // memoria, sin re-query.
+    public async Task<List<ReservaClienteRow>> GetReservasPorClienteAsync(
+        DateOnly desde,
+        DateOnly hasta,
+        bool incluirInterno,
+        bool canceladas,
+        IReadOnlyCollection<int> motivosSel)
+    {
+        var motKey = motivosSel.Count == 0 ? "all" : string.Join(",", motivosSel.OrderBy(x => x));
+        var key = $"rpc|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{incluirInterno}|{canceladas}|{motKey}";
+
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            // Mes 'yyyy-MM' con CONVERT(char(7), ..., 120) — SQL 2012-friendly.
+            var sql = $"""
+                SELECT
+                    CONVERT(char(7), v.f_reserva, 120)            AS Mes,
+                    RTRIM(ISNULL(v.id_cliente, ''))               AS IdCliente,
+                    MAX(COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cli)), ''), RTRIM(v.id_cliente), '')) AS Cliente,
+                    {TipoReservaClienteCaseSql}                   AS Tipo,
+                    COUNT(*)                                      AS Viajes,
+                    SUM(COALESCE(v.pax, 0))                       AS Pax
+                FROM viaje v
+                WHERE {WhereReservasPorCliente(desde, hasta, incluirInterno, canceladas, motivosSel)}
+                GROUP BY CONVERT(char(7), v.f_reserva, 120), RTRIM(ISNULL(v.id_cliente, '')),
+                    {TipoReservaClienteCaseSql}
+                ORDER BY Mes, IdCliente
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+
+            var result = new List<ReservaClienteRow>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                result.Add(new ReservaClienteRow(
+                    reader.GetString(0),
+                    reader.GetString(1).Trim(),
+                    reader.GetString(2).Trim(),
+                    reader.GetString(3),
+                    reader.GetInt32(4),
+                    reader.IsDBNull(5) ? 0 : reader.GetInt32(5)
+                ));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    // Detalle uno-por-uno para el drill-down y el Excel. Reusa ReservaFsDetalleRow para reusar
+    // ReservasFsDetalleDialog + Zoom del Viaje. Lleva mes/cliente/tipo para filtrar en memoria
+    // y el motivo de cancelación (para la hoja Viajes del Excel en modo canceladas).
+    public async Task<List<ReservaClienteDetalleRow>> GetReservasPorClienteDetalleAsync(
+        DateOnly desde,
+        DateOnly hasta,
+        bool incluirInterno,
+        bool canceladas,
+        IReadOnlyCollection<int> motivosSel)
+    {
+        var motKey = motivosSel.Count == 0 ? "all" : string.Join(",", motivosSel.OrderBy(x => x));
+        var key = $"rpcdet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{incluirInterno}|{canceladas}|{motKey}";
+
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            // viaje.id_viaje y viaje.pax son int (no bigint) — leer con GetInt32.
+            var sql = $"""
+                SELECT
+                    v.id_viaje                                            AS IdViaje,
+                    v.f_reserva                                           AS Fecha,
+                    CONVERT(char(7), v.f_reserva, 120)                    AS Mes,
+                    RTRIM(ISNULL(v.id_cliente, ''))                       AS IdCliente,
+                    {TipoReservaClienteCaseSql}                           AS Tipo,
+                    COALESCE(CONVERT(varchar(5), v.hs_inicio, 108), '')   AS Hora,
+                    COALESCE(s.nombre, v.id_servici, '')                  AS Servicio,
+                    COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cli)), ''), v.id_cliente, '') AS Cliente,
+                    LTRIM(RTRIM(COALESCE(v.d_destino, ''))) +
+                        CASE WHEN LTRIM(RTRIM(COALESCE(v.h_destino, ''))) <> ''
+                             THEN ' a ' + LTRIM(RTRIM(v.h_destino)) ELSE '' END AS Recorrido,
+                    COALESCE(v.pax, 0)                                    AS Pax,
+                    COALESCE(v.estado_via, '')                            AS Estado,
+                    COALESCE(v.nombre_cho, '')                            AS Chofer,
+                    v.interno                                             AS Interno,
+                    COALESCE(v.origen, '')                                AS Origen,
+                    COALESCE(v.grupo, '')                                 AS Grupo,
+                    RTRIM(ISNULL(m.motivo, ''))                           AS Motivo
+                FROM viaje v
+                LEFT JOIN servicio s ON v.id_servici = s.id_servici
+                LEFT JOIN viaje_motivo_cancela m ON v.id_motivo = m.id
+                WHERE {WhereReservasPorCliente(desde, hasta, incluirInterno, canceladas, motivosSel)}
+                ORDER BY v.f_reserva, v.hs_inicio, v.id_viaje
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+
+            var result = new List<ReservaClienteDetalleRow>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                result.Add(new ReservaClienteDetalleRow(
+                    Mes: reader.GetString(2),
+                    IdCliente: reader.GetString(3).Trim(),
+                    Tipo: reader.GetString(4),
+                    Motivo: reader.GetString(15),
+                    Reserva: new ReservaFsDetalleRow(
+                        IdViaje: reader.GetInt32(0),
+                        Fecha: DateOnly.FromDateTime(reader.GetDateTime(1)),
+                        Hora: reader.GetString(5),
+                        CodServicio: "",
+                        Servicio: reader.GetString(6).Trim(),
+                        Cliente: reader.GetString(7).Trim(),
+                        Recorrido: reader.GetString(8).Trim(),
+                        Pax: reader.GetInt32(9),
+                        Estado: reader.GetString(10).Trim(),
+                        Chofer: reader.GetString(11).Trim(),
+                        Interno: reader.IsDBNull(12) ? null : Convert.ToInt32(reader.GetValue(12)),
+                        Origen: reader.GetString(13).Trim(),
+                        Grupo: reader.GetString(14).Trim())));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Informe "Viajes por Choferes" (menú Utilitarios → Viajes por Choferes del FoxPro,
+    // form viaje_analisis_chofer.scx). Cuenta viajes por chofer × día con desglose
+    // turismo (origen='T') / cabecera (origen='P'), km, horario del día y duración.
+    // Réplica mejorada: rango de fechas libre (el FoxPro filtraba un solo mes) y switch
+    // Propios/Contratados (el FoxPro fijaba tipo_chofe='PROPIO').
+    // Plano: docs/PlanoFoxPro/vehiculos-choferes/VIAJES_POR_CHOFER.md
+    //
+    // Trampas de la réplica SQL (confirmadas contra sys.columns 04/07/2026):
+    //   str_f_reserva→str_f_rese, tipo_chofer→tipo_chofe, estado_viaje→estado_via,
+    //   id_vehiculo→id_vehicu2 (¡dominio!), id_vehiculo_tipo→id_vehicul (¡el tipo!).
+    //   El FoxPro filtra id_motivo=0; en la réplica viene NULL → ISNULL(id_motivo,0)=0.
+    //   El FoxPro excluye tipo_chofe vacío al pedir ='PROPIO'; con "incluir contratados"
+    //   sumamos también los CONTRATADO pero seguimos descartando el tipo vacío (35k filas
+    //   sin clasificar) para no inflar con datos sin unidad.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // WHERE compartido del informe de choferes (agregado + detalle). incluirInterno suma el
+    // cliente NORTUR (parametro.id_cliente); incluirContratados suma tipo_chofe='CONTRATADO'.
+    private static string WhereViajesPorChofer(
+        DateOnly desde, DateOnly hasta, bool incluirInterno, bool incluirContratados)
+    {
+        var where = new List<string>
+        {
+            "v._deleted = 0",
+            $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'",
+            "v.estado_via <> 'CANCELADO'",
+            "ISNULL(v.interno, 0) > 0",
+            "ISNULL(v.id_motivo, 0) = 0",
+            "NULLIF(LTRIM(RTRIM(v.id_chofer)), '') IS NOT NULL"
+        };
+        // Solo choferes con tipo clasificado (PROPIO / CONTRATADO); nunca el tipo vacío.
+        where.Add(incluirContratados
+            ? "v.tipo_chofe IN ('PROPIO', 'CONTRATADO')"
+            : "v.tipo_chofe = 'PROPIO'");
+        if (!incluirInterno)
+            where.Add("v.id_cliente <> (SELECT TOP 1 RTRIM(ISNULL(id_cliente, '')) FROM parametro)");
+        return string.Join(" AND ", where);
+    }
+
+    /// <summary>
+    /// Agregado por chofer × día: viajes, turismo, cabecera, km, primer/último horario y pax.
+    /// La fila "franco" (día sin viajes entre el primer y último día trabajado del chofer) se
+    /// calcula en memoria en la página, como hacía el form FoxPro.
+    /// </summary>
+    public async Task<List<ViajesChoferRow>> GetViajesPorChoferAsync(
+        DateOnly desde, DateOnly hasta, bool incluirInterno, bool incluirContratados)
+    {
+        var key = $"vpc|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{incluirInterno}|{incluirContratados}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            var sql = $"""
+                SELECT
+                    RTRIM(ISNULL(v.id_chofer, ''))                        AS IdChofer,
+                    MAX(COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cho)), ''),
+                        RTRIM(ISNULL(c.nombre, '')), RTRIM(v.id_chofer))) AS Chofer,
+                    MAX(RTRIM(ISNULL(c.localidad, '')))                   AS Localidad,
+                    MAX(RTRIM(ISNULL(v.tipo_chofe, '')))                  AS Tipo,
+                    v.f_reserva                                           AS Fecha,
+                    COUNT(*)                                              AS Viajes,
+                    SUM(CASE WHEN v.origen = 'T' THEN 1 ELSE 0 END)       AS Turismo,
+                    SUM(CASE WHEN v.origen = 'P' THEN 1 ELSE 0 END)       AS Cabecera,
+                    SUM(CAST(ISNULL(v.km, 0) AS bigint))                  AS Km,
+                    SUM(COALESCE(v.pax, 0))                               AS Pax,
+                    CONVERT(varchar(5), MIN(v.hs_inicio), 108)            AS HoraInicio,
+                    CONVERT(varchar(5), MAX(v.hs_fin), 108)               AS HoraFin
+                FROM viaje v
+                LEFT JOIN chofer c ON c.id_chofer = v.id_chofer AND c._deleted = 0
+                WHERE {WhereViajesPorChofer(desde, hasta, incluirInterno, incluirContratados)}
+                GROUP BY RTRIM(ISNULL(v.id_chofer, '')), v.f_reserva
+                ORDER BY IdChofer, v.f_reserva
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            var result = new List<ViajesChoferRow>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                result.Add(new ViajesChoferRow(
+                    IdChofer: reader.GetString(0).Trim(),
+                    Chofer: reader.GetString(1).Trim(),
+                    Localidad: reader.GetString(2).Trim(),
+                    Tipo: reader.GetString(3).Trim(),
+                    Fecha: DateOnly.FromDateTime(reader.GetDateTime(4)),
+                    Viajes: reader.GetInt32(5),
+                    Turismo: reader.GetInt32(6),
+                    Cabecera: reader.GetInt32(7),
+                    Km: reader.IsDBNull(8) ? 0 : Convert.ToInt32(reader.GetValue(8)),
+                    Pax: reader.IsDBNull(9) ? 0 : reader.GetInt32(9),
+                    HoraInicio: reader.IsDBNull(10) ? "" : reader.GetString(10),
+                    HoraFin: reader.IsDBNull(11) ? "" : reader.GetString(11)));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Detalle uno-por-uno para el drill-down/Excel del informe de choferes. IdChofer +
+    /// Fecha para filtrar en memoria; el resto reusa ReservaFsDetalleRow (Zoom del Viaje).</summary>
+    public async Task<List<ViajesChoferDetalleRow>> GetViajesPorChoferDetalleAsync(
+        DateOnly desde, DateOnly hasta, bool incluirInterno, bool incluirContratados)
+    {
+        var key = $"vpcdet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{incluirInterno}|{incluirContratados}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            var sql = $"""
+                SELECT
+                    v.id_viaje                                            AS IdViaje,
+                    v.f_reserva                                           AS Fecha,
+                    RTRIM(ISNULL(v.id_chofer, ''))                        AS IdChofer,
+                    COALESCE(CONVERT(varchar(5), v.hs_inicio, 108), '')   AS Hora,
+                    COALESCE(s.nombre, v.id_servici, '')                  AS Servicio,
+                    COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cli)), ''), v.id_cliente, '') AS Cliente,
+                    LTRIM(RTRIM(COALESCE(v.d_destino, ''))) +
+                        CASE WHEN LTRIM(RTRIM(COALESCE(v.h_destino, ''))) <> ''
+                             THEN ' a ' + LTRIM(RTRIM(v.h_destino)) ELSE '' END AS Recorrido,
+                    COALESCE(v.pax, 0)                                    AS Pax,
+                    COALESCE(v.estado_via, '')                            AS Estado,
+                    COALESCE(v.nombre_cho, '')                            AS Chofer,
+                    v.interno                                             AS Interno,
+                    COALESCE(v.origen, '')                                AS Origen,
+                    COALESCE(v.grupo, '')                                 AS Grupo
+                FROM viaje v
+                LEFT JOIN servicio s ON v.id_servici = s.id_servici
+                WHERE {WhereViajesPorChofer(desde, hasta, incluirInterno, incluirContratados)}
+                ORDER BY v.f_reserva, v.hs_inicio, v.id_viaje
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            var result = new List<ViajesChoferDetalleRow>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                result.Add(new ViajesChoferDetalleRow(
+                    IdChofer: reader.GetString(2).Trim(),
+                    Fecha: DateOnly.FromDateTime(reader.GetDateTime(1)),
+                    Reserva: new ReservaFsDetalleRow(
+                        IdViaje: reader.GetInt32(0),
+                        Fecha: DateOnly.FromDateTime(reader.GetDateTime(1)),
+                        Hora: reader.GetString(3),
+                        CodServicio: "",
+                        Servicio: reader.GetString(4).Trim(),
+                        Cliente: reader.GetString(5).Trim(),
+                        Recorrido: reader.GetString(6).Trim(),
+                        Pax: reader.GetInt32(7),
+                        Estado: reader.GetString(8).Trim(),
+                        Chofer: reader.GetString(9).Trim(),
+                        Interno: reader.IsDBNull(10) ? null : Convert.ToInt32(reader.GetValue(10)),
+                        Origen: reader.GetString(11).Trim(),
+                        Grupo: reader.GetString(12).Trim())));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Informe "Km Unidades vs Servicios" (menú Utilitarios → Km Unidades Vs Servicios,
+    // form viaje_analisis_km.scx). Por vehículo (dominio): km de servicio (SUM viaje.km),
+    // km recorridos reales (odómetro vehiculo_km del/los mes/es del rango), km vacío
+    // (recorrido − servicio), % vacío, días trabajados, promedio vacío/día, consumo.
+    // Réplica mejorada: rango libre + switch Propios/Contratados.
+    // Plano: docs/PlanoFoxPro/vehiculos-choferes/KM_UNIDADES_VS_SERVICIOS.md
+    //
+    // Trampas: el vehículo del viaje es v.id_vehicu2 (dominio); v.id_vehicul es el TIPO.
+    //   El odómetro vehiculo_km.dominio = v.id_vehicu2 = vehiculo.dominio. ano_y_mes es
+    //   'AAAAMM'. km_fin puede venir NULL/0 (mes en curso) → recorrido/vacío se calculan
+    //   solo cuando hay odómetro cerrado; si no, quedan en 0 y % vacío es NULL (—).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static string WhereKmUnidades(
+        DateOnly desde, DateOnly hasta, bool incluirInterno, bool incluirContratados)
+    {
+        var where = new List<string>
+        {
+            "v._deleted = 0",
+            $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'",
+            "v.estado_via <> 'CANCELADO'",
+            "ISNULL(v.interno, 0) > 0",
+            "NULLIF(LTRIM(RTRIM(v.id_vehicu2)), '') IS NOT NULL"
+        };
+        where.Add(incluirContratados
+            ? "v.tipo_chofe IN ('PROPIO', 'CONTRATADO')"
+            : "v.tipo_chofe = 'PROPIO'");
+        if (!incluirInterno)
+            where.Add("v.id_cliente <> (SELECT TOP 1 RTRIM(ISNULL(id_cliente, '')) FROM parametro)");
+        return string.Join(" AND ", where);
+    }
+
+    /// <summary>
+    /// Una fila por vehículo con km de servicio, km recorridos (odómetro), km vacío, % vacío,
+    /// días trabajados, promedio vacío/día y consumo. El odómetro suma los meses del rango.
+    /// </summary>
+    public async Task<List<KmUnidadRow>> GetKmUnidadesAsync(
+        DateOnly desde, DateOnly hasta, bool incluirInterno, bool incluirContratados)
+    {
+        var key = $"kmu|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{incluirInterno}|{incluirContratados}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            // Lista de 'AAAAMM' de los meses que toca el rango, para sumar el odómetro.
+            var meses = new List<string>();
+            for (var d = new DateOnly(desde.Year, desde.Month, 1); d <= hasta; d = d.AddMonths(1))
+                meses.Add($"{d.Year:0000}{d.Month:00}");
+            var mesesIn = string.Join(",", meses.Select(m => $"'{m}'"));
+
+            // Agregado de servicio por dominio (id_vehicu2) + días distintos trabajados.
+            // OUTER APPLY suma el odómetro de esos meses (km_inicio del primer mes, km_fin del
+            // último con dato) y trae el tipo/consumo del vehículo.
+            var sql = $"""
+                SELECT
+                    s.Dominio,
+                    ISNULL(ve.interno, 0)                                 AS Interno,
+                    RTRIM(ISNULL(ve.id_vehicu2, ''))                      AS TipoVeh,
+                    ISNULL(ve.autonomia, 0)                               AS Consumo,
+                    s.Servicios,
+                    s.KmServicio,
+                    s.DiasTrabajados,
+                    ISNULL(od.KmInicial, 0)                               AS KmInicial,
+                    ISNULL(od.KmFinal, 0)                                 AS KmFinal
+                FROM (
+                    SELECT
+                        RTRIM(ISNULL(v.id_vehicu2, ''))                   AS Dominio,
+                        COUNT(*)                                          AS Servicios,
+                        SUM(CAST(ISNULL(v.km, 0) AS bigint))              AS KmServicio,
+                        COUNT(DISTINCT v.f_reserva)                       AS DiasTrabajados
+                    FROM viaje v
+                    WHERE {WhereKmUnidades(desde, hasta, incluirInterno, incluirContratados)}
+                    GROUP BY RTRIM(ISNULL(v.id_vehicu2, ''))
+                ) s
+                LEFT JOIN vehiculo ve ON ve.dominio = s.Dominio AND ve._deleted = 0
+                OUTER APPLY (
+                    SELECT
+                        MIN(CASE WHEN vk.km_inicio > 0 THEN vk.km_inicio END) AS KmInicial,
+                        MAX(CASE WHEN vk.km_fin    > 0 THEN vk.km_fin    END) AS KmFinal
+                    FROM vehiculo_km vk
+                    WHERE vk.dominio = s.Dominio AND vk._deleted = 0
+                      AND vk.ano_y_mes IN ({mesesIn})
+                ) od
+                ORDER BY s.KmServicio DESC
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            var result = new List<KmUnidadRow>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var kmIni = reader.IsDBNull(7) ? 0 : Convert.ToInt64(reader.GetValue(7));
+                var kmFin = reader.IsDBNull(8) ? 0 : Convert.ToInt64(reader.GetValue(8));
+                var kmServicio = reader.IsDBNull(5) ? 0 : Convert.ToInt64(reader.GetValue(5));
+                var recorridoBruto = kmFin - kmIni;
+                // Odómetro confiable solo si está cerrado (km_fin > km_inicio) Y el recorrido es
+                // físicamente coherente: no se puede recorrer MENOS que el km de servicio hecho.
+                // Cuando recorrido < servicio, el odómetro está mal cargado (km_fin apenas por
+                // encima del inicial) → daba % vacío absurdo (-355800%). Mejora sobre el FoxPro,
+                // que calculaba el % igual sin este chequeo. Esas unidades salen como "—".
+                var tieneOdometro = kmFin > kmIni && kmIni > 0 && recorridoBruto >= kmServicio;
+                var recorrido = tieneOdometro ? recorridoBruto : 0;
+                var kmVacio = tieneOdometro ? recorrido - kmServicio : 0;
+
+                result.Add(new KmUnidadRow(
+                    Dominio: reader.GetString(0).Trim(),
+                    Interno: reader.IsDBNull(1) ? 0 : Convert.ToInt32(reader.GetValue(1)),
+                    TipoVeh: reader.GetString(2).Trim(),
+                    Consumo: reader.IsDBNull(3) ? 0 : Convert.ToInt32(reader.GetValue(3)),
+                    Servicios: reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
+                    KmServicio: kmServicio,
+                    KmRecorrido: recorrido,
+                    KmVacio: kmVacio,
+                    DiasTrabajados: reader.IsDBNull(6) ? 0 : reader.GetInt32(6),
+                    TieneOdometro: tieneOdometro));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Detalle uno-por-uno para el drill-down/Excel del informe de km. Dominio para
+    /// filtrar en memoria; el resto reusa ReservaFsDetalleRow (Zoom del Viaje).</summary>
+    public async Task<List<KmUnidadDetalleRow>> GetKmUnidadesDetalleAsync(
+        DateOnly desde, DateOnly hasta, bool incluirInterno, bool incluirContratados)
+    {
+        var key = $"kmudet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{incluirInterno}|{incluirContratados}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            var sql = $"""
+                SELECT
+                    v.id_viaje                                            AS IdViaje,
+                    v.f_reserva                                           AS Fecha,
+                    RTRIM(ISNULL(v.id_vehicu2, ''))                       AS Dominio,
+                    COALESCE(CONVERT(varchar(5), v.hs_inicio, 108), '')   AS Hora,
+                    COALESCE(s.nombre, v.id_servici, '')                  AS Servicio,
+                    COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cli)), ''), v.id_cliente, '') AS Cliente,
+                    LTRIM(RTRIM(COALESCE(v.d_destino, ''))) +
+                        CASE WHEN LTRIM(RTRIM(COALESCE(v.h_destino, ''))) <> ''
+                             THEN ' a ' + LTRIM(RTRIM(v.h_destino)) ELSE '' END AS Recorrido,
+                    COALESCE(v.pax, 0)                                    AS Pax,
+                    COALESCE(v.estado_via, '')                            AS Estado,
+                    COALESCE(v.nombre_cho, '')                            AS Chofer,
+                    v.interno                                             AS Interno,
+                    COALESCE(v.origen, '')                                AS Origen,
+                    COALESCE(v.grupo, '')                                 AS Grupo,
+                    CAST(ISNULL(v.km, 0) AS bigint)                       AS Km
+                FROM viaje v
+                LEFT JOIN servicio s ON v.id_servici = s.id_servici
+                WHERE {WhereKmUnidades(desde, hasta, incluirInterno, incluirContratados)}
+                ORDER BY v.f_reserva, v.hs_inicio, v.id_viaje
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            var result = new List<KmUnidadDetalleRow>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                result.Add(new KmUnidadDetalleRow(
+                    Dominio: reader.GetString(2).Trim(),
+                    Km: reader.IsDBNull(13) ? 0 : Convert.ToInt32(reader.GetValue(13)),
+                    Reserva: new ReservaFsDetalleRow(
+                        IdViaje: reader.GetInt32(0),
+                        Fecha: DateOnly.FromDateTime(reader.GetDateTime(1)),
+                        Hora: reader.GetString(3),
+                        CodServicio: "",
+                        Servicio: reader.GetString(4).Trim(),
+                        Cliente: reader.GetString(5).Trim(),
+                        Recorrido: reader.GetString(6).Trim(),
+                        Pax: reader.GetInt32(7),
+                        Estado: reader.GetString(8).Trim(),
+                        Chofer: reader.GetString(9).Trim(),
+                        Interno: reader.IsDBNull(10) ? null : Convert.ToInt32(reader.GetValue(10)),
+                        Origen: reader.GetString(11).Trim(),
+                        Grupo: reader.GetString(12).Trim())));
+            }
+            return result;
+        }) ?? new();
+    }
+
     public async Task<TableroDto> GetTableroAsync()
     {
         return await _cache.GetOrCreateAsync("tablero", async entry =>
@@ -2305,6 +3072,258 @@ public class ReportService
 
         static DateOnly? D(System.Data.Common.DbDataReader rd, int i) =>
             rd.IsDBNull(i) ? null : DateOnly.FromDateTime(rd.GetDateTime(i));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  VEHÍCULOS Y CHOFERES — Odómetros (Control de Odometros: vehiculo_km.scx)
+    //  Registro de lecturas de km por dominio/mes. Solo lectura (strangler).
+    //  Tabla vehiculo_km (~10.500 filas). La grilla del FoxPro muestra:
+    //  Dominio · Fecha (f_carga) · Año y Mes · Km Inicio · Km Fin ·
+    //  Km Recorridos (= km_fin - km_inicio) · Interno · U.Creó · U.Modificó.
+    //  Filtro: por dominio (o todos) + rango de f_carga; orden dominio, f_carga DESC.
+    //  OJO: km_fin/km_inicio pueden venir NULL (mes en curso sin cierre) → Km Recorridos
+    //  solo se calcula cuando ambos existen; si no, queda NULL (se muestra "—").
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Lecturas de odómetro (vehiculo_km). Réplica de vehiculo_km.scx → bFiltro.
+    /// <paramref name="dominio"/> vacío = todos los vehículos (option "todos los Vehiculos");
+    /// con dominio = filtra ese vehículo. Rango sobre <c>f_carga</c>.</summary>
+    public async Task<List<OdometroRow>> GetOdometrosAsync(string? dominio, DateOnly desde, DateOnly hasta)
+    {
+        var dom = (dominio ?? "").Trim();
+        var key = $"odometros|{dom}|{desde:yyyyMMdd}|{hasta:yyyyMMdd}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            var where = $"_deleted = 0 AND f_carga BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'";
+            if (!string.IsNullOrWhiteSpace(dom))
+                where += $" AND dominio = '{dom.Replace("'", "''")}'";
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT
+                    RTRIM(ISNULL(dominio,   '')) AS Dominio,
+                    f_carga                      AS FCarga,
+                    RTRIM(ISNULL(ano_y_mes, '')) AS AnoMes,
+                    km_inicio                    AS KmInicio,
+                    km_fin                       AS KmFin,
+                    ISNULL(interno, 0)           AS Interno,
+                    RTRIM(ISNULL(u_create,  '')) AS UCreo,
+                    RTRIM(ISNULL(u_modify,  '')) AS UModifico
+                FROM vehiculo_km
+                WHERE {where}
+                ORDER BY dominio, f_carga DESC
+                """;
+            var result = new List<OdometroRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                long? kmIni = rd.IsDBNull(3) ? null : rd.GetInt64(3);
+                long? kmFin = rd.IsDBNull(4) ? null : rd.GetInt64(4);
+                result.Add(new OdometroRow(
+                    rd.GetString(0),
+                    rd.IsDBNull(1) ? null : DateOnly.FromDateTime(rd.GetDateTime(1)),
+                    rd.GetString(2), kmIni, kmFin,
+                    (int)rd.GetInt64(5), rd.GetString(6), rd.GetString(7)));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Dominios de la flota propia activa, para el buscador de Odómetros
+    /// (réplica del autocompletar de vehiculo_km.scx: PROPIO + activo).</summary>
+    public async Task<List<string>> GetDominiosFlotaPropiaAsync()
+    {
+        return await _cache.GetOrCreateAsync("dominios-flota-propia", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT DISTINCT RTRIM(ISNULL(dominio, '')) AS Dominio
+                FROM vehiculo
+                WHERE _deleted = 0 AND ISNULL(activo, 0) = 1 AND uso = 'PROPIO'
+                      AND dominio IS NOT NULL AND RTRIM(dominio) <> ''
+                ORDER BY Dominio
+                """;
+            var result = new List<string>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(rd.GetString(0));
+            return result;
+        }) ?? new();
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  VEHÍCULOS Y CHOFERES — Siniestros (siniestro.scx / siniestro_abm.scx)
+    //  Parte de accidente completo (~70 campos). Solo lectura (strangler).
+    //  Tabla siniestro (313 filas). La lista une con chofer por id_chofer para el
+    //  nombre del conductor. Grilla: Siniestro (id) · Conductor · Dominio (id_vehicul =
+    //  el vehículo NORTUR) · Interno · Fecha · Lugar · Marca (marca_y_mo = del TERCERO) ·
+    //  Tipo Acc. Ficha = 5 solapas del ABM.
+    //
+    //  🐛 TRAMPAS de la réplica (verificadas 04/07/2026):
+    //   - id_vehicul = dominio del vehículo NORTUR (asegurado). dominio = dominio del
+    //     TERCERO. marca_y_mo = marca/modelo del TERCERO. No confundir.
+    //   - Nombres largos del form truncados a 10 chars en SQL: asegurado_dano→asegurado_,
+    //     conductor_direccion→conductor_, conductor_localidad→conductor2, conductor_telefono→
+    //     conductor3, conductor_celular→conductor4, conductor_dano→conductor5,
+    //     propietario→propietari, propietario_direccion→propietar2, ..._localidad→propietar3,
+    //     ..._telefono→propietar4, ..._celular→propietar5, propietario_dano→propietar6,
+    //     descripcion_acc→descripcio, test_N_nomb→test_N_nom, test_N_tdoc→test_N_tdo, etc.
+    //   - Esta tabla NO tiene f_delete: la baja lógica es solo _deleted (no hay "egresados").
+    //   - id_chofer siempre matchea con chofer → INNER JOIN seguro.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Grilla de Siniestros (siniestro.scx → arma_grid). INNER JOIN a chofer
+    /// por id_chofer para el nombre del conductor. Orden en memoria en la página.</summary>
+    public async Task<List<SiniestroRow>> GetSiniestrosAsync()
+    {
+        return await _cache.GetOrCreateAsync("siniestros-lista", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    s.id                             AS Id,
+                    RTRIM(ISNULL(c.nombre,     '')) AS Conductor,
+                    RTRIM(ISNULL(s.id_vehicul, '')) AS Dominio,
+                    ISNULL(s.interno, 0)            AS Interno,
+                    s.fecha                          AS Fecha,
+                    RTRIM(ISNULL(s.lugar,      '')) AS Lugar,
+                    RTRIM(ISNULL(s.marca_y_mo, '')) AS Marca,
+                    RTRIM(ISNULL(s.tipo_acc,   '')) AS TipoAcc,
+                    RTRIM(ISNULL(s.localidad,  '')) AS Localidad,
+                    ISNULL(s.id_viaje, 0)           AS IdViaje
+                FROM siniestro s
+                INNER JOIN chofer c ON c.id_chofer = s.id_chofer
+                WHERE s._deleted = 0
+                ORDER BY s.id
+                """;
+            var result = new List<SiniestroRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                result.Add(new SiniestroRow(
+                    rd.GetInt32(0), rd.GetString(1), rd.GetString(2),
+                    (int)rd.GetInt64(3),
+                    rd.IsDBNull(4) ? null : DateOnly.FromDateTime(rd.GetDateTime(4)),
+                    rd.GetString(5), rd.GetString(6), rd.GetString(7), rd.GetString(8),
+                    rd.GetInt64(9)));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Ficha completa de un siniestro (réplica de siniestro_abm.scx en modo
+    /// consulta), con las 5 solapas: El Hecho / Vehículo asegurado, Conductor+Vehículo
+    /// del tercero, Propietario del tercero, Daños+Descripción, Testigos.</summary>
+    public async Task<SiniestroDetalleDto?> GetSiniestroDetalleAsync(int id)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT TOP 1
+                s.id, RTRIM(ISNULL(s.id_chofer,'')), RTRIM(ISNULL(c.nombre,'')),
+                RTRIM(ISNULL(s.id_vehicul,'')), ISNULL(s.interno,0), ISNULL(s.id_viaje,0),
+                RTRIM(ISNULL(s.tipo_acc,'')), s.fecha, s.hora,
+                RTRIM(ISNULL(s.lugar,'')), RTRIM(ISNULL(s.localidad,'')),
+                RTRIM(ISNULL(s.provincia,'')), RTRIM(ISNULL(s.comisaria,'')),
+                -- Vehículo asegurado (condiciones)
+                ISNULL(s.velocidad,0), ISNULL(s.visible,0), ISNULL(s.bocina,0),
+                ISNULL(s.lluvia,0), ISNULL(s.luces,0), ISNULL(s.mano_unica,0),
+                RTRIM(ISNULL(s.asegurado_,'')),
+                -- Conductor del tercero
+                RTRIM(ISNULL(s.conductor,'')), ISNULL(s.edad,0),
+                RTRIM(ISNULL(s.registro_n,'')), s.registro_v,
+                RTRIM(ISNULL(s.tdoc,'')), RTRIM(ISNULL(s.ndoc,'')),
+                RTRIM(ISNULL(s.conductor_,'')), RTRIM(ISNULL(s.conductor2,'')),
+                RTRIM(ISNULL(s.conductor3,'')), RTRIM(ISNULL(s.conductor4,'')),
+                -- Vehículo del tercero
+                RTRIM(ISNULL(s.dominio,'')), RTRIM(ISNULL(s.marca_y_mo,'')),
+                RTRIM(ISNULL(s.tipo,'')), ISNULL(s.ano,0),
+                ISNULL(s.seguro,0), RTRIM(ISNULL(s.seguro_nom,'')),
+                RTRIM(ISNULL(s.seguro_pol,'')), RTRIM(ISNULL(s.conductor5,'')),
+                ISNULL(s.circula,0),
+                -- Propietario del tercero
+                RTRIM(ISNULL(s.propietari,'')), RTRIM(ISNULL(s.propietar2,'')),
+                RTRIM(ISNULL(s.propietar3,'')), RTRIM(ISNULL(s.propietar4,'')),
+                RTRIM(ISNULL(s.propietar5,'')), RTRIM(ISNULL(s.propietar6,'')),
+                -- Descripción + daños
+                RTRIM(ISNULL(s.descripcio,'')),
+                ISNULL(s.aseg_delan,0), ISNULL(s.aseg_later,0), ISNULL(s.aseg_trase,0),
+                ISNULL(s.otro_delan,0), ISNULL(s.otro_later,0), ISNULL(s.otro_trase,0),
+                -- Testigos 1-3
+                RTRIM(ISNULL(s.test_1_nom,'')), RTRIM(ISNULL(s.test_1_tdo,'')),
+                RTRIM(ISNULL(s.test_1_ndo,'')), RTRIM(ISNULL(s.test_1_tel,'')),
+                RTRIM(ISNULL(s.test_1_cel,'')),
+                RTRIM(ISNULL(s.test_2_nom,'')), RTRIM(ISNULL(s.test_2_tdo,'')),
+                RTRIM(ISNULL(s.test_2_ndo,'')), RTRIM(ISNULL(s.test_2_tel,'')),
+                RTRIM(ISNULL(s.test_2_cel,'')),
+                RTRIM(ISNULL(s.test_3_nom,'')), RTRIM(ISNULL(s.test_3_tdo,'')),
+                RTRIM(ISNULL(s.test_3_ndo,'')), RTRIM(ISNULL(s.test_3_tel,'')),
+                RTRIM(ISNULL(s.test_3_cel,'')),
+                -- Auditoría
+                RTRIM(ISNULL(s.usuario_cr,'')), RTRIM(ISNULL(s.usuario_mo,'')),
+                s.f_ingreso, s.f_envio
+            FROM siniestro s
+            INNER JOIN chofer c ON c.id_chofer = s.id_chofer
+            WHERE s.id = {id} AND s._deleted = 0
+            """;
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+
+        int i = 0;
+        var d = new SiniestroDetalleDto
+        {
+            Id = rd.GetInt32(i++), IdChofer = rd.GetString(i++), Conductor = rd.GetString(i++),
+            Dominio = rd.GetString(i++), Interno = (int)rd.GetInt64(i++), IdViaje = rd.GetInt64(i++),
+            TipoAcc = rd.GetString(i++), Fecha = D(rd, i++), Hora = Hora(rd, i++),
+            Lugar = rd.GetString(i++), Localidad = rd.GetString(i++),
+            Provincia = rd.GetString(i++), Comisaria = rd.GetString(i++),
+            Velocidad = (int)rd.GetInt32(i++), CondVisible = rd.GetBoolean(i++), CondBocina = rd.GetBoolean(i++),
+            CondLluvia = rd.GetBoolean(i++), CondLuces = rd.GetBoolean(i++), CondManoUnica = rd.GetBoolean(i++),
+            AseguradoDano = rd.GetString(i++),
+            TerConductor = rd.GetString(i++), TerEdad = rd.GetInt32(i++),
+            TerRegistroNro = rd.GetString(i++), TerRegistroVto = D(rd, i++),
+            TerTdoc = rd.GetString(i++), TerNdoc = rd.GetString(i++),
+            TerDireccion = rd.GetString(i++), TerLocalidad = rd.GetString(i++),
+            TerTelefono = rd.GetString(i++), TerCelular = rd.GetString(i++),
+            TerDominio = rd.GetString(i++), TerMarcaModelo = rd.GetString(i++),
+            TerTipo = rd.GetString(i++), TerAno = rd.GetInt32(i++),
+            TerSeguro = rd.GetBoolean(i++), TerSeguroNombre = rd.GetString(i++),
+            TerSeguroPoliza = rd.GetString(i++), TerConductorDano = rd.GetString(i++),
+            TerCircula = rd.GetBoolean(i++),
+            PropNombre = rd.GetString(i++), PropDireccion = rd.GetString(i++),
+            PropLocalidad = rd.GetString(i++), PropTelefono = rd.GetString(i++),
+            PropCelular = rd.GetString(i++), PropDano = rd.GetString(i++),
+            Descripcion = rd.GetString(i++),
+            AsegDelante = rd.GetBoolean(i++), AsegLateral = rd.GetBoolean(i++), AsegTrasera = rd.GetBoolean(i++),
+            OtroDelante = rd.GetBoolean(i++), OtroLateral = rd.GetBoolean(i++), OtroTrasera = rd.GetBoolean(i++),
+        };
+        d.Testigos.Add(new SiniestroTestigoRow(1, rd.GetString(i++), rd.GetString(i++), rd.GetString(i++), rd.GetString(i++), rd.GetString(i++)));
+        d.Testigos.Add(new SiniestroTestigoRow(2, rd.GetString(i++), rd.GetString(i++), rd.GetString(i++), rd.GetString(i++), rd.GetString(i++)));
+        d.Testigos.Add(new SiniestroTestigoRow(3, rd.GetString(i++), rd.GetString(i++), rd.GetString(i++), rd.GetString(i++), rd.GetString(i++)));
+        d.UsuarioCreo = rd.GetString(i++); d.UsuarioModifico = rd.GetString(i++);
+        d.FIngreso = D(rd, i++); d.FEnvio = D(rd, i++);
+        return d;
+
+        static DateOnly? D(System.Data.Common.DbDataReader rd, int i) =>
+            rd.IsDBNull(i) ? null : DateOnly.FromDateTime(rd.GetDateTime(i));
+        static TimeOnly? Hora(System.Data.Common.DbDataReader rd, int i) =>
+            rd.IsDBNull(i) ? null : TimeOnly.FromDateTime(rd.GetDateTime(i));
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -3294,6 +4313,24 @@ public class UsuarioDetalleDto
     public DateOnly? FCreate, FModify, FDelete;
 }
 
+/// <summary>Resumen de la última sesión de un usuario (para la grilla del ABM):
+/// último ingreso/egreso, si está conectado ahora, y la IP/host del último login.</summary>
+public record UltimaSesionRow(
+    int IdUsuario, DateTime? Inicio, DateTime? Fin, bool Activa, string Ip, string Hostname);
+
+/// <summary>Una fila del historial de sesiones (para la ficha del ABM): un ingreso con su
+/// egreso y detalle de origen. Espeja la tabla de sesiones del FoxPro.</summary>
+public record SesionRow(
+    DateTime? Inicio, DateTime? Fin, bool Activa,
+    string Ip, string Hostname, int Terminal, string MotivoFin);
+
+/// <summary>Una fila de la bitácora de accesos (tabla usuarios_logs): un evento
+/// (LOGIN/LOGOUT/EXPIRADA/VENCIDA/LOGIN_FALLIDO) con su session_id, usuario y origen.</summary>
+public record AccesoLogRow(
+    int Id, Guid? SessionId, string Evento, DateTime FEvento,
+    int? IdUsuario, string Usuario, string Nivel, string Acceso,
+    string Ip, string Hostname, string Motivo);
+
 public class TableroDto
 {
     // Días de la ventana de aviso (de la tabla `parametro`), para el tooltip de cada chip.
@@ -3409,6 +4446,75 @@ public class VehiculoDetalleDto
     public string UsoDescripcion => string.IsNullOrWhiteSpace(Uso) ? "—" : Uso;
 }
 
+// ── Odómetros (vehiculo_km) ─────────────────────────────────────────────────
+
+/// <summary>Una lectura de odómetro de la grilla de Control de Odometros (vehiculo_km.scx).
+/// KmInicio/KmFin pueden ser NULL (mes en curso sin cierre); KmRecorridos solo existe cuando
+/// ambos están presentes.</summary>
+public record OdometroRow(
+    string Dominio, DateOnly? FCarga, string AnoMes,
+    long? KmInicio, long? KmFin, int Interno, string UCreo, string UModifico)
+{
+    /// <summary>Km recorridos = km_fin − km_inicio (como la columna calculada del FoxPro).
+    /// NULL si falta alguno de los dos, o si diera negativo (odómetro incoherente).</summary>
+    public long? KmRecorridos =>
+        (KmInicio is long ini && KmFin is long fin && fin >= ini) ? fin - ini : null;
+
+    /// <summary>Código de interno con el formato de la Planilla de Tráfico (viaje.id_interno):
+    /// "NT" + interno a 4 dígitos (interno 1 → NT0001). "—" si no hay interno.</summary>
+    public string InternoNT => Interno == 0 ? "—" : "NT" + Interno.ToString("D4");
+}
+
+// ── Siniestros (siniestro) ──────────────────────────────────────────────────
+
+/// <summary>Una fila de la grilla de Siniestros (siniestro.scx). Dominio = vehículo NORTUR
+/// (id_vehicul); Marca = del tercero (marca_y_mo).</summary>
+public record SiniestroRow(
+    int Id, string Conductor, string Dominio, int Interno, DateOnly? Fecha,
+    string Lugar, string Marca, string TipoAcc, string Localidad, long IdViaje);
+
+public record SiniestroTestigoRow(int Orden, string Nombre, string Tdoc, string Ndoc, string Telefono, string Celular)
+{
+    public bool TieneDatos =>
+        !string.IsNullOrWhiteSpace(Nombre) || !string.IsNullOrWhiteSpace(Ndoc)
+        || !string.IsNullOrWhiteSpace(Telefono) || !string.IsNullOrWhiteSpace(Celular);
+}
+
+/// <summary>Ficha completa de un siniestro (siniestro_abm.scx, 5 solapas). "Aseg" = vehículo
+/// NORTUR asegurado; "Ter" = tercero; "Prop" = propietario del tercero.</summary>
+public class SiniestroDetalleDto
+{
+    // Solapa 1 — El hecho + vehículo asegurado
+    public int Id, Interno, Velocidad;
+    public long IdViaje;
+    public string IdChofer = "", Conductor = "", Dominio = "", TipoAcc = "";
+    public DateOnly? Fecha;
+    public TimeOnly? Hora;
+    public string Lugar = "", Localidad = "", Provincia = "", Comisaria = "";
+    public bool CondVisible, CondBocina, CondLluvia, CondLuces, CondManoUnica;
+    public string AseguradoDano = "";
+    // Solapa 2 — Conductor + vehículo del tercero
+    public string TerConductor = "", TerRegistroNro = "", TerTdoc = "", TerNdoc = "";
+    public int TerEdad, TerAno;
+    public DateOnly? TerRegistroVto;
+    public string TerDireccion = "", TerLocalidad = "", TerTelefono = "", TerCelular = "";
+    public string TerDominio = "", TerMarcaModelo = "", TerTipo = "";
+    public bool TerSeguro, TerCircula;
+    public string TerSeguroNombre = "", TerSeguroPoliza = "", TerConductorDano = "";
+    // Solapa 3 — Propietario del tercero
+    public string PropNombre = "", PropDireccion = "", PropLocalidad = "", PropTelefono = "", PropCelular = "", PropDano = "";
+    // Solapa 4 — Descripción + daños
+    public string Descripcion = "";
+    public bool AsegDelante, AsegLateral, AsegTrasera, OtroDelante, OtroLateral, OtroTrasera;
+    // Solapa 5 — Testigos
+    public List<SiniestroTestigoRow> Testigos = new();
+    // Auditoría
+    public string UsuarioCreo = "", UsuarioModifico = "";
+    public DateOnly? FIngreso, FEnvio;
+
+    public string HoraTexto => Hora is TimeOnly h ? h.ToString("HH:mm") : "—";
+}
+
 public class ChoferDetalleDto
 {
     // Datos personales
@@ -3463,6 +4569,48 @@ public record BandaHorariaRow(DateOnly Fecha, string TipoVehiculo, string Banda,
 // para reusar ReservasFsDetalleDialog + Zoom del Viaje.
 public record BandaHorariaDetalleRow(string Banda, string TipoVehiculo, ReservaFsDetalleRow Reserva);
 
+/// <summary>Un motivo de cancelación del catálogo viaje_motivo_cancela.</summary>
+public record MotivoCancelaDto(int Id, string Motivo);
+
+/// <summary>
+/// Una fila agregada del informe "Reservas por cliente": mes × cliente × tipo de unidad
+/// (PROPIO / CONTRATADO / SIN REALIZAR), con viajes y pax para el toggle de métrica.
+/// </summary>
+public record ReservaClienteRow(string Mes, string IdCliente, string Cliente, string Tipo, int Viajes, int Pax);
+
+// Una fila de detalle del informe por cliente (drill-down + Excel). Mes/IdCliente/Tipo para
+// filtrar en memoria; Motivo para la hoja Viajes en modo canceladas; el resto reusa el DTO
+// del informe de fecha/servicio para reusar ReservasFsDetalleDialog + Zoom del Viaje.
+public record ReservaClienteDetalleRow(string Mes, string IdCliente, string Tipo, string Motivo, ReservaFsDetalleRow Reserva);
+
+/// <summary>
+/// Una fila agregada del informe "Viajes por Choferes": chofer × día, con viajes, turismo
+/// (origen='T'), cabecera (origen='P'), km, primer/último horario del día y pax. La fila
+/// "franco" (día sin viajes entre el primero y último trabajado del chofer) se calcula en
+/// memoria en la página, como el form FoxPro.
+/// </summary>
+public record ViajesChoferRow(
+    string IdChofer, string Chofer, string Localidad, string Tipo, DateOnly Fecha,
+    int Viajes, int Turismo, int Cabecera, int Km, int Pax, string HoraInicio, string HoraFin);
+
+/// <summary>Detalle uno-por-uno del informe de choferes. IdChofer/Fecha para filtrar en
+/// memoria; el resto reusa ReservaFsDetalleRow (ReservasFsDetalleDialog + Zoom del Viaje).</summary>
+public record ViajesChoferDetalleRow(string IdChofer, DateOnly Fecha, ReservaFsDetalleRow Reserva);
+
+/// <summary>
+/// Una fila del informe "Km Unidades vs Servicios": por vehículo (dominio), km de servicio
+/// (SUM viaje.km), km recorrido real (odómetro), km vacío (recorrido − servicio), días
+/// trabajados y consumo. TieneOdometro = false cuando el odómetro del período está abierto
+/// (km_fin sin cargar) → recorrido/vacío/% quedan sin dato confiable.
+/// </summary>
+public record KmUnidadRow(
+    string Dominio, int Interno, string TipoVeh, int Consumo, int Servicios,
+    long KmServicio, long KmRecorrido, long KmVacio, int DiasTrabajados, bool TieneOdometro);
+
+/// <summary>Detalle uno-por-uno del informe de km. Dominio/Km para filtrar en memoria;
+/// el resto reusa ReservaFsDetalleRow (ReservasFsDetalleDialog + Zoom del Viaje).</summary>
+public record KmUnidadDetalleRow(string Dominio, int Km, ReservaFsDetalleRow Reserva);
+
 public record ReservaFechaServicioRow(
     DateOnly Fecha,
     string CodServicio,
@@ -3486,6 +4634,20 @@ public record ReservaFsDetalleRow(
     int? Interno,
     string Origen,
     string Grupo);
+
+// ── DTOs del módulo Reservas: Plantillas ────────────────────────────────────────
+// (Reservas Especiales reusa ReservaFsDetalleRow de arriba — misma forma de viaje.)
+
+/// <summary>Resumen de una plantilla en el Mantenimiento (una fila por id_reserva).</summary>
+public record PlantillaResumenRow(
+    string IdReserva, int Filas, string HoraDesde, string HoraHasta, int PaxTotal);
+
+/// <summary>Una fila de una plantilla (reserva_plantilla) — grilla del Mantenimiento y del Armado.</summary>
+public record PlantillaFilaRow(
+    int Id, string IdReserva, string HoraIni, string HoraFin, string IdServicio, string Servicio,
+    string TipoVeh, string Desde, string Hasta, int Pax, int Km, int Hs, string Cabecera,
+    string Guia, string GuiaDueno, string EmpresaDestino, string Recorrido, string Provincia,
+    string Comentario, string Cronograma, string Adicionales);
 
 /// <summary>
 /// Una fila de la planilla de servicios del día (Operación de Tráfico).
@@ -3927,3 +5089,2286 @@ public class PasajerosViajeDto
 
     public List<PasajeroRow> Pasajeros { get; } = new();
 }
+
+// ════════════════════════════════════════════════════════════════════════════════
+//  VEHÍCULOS Y CHOFERES — Fleteros, Tipo de Vehículos, Agenda de Vencimientos
+//  (métodos de lectura — la escritura de los dos ABMs vive en AbmService)
+//  Extendemos ReportService con estos tres bloques en un partial para no engordar el
+//  archivo principal; comparten _dbFactory / _cache por ser la misma clase.
+// ════════════════════════════════════════════════════════════════════════════════
+public partial class ReportService
+{
+    // ── FLETEROS (fletero.scx / fletero_abm.scx) ────────────────────────────────
+    //  Transportistas contratados. PK física id (int, NO identity), PK lógica id_contrat
+    //  (nvarchar 15). f_delete cargado = egresado (amarillo). Cat. compartido con Facturación.
+
+    /// <summary>
+    /// Lista de fleteros para la GRILLA del ABM (réplica de fletero.scx): ORDER BY orden, nombre.
+    /// Egresado = f_delete con valor (se muestra en amarillo, no se oculta). Distinto de
+    /// <see cref="GetFleterosAsync"/> (que devuelve solo códigos para el combo de Tráfico).
+    /// </summary>
+    public async Task<List<FleteroRow>> GetFleterosListaAsync()
+    {
+        return await _cache.GetOrCreateAsync("fleteros-lista", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    id                              AS Id,
+                    RTRIM(ISNULL(id_contrat, '')) AS IdContrat,
+                    RTRIM(ISNULL(razon_soci, '')) AS RazonSocial,
+                    RTRIM(ISNULL(nombre,     '')) AS Nombre,
+                    ISNULL(orden, 0)                AS Orden,
+                    RTRIM(ISNULL(cuit,       '')) AS Cuit,
+                    RTRIM(ISNULL(localidad,  '')) AS Localidad,
+                    RTRIM(ISNULL(telefono,   '')) AS Telefono,
+                    RTRIM(ISNULL(email,      '')) AS Email,
+                    f_delete                        AS FDelete
+                FROM fletero
+                WHERE _deleted = 0
+                ORDER BY ISNULL(orden, 0), nombre
+                """;
+            var result = new List<FleteroRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new FleteroRow(
+                    rd.GetInt32(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+                    rd.GetInt64(4), rd.GetString(5), rd.GetString(6), rd.GetString(7), rd.GetString(8),
+                    rd.IsDBNull(9) ? null : DateOnly.FromDateTime(rd.GetDateTime(9))));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Ficha completa de un fletero (fletero_abm.scx) para la vista/edición.</summary>
+    public async Task<FleteroDetalleDto?> GetFleteroDetalleAsync(int id)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                id, RTRIM(ISNULL(id_contrat,'')), RTRIM(ISNULL(razon_soci,'')),
+                RTRIM(ISNULL(nombre,'')), ISNULL(orden,0),
+                RTRIM(ISNULL(cuit,'')), RTRIM(ISNULL(tipo_resp,'')),
+                RTRIM(ISNULL(domicilio,'')), RTRIM(ISNULL(localidad,'')), RTRIM(ISNULL(postal,'')),
+                RTRIM(ISNULL(provincia,'')), RTRIM(ISNULL(telefono,'')), RTRIM(ISNULL(celular,'')),
+                RTRIM(ISNULL(email,'')), RTRIM(ISNULL(contacto,'')),
+                RTRIM(ISNULL(id_lista_p,'')), RTRIM(ISNULL(id_lista_2,'')),
+                RTRIM(ISNULL(modo_liq,'')), RTRIM(ISNULL(fc_prefere,'')), ISNULL(diagrama,0),
+                f_create, f_modify, f_delete
+            FROM fletero
+            WHERE id = @id AND _deleted = 0
+            """;
+        var p = cmd.CreateParameter(); p.ParameterName = "@id"; p.Value = id; cmd.Parameters.Add(p);
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        return new FleteroDetalleDto
+        {
+            Id = rd.GetInt32(0),
+            IdContrat = rd.GetString(1),
+            RazonSocial = rd.GetString(2),
+            Nombre = rd.GetString(3),
+            Orden = rd.GetInt64(4),
+            Cuit = rd.GetString(5),
+            TipoResp = rd.GetString(6),
+            Domicilio = rd.GetString(7),
+            Localidad = rd.GetString(8),
+            Postal = rd.GetString(9),
+            Provincia = rd.GetString(10),
+            Telefono = rd.GetString(11),
+            Celular = rd.GetString(12),
+            Email = rd.GetString(13),
+            Contacto = rd.GetString(14),
+            IdListaP = rd.GetString(15),
+            IdLista2 = rd.GetString(16),
+            ModoLiq = rd.GetString(17),
+            FcPrefere = rd.GetString(18),
+            Diagrama = rd.GetBoolean(19),
+            FCreate = rd.IsDBNull(20) ? null : DateOnly.FromDateTime(rd.GetDateTime(20)),
+            FModify = rd.IsDBNull(21) ? null : DateOnly.FromDateTime(rd.GetDateTime(21)),
+            FDelete = rd.IsDBNull(22) ? null : DateOnly.FromDateTime(rd.GetDateTime(22)),
+        };
+    }
+
+    // ── TIPO DE VEHÍCULOS (vehiculo_tipo.scx / vehiculo_tipo_abm.scx) ────────────
+    //  Catálogo de categorías de la flota (6 filas). PK física id (int, NO identity),
+    //  PK lógica id_vehicul (nvarchar 15). OJO: la PK se llama id_vehicul igual que en
+    //  `vehiculo`, pero es la PK del TIPO (BUS/VAN/MINI/…), no del vehículo.
+
+    /// <summary>Lista de tipos de vehículo (réplica de vehiculo_tipo.scx). ORDER BY id_vehicul.</summary>
+    public async Task<List<TipoVehiculoRow>> GetTiposVehiculoAsync()
+    {
+        return await _cache.GetOrCreateAsync("tipos-vehiculo-lista", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    id                              AS Id,
+                    RTRIM(ISNULL(id_vehicul, '')) AS Codigo,
+                    RTRIM(ISNULL(nombre,     '')) AS Nombre,
+                    ISNULL(pax, 0)                  AS Pax,
+                    RTRIM(ISNULL(id_vehicu2, '')) AS Subtipo,
+                    consumo_mi                      AS ConsumoMin,
+                    consumo_ma                      AS ConsumoMax,
+                    ISNULL(vende, 0)                AS Vende,
+                    RTRIM(ISNULL(dir_dibujo, '')) AS DirDibujo,
+                    f_delete                        AS FDelete
+                FROM vehiculo_tipo
+                WHERE _deleted = 0
+                ORDER BY id_vehicul
+                """;
+            var result = new List<TipoVehiculoRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new TipoVehiculoRow(
+                    rd.GetInt32(0), rd.GetString(1), rd.GetString(2), rd.GetInt32(3), rd.GetString(4),
+                    rd.IsDBNull(5) ? null : rd.GetDecimal(5),
+                    rd.IsDBNull(6) ? null : rd.GetDecimal(6),
+                    rd.GetBoolean(7), rd.GetString(8),
+                    rd.IsDBNull(9) ? null : DateOnly.FromDateTime(rd.GetDateTime(9))));
+            return result;
+        }) ?? new();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  MÓDULO RESERVAS — CATÁLOGOS: Operadores · Grupos · Destinos (06/07/2026)
+    //  Vistas de solo lectura (lista + editor) con andamiaje de ABM. La escritura vive en
+    //  AbmService y está apagada por AbmFeatureFlags hasta el día D (regla strangler).
+    //  Planos: docs/PlanoFoxPro/catalogos/CLIENTE_OPERADOR_ABM.md · CLIENTE_GRUPO_ABM.md ·
+    //  DESTINO_ABM.md. Columnas verificadas contra sys.columns (06/07/2026).
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // ── OPERADORES (cliente_operador.scx / cliente_operador_abm.scx) ────────────
+    //  Contacto (operadora de la agencia) dentro de un cliente. id_operado = PK lógica GLOBAL
+    //  (no por cliente). Baja FÍSICA (sin f_delete). El FoxPro hace INNER JOIN a cliente → un
+    //  operador con cliente inexistente desaparece de la lista; acá usamos LEFT JOIN para no
+    //  esconder datos (mostramos "—" en razón social) — mejora sobre el FoxPro.
+
+    /// <summary>Lista de operadores (réplica de cliente_operador.scx). ORDER BY nombre.</summary>
+    public async Task<List<OperadorRow>> GetOperadoresListaAsync()
+    {
+        return await _cache.GetOrCreateAsync("operadores-lista", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    o.id                              AS Id,
+                    RTRIM(ISNULL(o.id_operado, '')) AS IdOperador,
+                    RTRIM(ISNULL(o.id_cliente, '')) AS IdCliente,
+                    RTRIM(ISNULL(c.razon_soci, '')) AS RazonSocial,
+                    RTRIM(ISNULL(o.nombre,     '')) AS Nombre,
+                    RTRIM(ISNULL(o.telefono,   '')) AS Telefono,
+                    RTRIM(ISNULL(o.celular,    '')) AS Celular,
+                    RTRIM(ISNULL(o.interno,    '')) AS Interno,
+                    RTRIM(ISNULL(o.email,      '')) AS Email,
+                    RTRIM(ISNULL(o.comentario, '')) AS Comentario
+                FROM cliente_operador o
+                LEFT JOIN cliente c ON LTRIM(RTRIM(c.id_cliente)) = LTRIM(RTRIM(o.id_cliente)) AND c._deleted = 0
+                WHERE o._deleted = 0
+                ORDER BY o.nombre
+                """;
+            var result = new List<OperadorRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new OperadorRow(
+                    rd.GetInt32(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+                    rd.GetString(4), rd.GetString(5), rd.GetString(6), rd.GetString(7),
+                    rd.GetString(8), rd.GetString(9)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Ficha de un operador para la vista/edición (cliente_operador_abm.scx).</summary>
+    public async Task<OperadorRow?> GetOperadorRowAsync(int id)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                o.id, RTRIM(ISNULL(o.id_operado,'')), RTRIM(ISNULL(o.id_cliente,'')),
+                RTRIM(ISNULL(c.razon_soci,'')), RTRIM(ISNULL(o.nombre,'')),
+                RTRIM(ISNULL(o.telefono,'')), RTRIM(ISNULL(o.celular,'')),
+                RTRIM(ISNULL(o.interno,'')), RTRIM(ISNULL(o.email,'')), RTRIM(ISNULL(o.comentario,''))
+            FROM cliente_operador o
+            LEFT JOIN cliente c ON LTRIM(RTRIM(c.id_cliente)) = LTRIM(RTRIM(o.id_cliente)) AND c._deleted = 0
+            WHERE o.id = @id AND o._deleted = 0
+            """;
+        var p = cmd.CreateParameter(); p.ParameterName = "@id"; p.Value = id; cmd.Parameters.Add(p);
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        return new OperadorRow(
+            rd.GetInt32(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+            rd.GetString(4), rd.GetString(5), rd.GetString(6), rd.GetString(7),
+            rd.GetString(8), rd.GetString(9));
+    }
+
+    // ── GRUPOS (cliente_grupo.scx / cliente_grupo_abm.scx) ──────────────────────
+    //  Agrupa viajes de un cliente para facturarlos juntos. La dupla (id_cliente, nombre) es la
+    //  clave lógica. f_grupo_fc con valor = grupo CERRADO (facturado → candado). Columnas
+    //  truncadas: f_grupo_fi (fin), f_grupo_in (inicio), f_grupo_fc (facturó), liquidacio.
+    //  11.272 filas → la grilla usa <Virtualize>. El FoxPro NO filtra f_delete en el arma_grid
+    //  activo; acá filtramos _deleted=0 (convención réplica). Baja = DELETE físico.
+
+    /// <summary>Lista de grupos (réplica de cliente_grupo.scx). Filtro por f_grupo_fi vs hoy:
+    /// 0=No finalizados (>=hoy, default), 1=Finalizados (&lt;hoy), 2=Todos. INNER JOIN a cliente.</summary>
+    public async Task<List<GrupoRow>> GetGruposListaAsync(int filtro)
+    {
+        var key = $"grupos-lista|{filtro}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            var where = filtro switch
+            {
+                1 => "AND g.f_grupo_fi <  CAST(GETDATE() AS date)",   // Finalizados
+                2 => "",                                              // Todos
+                _ => "AND g.f_grupo_fi >= CAST(GETDATE() AS date)",   // No finalizados (default)
+            };
+            cmd.CommandText = $"""
+                SELECT
+                    g.id                              AS Id,
+                    RTRIM(ISNULL(g.id_cliente, '')) AS IdCliente,
+                    RTRIM(ISNULL(c.razon_soci, '')) AS RazonSocial,
+                    RTRIM(ISNULL(g.nombre,     '')) AS Nombre,
+                    g.f_grupo_in                      AS FInicio,
+                    g.f_grupo_fi                      AS FFin,
+                    g.f_grupo_fc                      AS FFacturo
+                FROM cliente_grupo g
+                INNER JOIN cliente c ON LTRIM(RTRIM(c.id_cliente)) = LTRIM(RTRIM(g.id_cliente)) AND c._deleted = 0
+                WHERE g._deleted = 0 {where}
+                ORDER BY c.razon_soci, g.nombre
+                """;
+            var result = new List<GrupoRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new GrupoRow(
+                    rd.GetInt32(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+                    rd.IsDBNull(4) ? null : DateOnly.FromDateTime(rd.GetDateTime(4)),
+                    rd.IsDBNull(5) ? null : DateOnly.FromDateTime(rd.GetDateTime(5)),
+                    rd.IsDBNull(6) ? null : DateOnly.FromDateTime(rd.GetDateTime(6))));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Ficha de un grupo para vista/edición (cliente_grupo_abm.scx).</summary>
+    public async Task<GrupoRow?> GetGrupoRowAsync(int id)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                g.id, RTRIM(ISNULL(g.id_cliente,'')), RTRIM(ISNULL(c.razon_soci,'')),
+                RTRIM(ISNULL(g.nombre,'')), g.f_grupo_in, g.f_grupo_fi, g.f_grupo_fc
+            FROM cliente_grupo g
+            LEFT JOIN cliente c ON LTRIM(RTRIM(c.id_cliente)) = LTRIM(RTRIM(g.id_cliente)) AND c._deleted = 0
+            WHERE g.id = @id AND g._deleted = 0
+            """;
+        var p = cmd.CreateParameter(); p.ParameterName = "@id"; p.Value = id; cmd.Parameters.Add(p);
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        return new GrupoRow(
+            rd.GetInt32(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+            rd.IsDBNull(4) ? null : DateOnly.FromDateTime(rd.GetDateTime(4)),
+            rd.IsDBNull(5) ? null : DateOnly.FromDateTime(rd.GetDateTime(5)),
+            rd.IsDBNull(6) ? null : DateOnly.FromDateTime(rd.GetDateTime(6)));
+    }
+
+    /// <summary>Conteo de viajes del grupo agrupados por estado (para el aviso de la baja/modifica
+    /// en cascada del editor de Grupos). Réplica del SELECT ... GROUP BY estado_viaje del FoxPro,
+    /// buscando por la dupla desnormalizada (id_cliente, grupo) igual que el form.</summary>
+    public async Task<Dictionary<string, int>> GetViajesGrupoPorEstadoAsync(string idCliente, string nombreGrupo)
+    {
+        var res = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT RTRIM(ISNULL(estado_via,'')) AS Estado, COUNT(*) AS Cnt
+            FROM viaje
+            WHERE _deleted = 0
+              AND LTRIM(RTRIM(id_cliente)) = @cli
+              AND LTRIM(RTRIM(grupo))      = @grp
+            GROUP BY estado_via
+            """;
+        var pc = cmd.CreateParameter(); pc.ParameterName = "@cli"; pc.Value = (idCliente ?? "").Trim(); cmd.Parameters.Add(pc);
+        var pg = cmd.CreateParameter(); pg.ParameterName = "@grp"; pg.Value = (nombreGrupo ?? "").Trim(); cmd.Parameters.Add(pg);
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+            res[rd.GetString(0)] = rd.GetInt32(1);
+        return res;
+    }
+
+    // ── DESTINOS (destino.scx / destino_abm.scx) ────────────────────────────────
+    //  Catálogo de lugares origen/destino. Alimenta el autocomplete Desde/Hasta de reservas.
+    //  destino = nombre (clave lógica, se graba en MAYÚSCULAS). mas100km = recargo por distancia.
+    //  Baja FÍSICA (sin f_delete). 398 filas. destino_localidad = catálogo satélite del combo.
+
+    /// <summary>Lista de destinos (réplica de destino.scx). ORDER BY destino.</summary>
+    public async Task<List<DestinoRow>> GetDestinosListaAsync()
+    {
+        return await _cache.GetOrCreateAsync("destinos-lista", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    id                              AS Id,
+                    RTRIM(ISNULL(destino,   '')) AS Destino,
+                    RTRIM(ISNULL(direccion, '')) AS Direccion,
+                    RTRIM(ISNULL(localidad, '')) AS Localidad,
+                    RTRIM(ISNULL(telefono,  '')) AS Telefono,
+                    RTRIM(ISNULL(correo,    '')) AS Correo,
+                    RTRIM(ISNULL(contacto,  '')) AS Contacto,
+                    RTRIM(ISNULL(cabecera,  '')) AS Cabecera,
+                    ISNULL(mas100km, 0)             AS Mas100Km
+                FROM destino
+                WHERE _deleted = 0
+                ORDER BY destino
+                """;
+            var result = new List<DestinoRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new DestinoRow(
+                    rd.GetInt32(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+                    rd.GetString(4), rd.GetString(5), rd.GetString(6), rd.GetString(7),
+                    rd.GetBoolean(8)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Ficha de un destino para vista/edición (destino_abm.scx).</summary>
+    public async Task<DestinoRow?> GetDestinoRowAsync(int id)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, RTRIM(ISNULL(destino,'')), RTRIM(ISNULL(direccion,'')), RTRIM(ISNULL(localidad,'')),
+                   RTRIM(ISNULL(telefono,'')), RTRIM(ISNULL(correo,'')), RTRIM(ISNULL(contacto,'')),
+                   RTRIM(ISNULL(cabecera,'')), ISNULL(mas100km,0)
+            FROM destino WHERE id = @id AND _deleted = 0
+            """;
+        var p = cmd.CreateParameter(); p.ParameterName = "@id"; p.Value = id; cmd.Parameters.Add(p);
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        return new DestinoRow(
+            rd.GetInt32(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+            rd.GetString(4), rd.GetString(5), rd.GetString(6), rd.GetString(7), rd.GetBoolean(8));
+    }
+
+    /// <summary>Localidades del combo del editor de Destinos (tabla satélite destino_localidad).</summary>
+    public async Task<List<string>> GetDestinoLocalidadesAsync()
+    {
+        return await _cache.GetOrCreateAsync("destino-localidades", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT DISTINCT RTRIM(ISNULL(localidad,'')) AS Localidad
+                FROM destino_localidad
+                WHERE _deleted = 0 AND RTRIM(ISNULL(localidad,'')) <> ''
+                ORDER BY Localidad
+                """;
+            var result = new List<string>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(rd.GetString(0));
+            return result;
+        }) ?? new();
+    }
+
+    // ── AGENDA DE VENCIMIENTOS (agenda_vencimiento.scx) ─────────────────────────
+    //  INFORME (no ABM): cruza chofer (registro/CNRT/AEP) + vehiculo propio (VTV/matafuegos)
+    //  con días de anticipación. No tiene tabla propia. Reusa la lógica del TableroDto del Home.
+
+    /// <summary>
+    /// Choferes con registro / CNRT / AEP vencido o por vencer dentro de <paramref name="dias"/>.
+    /// Espeja el 1er cursor de agenda_vencimiento.scx. registro_vto→registro_v,
+    /// registro_vto_cnrt→registro_3, registro_vto_aeo→registro_4. NULL = sin fecha (se trata
+    /// como vencido, igual que el FoxPro con EMPTY()).
+    /// </summary>
+    public async Task<List<ChoferVtoRow>> GetChoferesPorVencerAsync(int dias)
+    {
+        var key = $"agenda-venc|cho|{dias}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            // límite = HOY + días. NULL (sin fecha) cuenta como vencido → ISNULL a una fecha mínima.
+            cmd.CommandText = $"""
+                DECLARE @lim date = DATEADD(day, {dias}, CAST(GETDATE() AS date));
+                SELECT
+                    RTRIM(ISNULL(id_chofer, '')) AS IdChofer,
+                    RTRIM(ISNULL(nombre,    '')) AS Nombre,
+                    RTRIM(ISNULL(fletero,   '')) AS Fletero,
+                    RTRIM(ISNULL(registro_n,'')) AS RegistroNro,
+                    registro_v                     AS RegistroVto,
+                    registro_3                     AS CnrtVto,
+                    registro_4                     AS AepVto
+                FROM chofer
+                WHERE _deleted = 0 AND f_delete IS NULL
+                  AND (ISNULL(registro_v, '1900-01-01') <= @lim
+                    OR ISNULL(registro_3, '1900-01-01') <= @lim
+                    OR ISNULL(registro_4, '1900-01-01') <= @lim)
+                ORDER BY id_chofer
+                """;
+            var result = new List<ChoferVtoRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new ChoferVtoRow(
+                    rd.GetString(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+                    rd.IsDBNull(4) ? null : DateOnly.FromDateTime(rd.GetDateTime(4)),
+                    rd.IsDBNull(5) ? null : DateOnly.FromDateTime(rd.GetDateTime(5)),
+                    rd.IsDBNull(6) ? null : DateOnly.FromDateTime(rd.GetDateTime(6))));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>
+    /// Vehículos de flota PROPIA con VTV / matafuegos vencido o por vencer. Espeja el 2do cursor
+    /// de agenda_vencimiento.scx (uso='PROPIO'). El FoxPro usa DOS umbrales distintos: VTV con
+    /// nDiasDifVeh y matafuegos con nDiasDifMat (parametro.aviso_veh / aviso_mat). Un vehículo
+    /// entra si CUALQUIERA de los dos vence dentro de su propio umbral.
+    /// verificacion_vto (VTV)→verificac2, vencimiento_mat (matafuegos)→vencimient.
+    /// </summary>
+    public async Task<List<VehiculoVtoRow>> GetVehiculosPorVencerAsync(int diasVtv, int diasMat)
+    {
+        var key = $"agenda-venc|veh|{diasVtv}|{diasMat}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                DECLARE @limVtv date = DATEADD(day, {diasVtv}, CAST(GETDATE() AS date));
+                DECLARE @limMat date = DATEADD(day, {diasMat}, CAST(GETDATE() AS date));
+                SELECT
+                    ISNULL(interno, 0)              AS Interno,
+                    RTRIM(ISNULL(dominio,   '')) AS Dominio,
+                    verificac2                     AS VtvVto,
+                    vencimient                     AS MatafuegoVto,
+                    poliza_vto                     AS PolizaVto,
+                    habilitac2                     AS HabilitacionVto
+                FROM vehiculo
+                WHERE _deleted = 0 AND f_delete IS NULL AND uso = 'PROPIO'
+                  AND (ISNULL(verificac2, '1900-01-01') <= @limVtv
+                    OR ISNULL(vencimient, '1900-01-01') <= @limMat)
+                ORDER BY interno
+                """;
+            var result = new List<VehiculoVtoRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new VehiculoVtoRow(
+                    (int)rd.GetInt64(0), rd.GetString(1),
+                    rd.IsDBNull(2) ? null : DateOnly.FromDateTime(rd.GetDateTime(2)),
+                    rd.IsDBNull(3) ? null : DateOnly.FromDateTime(rd.GetDateTime(3)),
+                    rd.IsDBNull(4) ? null : DateOnly.FromDateTime(rd.GetDateTime(4)),
+                    rd.IsDBNull(5) ? null : DateOnly.FromDateTime(rd.GetDateTime(5))));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Umbrales de anticipación de la Agenda de Vencimientos (parametro.aviso_cho/veh/mat).
+    /// El FoxPro los usa como default del informe. Defaults de fallback: 30 / 7 / 10.</summary>
+    public async Task<(int Chofer, int Vtv, int Matafuego)> GetParametrosAvisoAsync()
+    {
+        return await _cache.GetOrCreateAsync("agenda-venc|parametros", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            // aviso_cho/veh/mat son bigint en la réplica → CAST a int en el SELECT para leer con GetInt32.
+            cmd.CommandText = """
+                SELECT TOP 1
+                    CAST(ISNULL(aviso_cho, 30) AS int),
+                    CAST(ISNULL(aviso_veh, 7)  AS int),
+                    CAST(ISNULL(aviso_mat, 10) AS int)
+                FROM parametro
+                """;
+            await using var rd = await cmd.ExecuteReaderAsync();
+            if (await rd.ReadAsync())
+                return (rd.GetInt32(0), rd.GetInt32(1), rd.GetInt32(2));
+            return (30, 7, 10);
+        });
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  TRÁFICO — Cabeceras/Recorridos · Francos · Viáticos
+    //  Los 3 ítems del menú Tráfico migrados en solo lectura + andamiaje ABM
+    //  (05/07/2026). Tablas: cabecera, chofer_franco, chofer_viatico y sus 2
+    //  catálogos. ⚠ Estas tablas hacen BAJA FÍSICA en FoxPro (no tienen
+    //  f_delete/f_create) — solo _deleted de la réplica. Ver skill modulo-trafico
+    //  y docs/PlanoFoxPro/trafico/. ⚠ Las 5 tablas están en el server VIEJO pero
+    //  NO en el nuevo (172.25.69.217) → replicar antes del día D.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Lista de Cabeceras/Recorridos (cabecera_recorrido.scx → arma_grid).
+    /// codigo = PK lógica; nombre/nombre1/nombre2 = las 3 descripciones; recorrido = texto largo.</summary>
+    public async Task<List<CabeceraRow>> GetCabecerasAsync()
+    {
+        return await _cache.GetOrCreateAsync("cabeceras-lista", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    id                            AS Id,
+                    RTRIM(ISNULL(codigo,   '')) AS Codigo,
+                    RTRIM(ISNULL(nombre,   '')) AS Nombre,
+                    RTRIM(ISNULL(nombre1,  '')) AS Nombre1,
+                    RTRIM(ISNULL(nombre2,  '')) AS Nombre2,
+                    ISNULL(recorrido, '')        AS Recorrido
+                FROM cabecera
+                WHERE _deleted = 0
+                ORDER BY nombre
+                """;
+            var result = new List<CabeceraRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new CabeceraRow(
+                    rd.GetInt32(0), rd.GetString(1), rd.GetString(2),
+                    rd.GetString(3), rd.GetString(4), rd.GetString(5)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Mantenimiento de Francos (chofer_franco.scx → arma_grid). JOIN a chofer por
+    /// id_chofer para el nombre. Filtro por rango de fechas (obligatorio: 71k filas) + código de
+    /// motivo opcional. Acota fechas al rango válido (hay fechas corruptas como 9201-03-03).</summary>
+    public async Task<List<FrancoRow>> GetFrancosAsync(DateOnly desde, DateOnly hasta, string? codigoMotivo)
+    {
+        var d = ClampFecha(desde);
+        var h = ClampFecha(hasta);
+        var cod = (codigoMotivo ?? "").Trim();
+        var key = $"francos|{d:yyyyMMdd}|{h:yyyyMMdd}|{cod}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            var where = $"a._deleted = 0 AND a.fecha BETWEEN '{d:yyyy-MM-dd}' AND '{h:yyyy-MM-dd}'";
+            if (!string.IsNullOrWhiteSpace(cod))
+                where += $" AND a.codigo = '{cod.Replace("'", "''")}'";
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT
+                    a.id                            AS Id,
+                    RTRIM(ISNULL(a.id_chofer, '')) AS IdChofer,
+                    RTRIM(ISNULL(b.nombre,    '')) AS Nombre,
+                    RTRIM(ISNULL(a.codigo,    '')) AS Codigo,
+                    RTRIM(ISNULL(a.motivo,    '')) AS Motivo,
+                    a.fecha                          AS Fecha,
+                    ISNULL(a.trabajo, 0)            AS Trabajo
+                FROM chofer_franco a
+                INNER JOIN chofer b ON a.id_chofer = b.id_chofer
+                WHERE {where}
+                ORDER BY b.nombre, a.fecha
+                """;
+            var result = new List<FrancoRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new FrancoRow(
+                    rd.GetInt32(0), rd.GetString(1), rd.GetString(2), rd.GetString(3),
+                    rd.GetString(4), DateOnly.FromDateTime(rd.GetDateTime(5)), rd.GetBoolean(6)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Motivos de franco distintos presentes en la data (para el combo de filtro).
+    /// Devuelve (codigo, "codigo — motivo"). Excluye vacíos.</summary>
+    public async Task<List<(string Codigo, string Texto)>> GetFrancoMotivosAsync()
+    {
+        return await _cache.GetOrCreateAsync("francos-motivos", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT RTRIM(ISNULL(codigo,'')) AS Codigo, MAX(RTRIM(ISNULL(motivo,''))) AS Motivo
+                FROM chofer_franco
+                WHERE _deleted = 0 AND RTRIM(ISNULL(codigo,'')) <> ''
+                GROUP BY RTRIM(ISNULL(codigo,''))
+                ORDER BY Codigo
+                """;
+            var result = new List<(string, string)>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                var c = rd.GetString(0);
+                var m = rd.GetString(1);
+                result.Add((c, string.IsNullOrEmpty(m) ? c : $"{c} — {m}"));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Auditoría de Francos (chofer_franco_auditoria.scx → bValoriza). Réplica del cruce
+    /// del FoxPro: por cada chofer, para el MES/AÑO elegido, marca cada día como "trb" (trabajó ese
+    /// día — hay un viaje FINALIZADO/FACTURADO PROPIO donde es id_chofer o id_chofer2), el código
+    /// del franco cargado (en minúscula), o "DUP" si hay franco Y trabajo el mismo día. Cuenta días
+    /// trabajados y "problemas" (DUP). Opción de excluir a los auditores (chofer.auditor=1). Todo
+    /// en memoria sobre 3 queries.</summary>
+    public async Task<List<FrancoAuditoriaRow>> GetFrancoAuditoriaAsync(int mes, int ano, bool excluyeAuditores)
+    {
+        var desde = new DateOnly(ano, mes, 1);
+        var hasta = new DateOnly(ano, mes, DateTime.DaysInMonth(ano, mes));
+        var dias = hasta.Day;
+        var key = $"franco-audit|{ano:D4}{mes:D2}|{(excluyeAuditores ? 1 : 0)}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            var dStr = desde.ToString("yyyy-MM-dd");
+            var hStr = hasta.ToString("yyyy-MM-dd");
+
+            // acumulador chofer → (nombre, matriz de días[1..n])
+            var mapa = new Dictionary<string, (string Nombre, string[] Dias)>();
+            string[] NuevaFila() { var a = new string[dias + 1]; return a; } // índice 1..dias
+
+            void MarcarTrabajo(string idCho, string nombre, int diaNum)
+            {
+                if (!mapa.TryGetValue(idCho, out var e))
+                {
+                    e = (nombre, NuevaFila());
+                    mapa[idCho] = e;
+                }
+                if (diaNum >= 1 && diaNum <= dias) e.Dias[diaNum] = "trb";
+            }
+
+            // 1) viajes trabajados (chofer titular) — PROPIO + FINALIZADO/FACTURADO
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = $"""
+                    SELECT RTRIM(ISNULL(id_chofer,'')) AS IdCho, MAX(RTRIM(ISNULL(nombre_cho,''))) AS Nombre, DAY(f_reserva) AS Dia
+                    FROM viaje
+                    WHERE _deleted = 0 AND f_reserva BETWEEN '{dStr}' AND '{hStr}'
+                      AND (estado_via = 'FINALIZADO' OR estado_via = 'FACTURADO')
+                      AND RTRIM(ISNULL(id_chofer,'')) <> '' AND tipo_chofe = 'PROPIO'
+                    GROUP BY RTRIM(ISNULL(id_chofer,'')), DAY(f_reserva)
+                    """;
+                await using var rd = await cmd.ExecuteReaderAsync();
+                while (await rd.ReadAsync())
+                    MarcarTrabajo(rd.GetString(0), rd.GetString(1), rd.GetInt32(2));
+            }
+
+            // 2) viajes como 2º chofer (id_chofer2) — el nombre se resuelve luego si hace falta
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = $"""
+                    SELECT RTRIM(ISNULL(v.id_chofer2,'')) AS IdCho, MAX(RTRIM(ISNULL(c.nombre,''))) AS Nombre, DAY(v.f_reserva) AS Dia
+                    FROM viaje v
+                    LEFT JOIN chofer c ON v.id_chofer2 = c.id_chofer
+                    WHERE v._deleted = 0 AND v.f_reserva BETWEEN '{dStr}' AND '{hStr}'
+                      AND (v.estado_via = 'FINALIZADO' OR v.estado_via = 'FACTURADO')
+                      AND RTRIM(ISNULL(v.id_chofer2,'')) <> '' AND v.tipo_chofe = 'PROPIO'
+                    GROUP BY RTRIM(ISNULL(v.id_chofer2,'')), DAY(v.f_reserva)
+                    """;
+                await using var rd = await cmd.ExecuteReaderAsync();
+                while (await rd.ReadAsync())
+                    MarcarTrabajo(rd.GetString(0), rd.IsDBNull(1) ? "CHOFER NO ENCONTRADO" : rd.GetString(1), rd.GetInt32(2));
+            }
+
+            // 3) francos cargados del mes (excluye código "F" solo, como el FoxPro) → marca/DUP
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = $"""
+                    SELECT RTRIM(ISNULL(a.id_chofer,'')) AS IdCho, RTRIM(ISNULL(b.nombre,'')) AS Nombre,
+                           RTRIM(ISNULL(a.codigo,'')) AS Codigo, DAY(a.fecha) AS Dia
+                    FROM chofer_franco a
+                    LEFT JOIN chofer b ON a.id_chofer = b.id_chofer
+                    WHERE a._deleted = 0 AND a.fecha BETWEEN '{dStr}' AND '{hStr}'
+                      AND RTRIM(ISNULL(a.codigo,'')) <> 'F'
+                    """;
+                await using var rd = await cmd.ExecuteReaderAsync();
+                while (await rd.ReadAsync())
+                {
+                    var idCho = rd.GetString(0);
+                    var nombre = rd.IsDBNull(1) ? "CONDUCTOR NO ENCONTRADO" : rd.GetString(1);
+                    var codigo = rd.GetString(2).ToLowerInvariant();
+                    var dia = rd.GetInt32(3);
+                    if (!mapa.TryGetValue(idCho, out var e))
+                    {
+                        e = (string.IsNullOrEmpty(nombre) ? "CONDUCTOR NO ENCONTRADO" : nombre, NuevaFila());
+                        mapa[idCho] = e;
+                    }
+                    if (dia >= 1 && dia <= dias)
+                        e.Dias[dia] = string.IsNullOrEmpty(e.Dias[dia]) ? codigo : "DUP";
+                }
+            }
+
+            // 4) opcional: excluir auditores (chofer.auditor = 1)
+            var auditores = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (excluyeAuditores)
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT RTRIM(ISNULL(id_chofer,'')) FROM chofer WHERE ISNULL(auditor,0) = 1";
+                await using var rd = await cmd.ExecuteReaderAsync();
+                while (await rd.ReadAsync()) auditores.Add(rd.GetString(0));
+            }
+
+            var result = new List<FrancoAuditoriaRow>();
+            foreach (var kv in mapa)
+            {
+                if (excluyeAuditores && auditores.Contains(kv.Key)) continue;
+                var d = kv.Value.Dias;
+                int trab = 0, prob = 0;
+                for (var i = 1; i <= dias; i++)
+                {
+                    var c = d[i] ?? "";
+                    if (c == "DUP" || c == "PRO") prob++;
+                    else if (!string.IsNullOrEmpty(c)) trab++;
+                }
+                result.Add(new FrancoAuditoriaRow(kv.Key, kv.Value.Nombre, d, trab, prob));
+            }
+            return result.OrderBy(r => r.Nombre).ToList();
+        }) ?? new();
+    }
+
+    /// <summary>Viáticos (chofer_viatico.scx → bFiltro). JOINs a chofer_viatico_liquida, chofer y
+    /// chofer_viatico_motivo. Filtro por rango de fechas + chofer opcional. Tabla vacía hoy (0 filas).</summary>
+    public async Task<List<ViaticoRow>> GetViaticosAsync(DateOnly desde, DateOnly hasta, string? idChofer)
+    {
+        var d = ClampFecha(desde);
+        var h = ClampFecha(hasta);
+        var cho = (idChofer ?? "").Trim();
+        var key = $"viaticos|{d:yyyyMMdd}|{h:yyyyMMdd}|{cho}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            var where = $"v._deleted = 0 AND v.fecha BETWEEN '{d:yyyy-MM-dd}' AND '{h:yyyy-MM-dd}'";
+            if (!string.IsNullOrWhiteSpace(cho))
+                where += $" AND v.id_chofer = '{cho.Replace("'", "''")}'";
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT
+                    v.id                            AS Id,
+                    v.fecha                          AS Fecha,
+                    RTRIM(ISNULL(v.id_chofer, '')) AS IdChofer,
+                    RTRIM(ISNULL(c.nombre,    '')) AS Conductor,
+                    RTRIM(ISNULL(m.nombre,    '')) AS Motivo,
+                    RTRIM(ISNULL(l.nombre,    '')) AS FormaLiquida,
+                    RTRIM(ISNULL(v.forma_pago,'')) AS FormaPago,
+                    ISNULL(v.importe, 0)            AS Importe,
+                    v.f_pago                         AS FPago
+                FROM chofer_viatico v
+                LEFT JOIN chofer c                 ON v.id_chofer  = c.id_chofer
+                LEFT JOIN chofer_viatico_motivo m  ON v.id_motivo  = m.id
+                LEFT JOIN chofer_viatico_liquida l ON v.id_liquida = l.id
+                WHERE {where}
+                ORDER BY v.fecha, l.nombre, c.nombre
+                """;
+            var result = new List<ViaticoRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new ViaticoRow(
+                    rd.GetInt32(0), DateOnly.FromDateTime(rd.GetDateTime(1)), rd.GetString(2),
+                    rd.GetString(3), rd.GetString(4), rd.GetString(5), rd.GetString(6),
+                    rd.GetDecimal(7),
+                    rd.IsDBNull(8) ? null : DateOnly.FromDateTime(rd.GetDateTime(8))));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Catálogo de Motivos de Viático (chofer_viatico_motivo.scx). Vacío hoy.</summary>
+    public Task<List<CatalogoSimpleRow>> GetViaticoMotivosAsync() =>
+        GetCatalogoSimpleAsync("chofer_viatico_motivo", "viatico-motivos");
+
+    /// <summary>Catálogo de Formas de Liquidación de Viático (chofer_viatico_liquida.scx). Vacío hoy.</summary>
+    public Task<List<CatalogoSimpleRow>> GetViaticoLiquidaAsync() =>
+        GetCatalogoSimpleAsync("chofer_viatico_liquida", "viatico-liquida");
+
+    /// <summary>Lector genérico de un catálogo (id, nombre) — sirve para motivo y forma de liquidación.
+    /// El nombre de tabla NO viene del usuario (es constante del código) → seguro de concatenar.</summary>
+    private async Task<List<CatalogoSimpleRow>> GetCatalogoSimpleAsync(string tabla, string cacheKey)
+    {
+        return await _cache.GetOrCreateAsync($"catalogo|{cacheKey}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT id AS Id, RTRIM(ISNULL(nombre, '')) AS Nombre
+                FROM {tabla}
+                WHERE _deleted = 0
+                ORDER BY nombre
+                """;
+            var result = new List<CatalogoSimpleRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new CatalogoSimpleRow(rd.GetInt32(0), rd.GetString(1)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Choferes activos para los combos (id_chofer + nombre). Espeja el cursor de
+    /// chofer_viatico_abm / chofer_franco_abm (Empty(f_delete) → acá _deleted = 0 + f_delete IS NULL).</summary>
+    public async Task<List<CatalogoSimpleRow>> GetChoferesComboAsync()
+    {
+        return await _cache.GetOrCreateAsync("choferes-combo", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT RTRIM(ISNULL(id_chofer,'')) AS Id, RTRIM(ISNULL(nombre,'')) AS Nombre
+                FROM chofer
+                WHERE _deleted = 0 AND f_delete IS NULL AND RTRIM(ISNULL(id_chofer,'')) <> ''
+                ORDER BY nombre
+                """;
+            var result = new List<CatalogoSimpleRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new CatalogoSimpleRow(0, rd.GetString(1)) { IdChofer = rd.GetString(0) });
+            return result;
+        }) ?? new();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  MÓDULO TRÁFICO — Voucher Recepción · Guardia · Contactos · Lista pasajeros
+    //  (06/07/2026, solo lectura + andamiaje ABM)
+    //  🐛 Truncados verificados en la réplica: viaje.voucher_nr / voucher_re / hs_s_inici;
+    //  viaje_guardia.id_vehicul / nombre_cho; estacion.control_sa / cairo_codi (rubro = bigint FK).
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // ── Voucher Recepción (trafico_voucher.scx) ──────────────────────────────
+    //  Auditoría de vouchers de recepción del pasajero: 3 modos de consulta sobre `viaje`.
+    //  Modo 1 = rango de nº de voucher (voucher_nr), 2 = rango de fecha de recepción (voucher_re),
+    //  3 = "sin recepcionar" (voucher_re NULL AND voucher_nr > 0). Sin caché (consulta puntual).
+
+    /// <summary>Consulta de auditoría de vouchers (trafico_voucher.scx). <paramref name="modo"/>:
+    /// "voucher" | "fecha" | "sin". Acota fechas al rango válido. Filtra _deleted = 0.</summary>
+    public async Task<List<VoucherRow>> GetVoucherAuditoriaAsync(
+        string modo, long dVoucher, long hVoucher, DateOnly dFecha, DateOnly hFecha, DateOnly hastaFecha)
+    {
+        string filtro = modo switch
+        {
+            "voucher" => "v.voucher_nr BETWEEN @dv AND @hv",
+            "fecha"   => "v.voucher_re BETWEEN @df AND @hf",
+            _         => "v.voucher_re IS NULL AND v.voucher_nr > 0",  // "sin"
+        };
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT
+                ISNULL(v.voucher_nr, 0)                          AS VoucherNro,
+                v.voucher_re                                     AS VoucherRecep,
+                CAST(v.id_viaje AS bigint)                       AS IdViaje,
+                v.f_reserva                                      AS FReserva,
+                RTRIM(ISNULL(v.hs_s_inici, ''))                AS Hora,
+                CAST(ISNULL(v.interno, 0) AS int)               AS Interno,
+                LTRIM(RTRIM(ISNULL(v.d_destino,'') + ' a ' + ISNULL(v.h_destino,''))) AS Destino,
+                RTRIM(ISNULL(v.id_chofer, ''))                 AS IdChofer,
+                LEFT(RTRIM(ISNULL(v.id_vehicul, '')), 4)       AS Vehiculo,
+                RTRIM(ISNULL(v.id_cliente, ''))                AS IdCliente,
+                RTRIM(ISNULL(v.comentario, ''))                AS Comentario
+            FROM viaje v
+            WHERE v._deleted = 0
+              AND v.f_reserva BETWEEN '{FechaMinValida:yyyy-MM-dd}' AND '{FechaMaxValida:yyyy-MM-dd}'
+              AND ({filtro})
+            ORDER BY v.id_viaje
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@dv", dVoucher));
+        cmd.Parameters.Add(NuevoParam(cmd, "@hv", hVoucher));
+        cmd.Parameters.Add(NuevoParam(cmd, "@df", dFecha.ToDateTime(TimeOnly.MinValue)));
+        cmd.Parameters.Add(NuevoParam(cmd, "@hf", hFecha.ToDateTime(TimeOnly.MinValue)));
+
+        var result = new List<VoucherRow>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+            result.Add(new VoucherRow(
+                rd.GetInt64(0),
+                rd.IsDBNull(1) ? null : DateOnly.FromDateTime(rd.GetDateTime(1)),
+                rd.GetInt64(2),
+                rd.IsDBNull(3) ? null : DateOnly.FromDateTime(rd.GetDateTime(3)),
+                rd.GetString(4), rd.GetInt32(5), rd.GetString(6), rd.GetString(7),
+                rd.GetString(8), rd.GetString(9), rd.GetString(10)));
+        return result;
+    }
+
+    // ── Guardia (trafico_guardia.scx + _abm) ─────────────────────────────────
+    //  ABM sobre viaje_guardia (registro de guardias de choferes/unidades). Baja FÍSICA.
+
+    /// <summary>Guardias en un rango de fechas (trafico_guardia.scx). ORDER BY id_chofer.</summary>
+    public async Task<List<GuardiaRow>> GetGuardiasAsync(DateOnly desde, DateOnly hasta)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                id                                 AS Id,
+                ISNULL(interno, 0)                 AS Interno,
+                RTRIM(ISNULL(id_vehicul, ''))    AS IdVehiculo,
+                RTRIM(ISNULL(id_chofer, ''))     AS IdChofer,
+                RTRIM(ISNULL(nombre_cho, ''))    AS Nombre,
+                ISNULL(franco, 0)                  AS Franco,
+                fecha                              AS Fecha,
+                hs_inicio                          AS HsInicio,
+                hs_fin                             AS HsFin,
+                fpago                              AS FPago
+            FROM viaje_guardia
+            WHERE _deleted = 0 AND fecha BETWEEN @d AND @h
+            ORDER BY id_chofer, fecha
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@d", desde.ToDateTime(TimeOnly.MinValue)));
+        cmd.Parameters.Add(NuevoParam(cmd, "@h", hasta.ToDateTime(TimeOnly.MinValue)));
+        var result = new List<GuardiaRow>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+            result.Add(new GuardiaRow(
+                rd.GetInt32(0), rd.GetInt32(1), rd.GetString(2), rd.GetString(3), rd.GetString(4),
+                rd.GetBoolean(5),
+                rd.IsDBNull(6) ? null : DateOnly.FromDateTime(rd.GetDateTime(6)),
+                rd.IsDBNull(7) ? null : rd.GetDateTime(7),
+                rd.IsDBNull(8) ? null : rd.GetDateTime(8),
+                rd.IsDBNull(9) ? null : DateOnly.FromDateTime(rd.GetDateTime(9))));
+        return result;
+    }
+
+    /// <summary>Una guardia por id (para el editor).</summary>
+    public async Task<GuardiaRow?> GetGuardiaRowAsync(int id)
+    {
+        var lista = await GetGuardiasAsync(FechaMinValida, FechaMaxValida);
+        return lista.FirstOrDefault(g => g.Id == id);
+    }
+
+    // ── Contactos y Proveedores (estacion.scx + _abm) ────────────────────────
+    //  ⚠ `estacion` es el catálogo de PROVEEDORES de toda la empresa (COMPARTIDO con Combustible).
+    //  rubro es bigint (FK a estacion_rubro.id). Baja FÍSICA.
+
+    /// <summary>Lista de contactos/proveedores (estacion.scx). <paramref name="campo"/> del combo del
+    /// FoxPro: "razon" | "direccion" | "localidad" | "telefono". rubroId null/0 = todos los rubros.</summary>
+    public async Task<List<ContactoRow>> GetContactosListaAsync(long? rubroId, string campo, string texto)
+    {
+        return await _cache.GetOrCreateAsync($"contactos|{rubroId}|{campo}|{texto}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            var wheres = new List<string> { "e._deleted = 0" };
+            if (rubroId is > 0) wheres.Add("e.rubro = @rubro");
+            if (!string.IsNullOrWhiteSpace(texto))
+            {
+                string col = campo switch
+                {
+                    "direccion" => "e.domicilio",
+                    "localidad" => "e.localidad",
+                    "telefono"  => "e.telefono",
+                    _           => "e.nombre",
+                };
+                wheres.Add($"{col} LIKE @txt");
+            }
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT
+                    e.id                               AS Id,
+                    e.rubro                            AS RubroId,
+                    RTRIM(ISNULL(r.rubro, ''))       AS Rubro,
+                    RTRIM(ISNULL(e.nombre, ''))      AS Nombre,
+                    RTRIM(ISNULL(e.domicilio, ''))   AS Domicilio,
+                    RTRIM(ISNULL(e.localidad, ''))   AS Localidad,
+                    RTRIM(ISNULL(e.provincia, ''))   AS Provincia,
+                    RTRIM(ISNULL(e.telefono, ''))    AS Telefono,
+                    RTRIM(ISNULL(e.celular, ''))     AS Celular,
+                    RTRIM(ISNULL(e.radio, ''))       AS Radio,
+                    RTRIM(ISNULL(e.contacto1, ''))   AS Contacto1,
+                    RTRIM(ISNULL(e.contacto2, ''))   AS Contacto2
+                FROM estacion e
+                LEFT JOIN estacion_rubro r ON r.id = e.rubro AND r._deleted = 0
+                WHERE {string.Join(" AND ", wheres)}
+                ORDER BY e.nombre
+                """;
+            if (rubroId is > 0) cmd.Parameters.Add(NuevoParam(cmd, "@rubro", rubroId.Value));
+            if (!string.IsNullOrWhiteSpace(texto)) cmd.Parameters.Add(NuevoParam(cmd, "@txt", "%" + texto.Trim() + "%"));
+
+            var result = new List<ContactoRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new ContactoRow(
+                    rd.GetInt32(0), rd.GetInt64(1), rd.GetString(2), rd.GetString(3), rd.GetString(4),
+                    rd.GetString(5), rd.GetString(6), rd.GetString(7), rd.GetString(8), rd.GetString(9),
+                    rd.GetString(10), rd.GetString(11)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Ficha completa de un contacto (estacion_abm.scx) para la vista/edición.</summary>
+    public async Task<ContactoDetalleDto?> GetContactoRowAsync(int id)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                id, ISNULL(rubro, 0), RTRIM(ISNULL(nombre,'')), RTRIM(ISNULL(domicilio,'')),
+                RTRIM(ISNULL(localidad,'')), RTRIM(ISNULL(provincia,'')), RTRIM(ISNULL(telefono,'')),
+                RTRIM(ISNULL(celular,'')), RTRIM(ISNULL(radio,'')), RTRIM(ISNULL(email,'')),
+                RTRIM(ISNULL(contacto1,'')), RTRIM(ISNULL(contacto2,'')), RTRIM(ISNULL(medio_pago,'')),
+                ISNULL(control_sa,0), ISNULL(ult_lote,0), RTRIM(ISNULL(cairo_codi,'')),
+                RTRIM(ISNULL(cairo_iibb,'')), ISNULL(ypf_ruta,0), ISNULL(esso_card,0), ISNULL(cta_cte,0)
+            FROM estacion
+            WHERE id = @id AND _deleted = 0
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@id", id));
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        return new ContactoDetalleDto
+        {
+            Id = rd.GetInt32(0),
+            RubroId = rd.GetInt64(1),
+            Nombre = rd.GetString(2),
+            Domicilio = rd.GetString(3),
+            Localidad = rd.GetString(4),
+            Provincia = rd.GetString(5),
+            Telefono = rd.GetString(6),
+            Celular = rd.GetString(7),
+            Radio = rd.GetString(8),
+            Email = rd.GetString(9),
+            Contacto1 = rd.GetString(10),
+            Contacto2 = rd.GetString(11),
+            MedioPago = rd.GetString(12),
+            ControlSaldo = rd.GetBoolean(13),
+            UltLote = rd.GetInt64(14),
+            CairoCodigo = rd.GetString(15),
+            CairoIibb = rd.GetString(16),
+            YpfRuta = rd.GetBoolean(17),
+            EssoCard = rd.GetBoolean(18),
+            CtaCte = rd.GetBoolean(19),
+        };
+    }
+
+    /// <summary>Rubros de contacto (estacion_rubro.scx) — id + nombre (+ flag audita). ORDER BY rubro.</summary>
+    public async Task<List<RubroContactoRow>> GetRubrosContactoAsync()
+    {
+        return await _cache.GetOrCreateAsync("rubros-contacto", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT id AS Id, RTRIM(ISNULL(rubro, '')) AS Rubro, ISNULL(audita, 0) AS Audita
+                FROM estacion_rubro
+                WHERE _deleted = 0
+                ORDER BY rubro
+                """;
+            var result = new List<RubroContactoRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new RubroContactoRow(rd.GetInt32(0), rd.GetString(1), rd.GetBoolean(2)));
+            return result;
+        }) ?? new();
+    }
+
+    // ── Lista de pasajeros (trafico_pasajero_planilla.scx) ───────────────────
+    //  El dialog de pasajeros ya existe (GetPasajerosViajeAsync). Falta el buscador de viaje:
+    //  elegís una fecha + texto y ves los viajes de ese día para abrir su lista de pasajeros.
+
+    /// <summary>Buscador de viajes de una fecha (para la pantalla Lista de pasajeros). Filtra por
+    /// interno / servicio / cliente / destino con <paramref name="texto"/>. Acota a viajes reales.</summary>
+    public async Task<List<ViajeBuscadorRow>> GetViajesParaBuscadorAsync(DateOnly fecha, string? texto)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        var filtroTexto = string.IsNullOrWhiteSpace(texto)
+            ? ""
+            : """
+              AND (CAST(v.interno AS varchar) LIKE @txt
+                   OR v.id_servici LIKE @txt OR v.nombre_cli LIKE @txt
+                   OR v.d_destino LIKE @txt OR v.h_destino LIKE @txt)
+              """;
+        cmd.CommandText = $"""
+            SELECT
+                CAST(v.id_viaje AS bigint)                       AS IdViaje,
+                v.f_reserva                                      AS FReserva,
+                CAST(ISNULL(v.interno, 0) AS int)               AS Interno,
+                RTRIM(ISNULL(v.id_servici, ''))                AS Servicio,
+                RTRIM(ISNULL(v.nombre_cli, ''))                AS Cliente,
+                LTRIM(RTRIM(ISNULL(v.d_destino,'') + ' a ' + ISNULL(v.h_destino,''))) AS Destino,
+                RTRIM(ISNULL(v.hs_s_inici, ''))                AS Hora,
+                RTRIM(ISNULL(v.estado_via, ''))                AS Estado
+            FROM viaje v
+            WHERE v._deleted = 0 AND v.f_reserva = @f {filtroTexto}
+            ORDER BY v.hs_s_inici, v.interno
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@f", fecha.ToDateTime(TimeOnly.MinValue)));
+        if (!string.IsNullOrWhiteSpace(texto))
+            cmd.Parameters.Add(NuevoParam(cmd, "@txt", "%" + texto.Trim() + "%"));
+        var result = new List<ViajeBuscadorRow>();
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+            result.Add(new ViajeBuscadorRow(
+                rd.GetInt64(0),
+                rd.IsDBNull(1) ? null : DateOnly.FromDateTime(rd.GetDateTime(1)),
+                rd.GetInt32(2), rd.GetString(3), rd.GetString(4), rd.GetString(5),
+                rd.GetString(6), rd.GetString(7)));
+        return result;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    //  MÓDULO COMBUSTIBLE (07/07/2026) — solo lectura + andamiaje ABM
+    //  Tabla viva: vehiculo_sobre (era 2, conciliación por lote). Trampas verificadas en
+    //  docs/PlanoFoxPro/combustible/COMBUSTIBLE_ABM_MENU.md: estacion_n (truncado),
+    //  idrubro/interno/odometro/n_sobre/estacion son bigint, f_carga es la fecha operativa,
+    //  n_sobre=0 = sin conciliar. Filtrar SIEMPRE f_carga entre 2009 y 2027 (años corruptos).
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Rango sano de f_carga del módulo combustible (evita los años corruptos, ej. 4202).</summary>
+    private const string CombRangoFCarga = "a.f_carga BETWEEN '2009-01-01' AND '2027-12-31'";
+
+    // El módulo combustible tiene datos desde 2010 (saldos históricos 2013-2017), fuera del rango
+    // de `viaje` (2021+). Por eso NO usa ClampFecha (que acota a 2021): usa su propio rango sano.
+    private static readonly DateOnly CombFechaMin = new(2009, 1, 1);
+    private static readonly DateOnly CombFechaMax = new(2027, 12, 31);
+    private static DateOnly ClampComb(DateOnly d) => d < CombFechaMin ? CombFechaMin : (d > CombFechaMax ? CombFechaMax : d);
+
+    /// <summary>Promedio de Consumos (vehiculo_combustible_consumo). Trae las cargas del rubro
+    /// combustible (parametro.rubro_comb) del período, ordenadas por dominio+fecha+hora, para que el
+    /// cálculo l/100km se haga EN MEMORIA en la página entre cargas LLENO (método correcto: Σlitros/Σkm
+    /// por tramo, no carga a carga). dominio null = toda la flota propia.</summary>
+    public async Task<List<CargaConsumoRow>> GetPromedioConsumosAsync(string? dominio, DateOnly desde, DateOnly hasta)
+    {
+        desde = ClampComb(desde); hasta = ClampComb(hasta);
+        var dom = (dominio ?? "").Trim().ToUpperInvariant();
+        return await _cache.GetOrCreateAsync($"comb-consumo|{dom}|{desde:yyyyMMdd}|{hasta:yyyyMMdd}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            var wheres = new List<string>
+            {
+                CombRangoFCarga,
+                "a.f_carga BETWEEN @desde AND @hasta",
+                "a.idrubro = (SELECT ISNULL(rubro_comb, 1) FROM parametro)",
+                "ISNULL(a._deleted, 0) = 0",
+            };
+            if (dom.Length > 0) wheres.Add("a.dominio = @dom");
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT
+                    RTRIM(ISNULL(a.dominio, ''))          AS Dominio,
+                    CAST(ISNULL(a.interno, 0) AS int)     AS Interno,
+                    a.f_carga                             AS FCarga,
+                    RTRIM(ISNULL(a.hora, ''))             AS Hora,
+                    RTRIM(ISNULL(a.chofer, ''))           AS Chofer,
+                    RTRIM(ISNULL(a.estacion_n, ''))       AS Estacion,
+                    RTRIM(ISNULL(a.tipo_carga, ''))       AS TipoCarga,
+                    CAST(ISNULL(a.odometro, 0) AS bigint) AS Odometro,
+                    ISNULL(a.litros, 0)                   AS Litros,
+                    ISNULL(a.importe, 0)                  AS Importe,
+                    ISNULL(a.lleno, 0)                    AS Lleno
+                FROM vehiculo_sobre a
+                WHERE {string.Join(" AND ", wheres)}
+                ORDER BY a.dominio, a.f_carga, a.hora
+                """;
+            cmd.Parameters.Add(NuevoParam(cmd, "@desde", desde.ToDateTime(TimeOnly.MinValue)));
+            cmd.Parameters.Add(NuevoParam(cmd, "@hasta", hasta.ToDateTime(TimeOnly.MinValue)));
+            if (dom.Length > 0) cmd.Parameters.Add(NuevoParam(cmd, "@dom", dom));
+
+            var result = new List<CargaConsumoRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new CargaConsumoRow(
+                    rd.GetString(0), rd.GetInt32(1),
+                    DateOnly.FromDateTime(rd.GetDateTime(2)),
+                    rd.GetString(3), rd.GetString(4), rd.GetString(5), rd.GetString(6),
+                    rd.GetInt64(7), rd.GetDecimal(8), rd.GetDecimal(9), rd.GetBoolean(10)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Cargas de combustible para la grilla del conciliador (vehiculo_combustible_mant_sobre_lote).
+    /// Filtro FoxPro: TODOS / DOMINIO / LOTE / ESTACION. Con "lote" se IGNORAN las fechas (como el fuente).
+    /// Devuelve todas las cargas del criterio ordenadas por f_carga, dominio. n_sobre≠0 = conciliada.</summary>
+    public async Task<List<CargaCombustibleRow>> GetCargasCombustibleAsync(
+        string filtro, string? valor, DateOnly desde, DateOnly hasta)
+    {
+        filtro = (filtro ?? "todos").Trim().ToLowerInvariant();
+        var val = (valor ?? "").Trim();
+        desde = ClampComb(desde); hasta = ClampComb(hasta);
+        return await _cache.GetOrCreateAsync($"comb-cargas|{filtro}|{val}|{desde:yyyyMMdd}|{hasta:yyyyMMdd}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            var wheres = new List<string> { CombRangoFCarga, "ISNULL(a._deleted, 0) = 0" };
+            // El filtro LOTE ignora fechas (fiel al FoxPro); el resto acota por período.
+            if (filtro != "lote")
+                wheres.Add("a.f_carga BETWEEN @desde AND @hasta");
+            switch (filtro)
+            {
+                case "dominio":  wheres.Add("a.dominio = @val"); break;
+                case "estacion": wheres.Add("a.estacion_n = @val"); break;
+                case "lote":     wheres.Add("a.n_sobre = @lote"); break;
+                // "todos": sin filtro extra
+            }
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT
+                    a.id                                  AS Id,
+                    a.f_carga                             AS FCarga,
+                    RTRIM(ISNULL(a.hora, ''))             AS Hora,
+                    RTRIM(ISNULL(a.estacion_n, ''))       AS Estacion,
+                    RTRIM(ISNULL(a.tipo_carga, ''))       AS TipoCarga,
+                    RTRIM(ISNULL(a.dominio, ''))          AS Dominio,
+                    CAST(ISNULL(a.interno, 0) AS int)     AS Interno,
+                    CAST(ISNULL(a.odometro, 0) AS bigint) AS Odometro,
+                    ISNULL(a.lleno, 0)                    AS Lleno,
+                    ISNULL(a.litros, 0)                   AS Litros,
+                    ISNULL(a.importe, 0)                  AS Importe,
+                    CAST(ISNULL(a.n_sobre, 0) AS bigint)  AS NSobre,
+                    RTRIM(ISNULL(a.f_pago, ''))           AS FPago,
+                    RTRIM(ISNULL(a.chofer, ''))           AS Chofer,
+                    RTRIM(ISNULL(b.rubro, ''))            AS Rubro
+                FROM vehiculo_sobre a
+                LEFT JOIN estacion_rubro b ON b.id = a.idrubro AND b._deleted = 0
+                WHERE {string.Join(" AND ", wheres)}
+                ORDER BY a.f_carga, a.dominio
+                """;
+            if (filtro != "lote")
+            {
+                cmd.Parameters.Add(NuevoParam(cmd, "@desde", desde.ToDateTime(TimeOnly.MinValue)));
+                cmd.Parameters.Add(NuevoParam(cmd, "@hasta", hasta.ToDateTime(TimeOnly.MinValue)));
+            }
+            if (filtro is "dominio" or "estacion") cmd.Parameters.Add(NuevoParam(cmd, "@val", val));
+            if (filtro == "lote") cmd.Parameters.Add(NuevoParam(cmd, "@lote", long.TryParse(val, out var l) ? l : -1L));
+
+            var result = new List<CargaCombustibleRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new CargaCombustibleRow(
+                    rd.GetInt32(0),
+                    DateOnly.FromDateTime(rd.GetDateTime(1)),
+                    rd.GetString(2), rd.GetString(3), rd.GetString(4), rd.GetString(5),
+                    rd.GetInt32(6), rd.GetInt64(7), rd.GetBoolean(8),
+                    rd.GetDecimal(9), rd.GetDecimal(10), rd.GetInt64(11),
+                    rd.GetString(12), rd.GetString(13), rd.GetString(14)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Ficha de una carga de combustible (para el editor/ficha del conciliador). Trae todos los
+    /// campos editables del alta FoxPro (vehiculo_combustible_carga_sobre).</summary>
+    public async Task<CargaCombustibleDetalleDto?> GetCargaCombustibleRowAsync(int id)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                a.id, CAST(ISNULL(a.interno,0) AS int), RTRIM(ISNULL(a.dominio,'')),
+                CAST(ISNULL(a.idrubro,0) AS int), CAST(ISNULL(a.estacion,0) AS int),
+                RTRIM(ISNULL(a.estacion_n,'')), RTRIM(ISNULL(a.tipo_carga,'')),
+                a.f_carga, RTRIM(ISNULL(a.hora,'')), RTRIM(ISNULL(a.chofer,'')),
+                CAST(ISNULL(a.odometro,0) AS bigint), ISNULL(a.litros,0), ISNULL(a.importe,0),
+                ISNULL(a.p_x_ltr,0), ISNULL(a.lleno,0), ISNULL(a.dos_carga,0),
+                RTRIM(ISNULL(a.f_pago,'')), CAST(ISNULL(a.n_sobre,0) AS bigint),
+                RTRIM(ISNULL(a.u_create,'')), a.f_create, RTRIM(ISNULL(a.u_modify,'')), a.f_modify
+            FROM vehiculo_sobre a
+            WHERE a.id = @id AND ISNULL(a._deleted,0) = 0
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@id", id));
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        return new CargaCombustibleDetalleDto
+        {
+            Id = rd.GetInt32(0),
+            Interno = rd.GetInt32(1),
+            Dominio = rd.GetString(2),
+            IdRubro = rd.GetInt32(3),
+            EstacionId = rd.GetInt32(4),
+            Estacion = rd.GetString(5),
+            TipoCarga = rd.GetString(6),
+            FCarga = DateOnly.FromDateTime(rd.GetDateTime(7)),
+            Hora = rd.GetString(8),
+            Chofer = rd.GetString(9),
+            Odometro = rd.GetInt64(10),
+            Litros = rd.GetDecimal(11),
+            Importe = rd.GetDecimal(12),
+            PxLtr = rd.GetDecimal(13),
+            Lleno = rd.GetBoolean(14),
+            DosCarga = rd.GetBoolean(15),
+            FPago = rd.GetString(16),
+            NSobre = rd.GetInt64(17),
+            UCreate = rd.GetString(18),
+            FCreate = rd.IsDBNull(19) ? null : rd.GetDateTime(19),
+            UModify = rd.GetString(20),
+            FModify = rd.IsDBNull(21) ? null : rd.GetDateTime(21),
+        };
+    }
+
+    /// <summary>Lista de lotes existentes (n_sobre distintos ≠ 0) con su conteo/litros/importe, para el
+    /// panel de conciliación (combo "Agregar a lote existente" y resumen). Ordena por lote descendente.</summary>
+    public async Task<List<LoteCombustibleRow>> GetLotesCombustibleAsync()
+    {
+        return await _cache.GetOrCreateAsync("comb-lotes", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    CAST(a.n_sobre AS bigint)  AS Lote,
+                    COUNT(*)                   AS Cargas,
+                    ISNULL(SUM(a.litros), 0)   AS Litros,
+                    ISNULL(SUM(a.importe), 0)  AS Importe
+                FROM vehiculo_sobre a
+                WHERE ISNULL(a.n_sobre, 0) <> 0
+                  AND a.f_carga BETWEEN '2009-01-01' AND '2027-12-31'
+                  AND ISNULL(a._deleted, 0) = 0
+                GROUP BY a.n_sobre
+                ORDER BY a.n_sobre DESC
+                """;
+            var result = new List<LoteCombustibleRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new LoteCombustibleRow(rd.GetInt64(0), rd.GetInt32(1), rd.GetDecimal(2), rd.GetDecimal(3)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Estaciones de servicio del combustible (estacion WHERE rubro = parametro.rubro_comb) —
+    /// para los combos de filtro por estación y del editor de carga.</summary>
+    public async Task<List<EstacionCombustibleRow>> GetEstacionesCombustibleAsync()
+    {
+        return await _cache.GetOrCreateAsync("comb-estaciones", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT e.id, RTRIM(ISNULL(e.nombre,'')), ISNULL(e.control_sa, 0)
+                FROM estacion e
+                WHERE e.rubro = (SELECT ISNULL(rubro_comb, 1) FROM parametro)
+                  AND ISNULL(e._deleted, 0) = 0
+                ORDER BY e.nombre
+                """;
+            var result = new List<EstacionCombustibleRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new EstacionCombustibleRow(rd.GetInt32(0), rd.GetString(1), rd.GetBoolean(2)));
+            return result;
+        }) ?? new();
+    }
+
+    // ── Saldos y Depósitos de estaciones (circuito 2013-2017, sin uso — histórico) ──
+
+    /// <summary>Saldos por estación (vehiculo_estacion_saldo, informe arma_saldo). Debe = depósitos
+    /// (vehiculo_estacion_saldo, importe positivo); Haber = consumos (vehiculo_sobre.importe) de las
+    /// estaciones con control_sa; Saldo = Debe − Haber. Solo estaciones con control de saldo.</summary>
+    public async Task<List<SaldoEstacionRow>> GetSaldosEstacionesAsync(DateOnly desde, DateOnly hasta)
+    {
+        desde = ClampComb(desde); hasta = ClampComb(hasta);
+        return await _cache.GetOrCreateAsync($"comb-saldos|{desde:yyyyMMdd}|{hasta:yyyyMMdd}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            // Debe: depósitos (los egresos ya vienen negativos, así que SUM es el neto de depósitos).
+            // Haber: consumos a importe real de vehiculo_sobre por la estación (join por NOMBRE, como el FoxPro).
+            cmd.CommandText = """
+                SELECT
+                    e.id                                                     AS EstacionId,
+                    RTRIM(ISNULL(e.nombre, ''))                            AS Estacion,
+                    ISNULL(dep.Debe, 0)                                      AS Debe,
+                    ISNULL(con.Haber, 0)                                     AS Haber,
+                    ISNULL(dep.Debe, 0) - ISNULL(con.Haber, 0)               AS Saldo
+                FROM estacion e
+                OUTER APPLY (
+                    SELECT SUM(s.importe) AS Debe
+                    FROM vehiculo_estacion_saldo s
+                    WHERE s.estacion = e.id
+                      AND s.fecha BETWEEN @desde AND @hasta
+                      AND ISNULL(s._deleted, 0) = 0
+                ) dep
+                OUTER APPLY (
+                    SELECT SUM(a.importe) AS Haber
+                    FROM vehiculo_sobre a
+                    WHERE RTRIM(a.estacion_n) = RTRIM(e.nombre)   -- join por NOMBRE (trampa FoxPro)
+                      AND a.f_carga BETWEEN @desde AND @hasta
+                      AND ISNULL(a._deleted, 0) = 0
+                ) con
+                WHERE e.rubro = (SELECT ISNULL(rubro_comb, 1) FROM parametro)
+                  AND ISNULL(e.control_sa, 0) = 1
+                  AND ISNULL(e._deleted, 0) = 0
+                ORDER BY e.nombre
+                """;
+            cmd.Parameters.Add(NuevoParam(cmd, "@desde", desde.ToDateTime(TimeOnly.MinValue)));
+            cmd.Parameters.Add(NuevoParam(cmd, "@hasta", hasta.ToDateTime(TimeOnly.MinValue)));
+            var result = new List<SaldoEstacionRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new SaldoEstacionRow(
+                    rd.GetInt32(0), rd.GetString(1), rd.GetDecimal(2), rd.GetDecimal(3), rd.GetDecimal(4)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Depósitos cargados (vehiculo_estacion_saldo) para la grilla de Carga / Mantenimiento.
+    /// estacionId null/0 = todas. Egreso = importe negativo. Baja física (sin f_delete).</summary>
+    public async Task<List<DepositoEstacionRow>> GetDepositosEstacionAsync(int? estacionId, DateOnly desde, DateOnly hasta)
+    {
+        desde = ClampComb(desde); hasta = ClampComb(hasta);
+        return await _cache.GetOrCreateAsync($"comb-depositos|{estacionId ?? 0}|{desde:yyyyMMdd}|{hasta:yyyyMMdd}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            var wheres = new List<string> { "s.fecha BETWEEN @desde AND @hasta", "ISNULL(s._deleted, 0) = 0" };
+            if (estacionId is > 0) wheres.Add("s.estacion = @est");
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT
+                    s.id                                 AS Id,
+                    CAST(ISNULL(s.estacion, 0) AS int)   AS EstacionId,
+                    RTRIM(ISNULL(s.estacion_n, ''))      AS Estacion,
+                    s.fecha                              AS Fecha,
+                    RTRIM(ISNULL(s.forma_pago, ''))      AS FormaPago,
+                    RTRIM(ISNULL(s.usuario, ''))         AS Usuario,
+                    ISNULL(s.importe, 0)                 AS Importe,
+                    RTRIM(ISNULL(s.comentario, ''))      AS Comentario
+                FROM vehiculo_estacion_saldo s
+                WHERE {string.Join(" AND ", wheres)}
+                ORDER BY s.fecha DESC, s.id DESC
+                """;
+            cmd.Parameters.Add(NuevoParam(cmd, "@desde", desde.ToDateTime(TimeOnly.MinValue)));
+            cmd.Parameters.Add(NuevoParam(cmd, "@hasta", hasta.ToDateTime(TimeOnly.MinValue)));
+            if (estacionId is > 0) cmd.Parameters.Add(NuevoParam(cmd, "@est", estacionId.Value));
+            var result = new List<DepositoEstacionRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new DepositoEstacionRow(
+                    rd.GetInt32(0), rd.GetInt32(1), rd.GetString(2),
+                    DateOnly.FromDateTime(rd.GetDateTime(3)),
+                    rd.GetString(4), rd.GetString(5), rd.GetDecimal(6), rd.GetString(7)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Control de cargas / días sin cargar (trafico_vehiculo_combustible). Para cada vehículo
+    /// PROPIO activo con al menos una carga: última carga, odómetro de esa carga, y días transcurridos
+    /// desde entonces (DATEDIFF a hoy). Ordena por días desc (los más atrasados arriba). soloSinCargar
+    /// = solo los que hace ≥1 día no cargan (el check "Filtra por Vehículos Sin Carga" del FoxPro).</summary>
+    public async Task<List<ControlCargaRow>> GetControlCargasAsync(bool soloSinCargar, int diasUmbral)
+    {
+        return await _cache.GetOrCreateAsync($"comb-control|{soloSinCargar}|{diasUmbral}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            // Última carga por unidad (SQL 2012: sin usar funciones nuevas). El odómetro que se muestra
+            // es el de esa última carga (subconsulta TOP 1 por f_carga+hora). Link por dominio.
+            cmd.CommandText = $"""
+                SELECT
+                    CAST(ISNULL(v.interno, 0) AS int)                        AS Interno,
+                    RTRIM(ISNULL(v.dominio, ''))                           AS Dominio,
+                    u.UltCarga                                               AS UltCarga,
+                    DATEDIFF(DAY, u.UltCarga, CAST(GETDATE() AS date))       AS Dias,
+                    ISNULL(oc.Odometro, 0)                                   AS Odometro
+                FROM vehiculo v
+                CROSS APPLY (
+                    SELECT MAX(b.f_carga) AS UltCarga
+                    FROM vehiculo_sobre b
+                    WHERE RTRIM(b.dominio) = RTRIM(v.id_vehicul)
+                      AND b.f_carga BETWEEN '2009-01-01' AND '2027-12-31'
+                      AND ISNULL(b._deleted, 0) = 0
+                ) u
+                OUTER APPLY (
+                    SELECT TOP 1 CAST(ISNULL(b2.odometro, 0) AS bigint) AS Odometro
+                    FROM vehiculo_sobre b2
+                    WHERE RTRIM(b2.dominio) = RTRIM(v.id_vehicul)
+                      AND b2.f_carga = u.UltCarga
+                      AND ISNULL(b2._deleted, 0) = 0
+                    ORDER BY b2.hora DESC
+                ) oc
+                WHERE v.activo = 1 AND v.uso = 'PROPIO'
+                  AND u.UltCarga IS NOT NULL
+                  {(soloSinCargar ? "AND DATEDIFF(DAY, u.UltCarga, CAST(GETDATE() AS date)) >= @umbral" : "")}
+                ORDER BY Dias DESC, Interno
+                """;
+            if (soloSinCargar) cmd.Parameters.Add(NuevoParam(cmd, "@umbral", Math.Max(1, diasUmbral)));
+            var result = new List<ControlCargaRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new ControlCargaRow(
+                    rd.GetInt32(0), rd.GetString(1),
+                    DateOnly.FromDateTime(rd.GetDateTime(2)), rd.GetInt32(3), rd.GetInt64(4)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Consumo mensual (litros) — informe nuevo que NO existe en FoxPro. Litros por
+    /// mes × unidad × estación × tipo de combustible (el importe viene 0 con tarjeta prepaga, por eso
+    /// la métrica es litros, no costo). Devuelve el detalle agregado; la página pivotea en memoria.</summary>
+    public async Task<List<ConsumoMensualRow>> GetConsumoMensualAsync(DateOnly desde, DateOnly hasta)
+    {
+        desde = ClampComb(desde); hasta = ClampComb(hasta);
+        return await _cache.GetOrCreateAsync($"comb-mensual|{desde:yyyyMMdd}|{hasta:yyyyMMdd}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    CONVERT(char(7), a.f_carga, 120)                         AS Mes,
+                    RTRIM(ISNULL(a.dominio, ''))                           AS Dominio,
+                    CAST(ISNULL(a.interno, 0) AS int)                        AS Interno,
+                    RTRIM(ISNULL(a.estacion_n, ''))                        AS Estacion,
+                    RTRIM(ISNULL(a.tipo_carga, ''))                        AS TipoCarga,
+                    COUNT(*)                                                 AS Cargas,
+                    ISNULL(SUM(a.litros), 0)                                 AS Litros,
+                    ISNULL(SUM(a.importe), 0)                                AS Importe
+                FROM vehiculo_sobre a
+                WHERE a.f_carga BETWEEN @desde AND @hasta
+                  AND a.idrubro = (SELECT ISNULL(rubro_comb, 1) FROM parametro)
+                  AND ISNULL(a._deleted, 0) = 0
+                GROUP BY CONVERT(char(7), a.f_carga, 120), a.dominio, a.interno, a.estacion_n, a.tipo_carga
+                ORDER BY Mes, Dominio
+                """;
+            cmd.Parameters.Add(NuevoParam(cmd, "@desde", desde.ToDateTime(TimeOnly.MinValue)));
+            cmd.Parameters.Add(NuevoParam(cmd, "@hasta", hasta.ToDateTime(TimeOnly.MinValue)));
+            var result = new List<ConsumoMensualRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new ConsumoMensualRow(
+                    rd.GetString(0), rd.GetString(1), rd.GetInt32(2), rd.GetString(3), rd.GetString(4),
+                    rd.GetInt32(5), rd.GetDecimal(6), rd.GetDecimal(7)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Artículos por rubro de consumo (estacion_rubro_articulo.scx). Para el rubro combustible
+    /// (=1) son los tipos de combustible del combo de la carga (DIESEL 500 / EURO-DIESEL). rubroId
+    /// null/0 = todos los rubros. INNER JOIN a estacion_rubro para el nombre del rubro.</summary>
+    public async Task<List<ArticuloRubroRow>> GetArticulosRubroAsync(long? rubroId)
+    {
+        return await _cache.GetOrCreateAsync($"comb-articulos|{rubroId ?? 0}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            var wheres = new List<string> { "ISNULL(a._deleted, 0) = 0" };
+            if (rubroId is > 0) wheres.Add("a.idrubro = @rub");
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT
+                    a.id                              AS Id,
+                    CAST(ISNULL(a.idrubro, 0) AS int) AS RubroId,
+                    RTRIM(ISNULL(r.rubro, ''))      AS Rubro,
+                    RTRIM(ISNULL(a.nombre, ''))     AS Nombre
+                FROM estacion_rubro_articulo a
+                LEFT JOIN estacion_rubro r ON r.id = a.idrubro AND r._deleted = 0
+                WHERE {string.Join(" AND ", wheres)}
+                ORDER BY r.rubro, a.nombre
+                """;
+            if (rubroId is > 0) cmd.Parameters.Add(NuevoParam(cmd, "@rub", rubroId.Value));
+            var result = new List<ArticuloRubroRow>();
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new ArticuloRubroRow(rd.GetInt32(0), rd.GetInt32(1), rd.GetString(2), rd.GetString(3)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Ficha de un artículo (para el editor). Sin caché (registro puntual).</summary>
+    public async Task<ArticuloRubroRow?> GetArticuloRubroRowAsync(int id)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT a.id, CAST(ISNULL(a.idrubro,0) AS int), RTRIM(ISNULL(r.rubro,'')), RTRIM(ISNULL(a.nombre,''))
+            FROM estacion_rubro_articulo a
+            LEFT JOIN estacion_rubro r ON r.id = a.idrubro AND r._deleted = 0
+            WHERE a.id = @id AND ISNULL(a._deleted,0) = 0
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@id", id));
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        return new ArticuloRubroRow(rd.GetInt32(0), rd.GetInt32(1), rd.GetString(2), rd.GetString(3));
+    }
+
+    /// <summary>Ficha de un depósito (para el editor). Sin caché (registro puntual).</summary>
+    public async Task<DepositoEstacionRow?> GetDepositoEstacionRowAsync(int id)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT s.id, CAST(ISNULL(s.estacion,0) AS int), RTRIM(ISNULL(s.estacion_n,'')),
+                   s.fecha, RTRIM(ISNULL(s.forma_pago,'')), RTRIM(ISNULL(s.usuario,'')),
+                   ISNULL(s.importe,0), RTRIM(ISNULL(s.comentario,''))
+            FROM vehiculo_estacion_saldo s
+            WHERE s.id = @id AND ISNULL(s._deleted,0) = 0
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@id", id));
+        await using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        return new DepositoEstacionRow(
+            rd.GetInt32(0), rd.GetInt32(1), rd.GetString(2),
+            DateOnly.FromDateTime(rd.GetDateTime(3)),
+            rd.GetString(4), rd.GetString(5), rd.GetDecimal(6), rd.GetString(7));
+    }
+
+    /// <summary>Helper: crea un SqlParameter con nombre y valor (evita repetir el patrón CreateParameter).</summary>
+    private static System.Data.Common.DbParameter NuevoParam(System.Data.Common.DbCommand cmd, string nombre, object? valor)
+    {
+        var p = cmd.CreateParameter();
+        p.ParameterName = nombre;
+        p.Value = valor ?? DBNull.Value;
+        return p;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  MÓDULO RESERVAS — Reservas Especiales (viaje origen 'T') y Plantillas
+    //  (reserva_plantilla + armado a viaje origen 'P'). Solo lectura + andamiaje ABM.
+    //  Planos: docs/PlanoFoxPro/reservas/RESERVA_TRANSPORTACION.md y RESERVA_PLANTILLAS.md.
+    //  🐛 Trampa: en `viaje` son bigint id_grupo/id_plantil/id_viaje_i/interno/km/voucher_nr;
+    //  en `reserva_plantilla` son bigint hs/km/km_real/pax/adi_can_1..5 → CAST(... AS int).
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Grilla de Reservas Especiales: las reservas cargadas manualmente (viaje.origen='T').
+    /// Réplica de consulta del alta manual (reserva_transportacion_con_adicional.scx) — acá se
+    /// LISTAN las ya cargadas para consultar; el alta nueva es el andamiaje (dialog + AbmService).
+    /// Rango de fechas obligatorio (~12-19k filas/año) + búsqueda + estados. Reusa el DTO del
+    /// informe de reservas (drill-down al Zoom del Viaje comparte ReservaFsDetalleRow).
+    /// </summary>
+    public async Task<List<ReservaFsDetalleRow>> GetReservasEspecialesAsync(
+        DateOnly desde, DateOnly hasta,
+        IReadOnlyCollection<string> estadosSel, string? busqueda)
+    {
+        desde = ClampFecha(desde);
+        hasta = ClampFecha(hasta);
+        var estKey = estadosSel.Count == 0 ? "all" : string.Join(",", estadosSel.OrderBy(x => x));
+        var busKey = string.IsNullOrWhiteSpace(busqueda) ? "" : busqueda.Trim().ToUpperInvariant();
+        var key = $"resesp|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{estKey}|{busKey}";
+
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            // Filtro de estados (misma convención del proyecto: lista vacía = todos).
+            var estWhere = "";
+            if (estadosSel.Count > 0)
+            {
+                var lista = string.Join(",", estadosSel.Select(e => "'" + e.Replace("'", "''") + "'"));
+                estWhere = $" AND v.estado_via IN ({lista})";
+            }
+            // Búsqueda libre (cliente / servicio / destinos / grupo).
+            var busWhere = "";
+            if (!string.IsNullOrWhiteSpace(busqueda))
+            {
+                var b = busqueda.Trim().Replace("'", "''");
+                busWhere =
+                    " AND (UPPER(COALESCE(v.nombre_cli,'')) LIKE '%" + b + "%'" +
+                    " OR UPPER(COALESCE(v.id_cliente,'')) LIKE '%" + b + "%'" +
+                    " OR UPPER(COALESCE(v.id_servici,'')) LIKE '%" + b + "%'" +
+                    " OR UPPER(COALESCE(v.d_destino,'')) LIKE '%" + b + "%'" +
+                    " OR UPPER(COALESCE(v.h_destino,'')) LIKE '%" + b + "%'" +
+                    " OR UPPER(COALESCE(v.grupo,'')) LIKE '%" + b + "%')";
+            }
+
+            // v.id_viaje/v.pax son int; v.interno es bigint → Convert.ToInt32 al leer.
+            var sql = $"""
+                SELECT
+                    v.id_viaje                                            AS IdViaje,
+                    v.f_reserva                                           AS Fecha,
+                    COALESCE(CONVERT(varchar(5), v.hs_inicio, 108), '')   AS Hora,
+                    COALESCE(v.id_servici, '')                            AS CodServicio,
+                    COALESCE(s.nombre, v.id_servici, '')                  AS Servicio,
+                    COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cli)), ''), v.id_cliente, '') AS Cliente,
+                    LTRIM(RTRIM(COALESCE(v.d_destino, ''))) +
+                        CASE WHEN LTRIM(RTRIM(COALESCE(v.h_destino, ''))) <> ''
+                             THEN ' a ' + LTRIM(RTRIM(v.h_destino)) ELSE '' END AS Recorrido,
+                    COALESCE(v.pax, 0)                                    AS Pax,
+                    COALESCE(v.estado_via, '')                            AS Estado,
+                    COALESCE(v.nombre_cho, '')                            AS Chofer,
+                    v.interno                                             AS Interno,
+                    COALESCE(v.origen, '')                                AS Origen,
+                    COALESCE(v.grupo, '')                                 AS Grupo
+                FROM viaje v
+                LEFT JOIN servicio s ON v.id_servici = s.id_servici
+                WHERE v._deleted = 0
+                  AND v.origen = 'T'
+                  AND v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'
+                  {estWhere}
+                  {busWhere}
+                ORDER BY v.f_reserva DESC, v.hs_inicio, v.id_viaje
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            var result = new List<ReservaFsDetalleRow>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                result.Add(new ReservaFsDetalleRow(
+                    IdViaje: reader.GetInt32(0),
+                    Fecha: DateOnly.FromDateTime(reader.GetDateTime(1)),
+                    Hora: reader.GetString(2),
+                    CodServicio: reader.GetString(3).Trim(),
+                    Servicio: reader.GetString(4).Trim(),
+                    Cliente: reader.GetString(5).Trim(),
+                    Recorrido: reader.GetString(6).Trim(),
+                    Pax: reader.GetInt32(7),
+                    Estado: reader.GetString(8).Trim(),
+                    Chofer: reader.GetString(9).Trim(),
+                    Interno: reader.IsDBNull(10) ? null : Convert.ToInt32(reader.GetValue(10)),
+                    Origen: reader.GetString(11).Trim(),
+                    Grupo: reader.GetString(12).Trim()));
+            }
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>
+    /// Resumen de plantillas (Mantenimiento de Plantillas — reserva_plantilla_mantenimiento.scx):
+    /// una fila por plantilla (id_reserva = nombre = clave de agrupación) con cantidad de filas y
+    /// rango horario. Baja física (sin f_delete), así que solo se filtra _deleted de la réplica.
+    /// </summary>
+    public async Task<List<PlantillaResumenRow>> GetPlantillasResumenAsync()
+    {
+        return await _cache.GetOrCreateAsync("plantillas-resumen", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    RTRIM(id_reserva)          AS IdReserva,
+                    COUNT(*)                   AS Filas,
+                    MIN(RTRIM(ISNULL(hs_inicio,''))) AS HoraDesde,
+                    MAX(RTRIM(ISNULL(hs_inicio,''))) AS HoraHasta,
+                    SUM(CAST(ISNULL(pax,0) AS int))  AS PaxTotal
+                FROM reserva_plantilla
+                WHERE _deleted = 0
+                GROUP BY RTRIM(id_reserva)
+                ORDER BY RTRIM(id_reserva)
+                """;
+            var result = new List<PlantillaResumenRow>();
+            using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                result.Add(new PlantillaResumenRow(
+                    rd.GetString(0).Trim(), rd.GetInt32(1),
+                    rd.GetString(2).Trim(), rd.GetString(3).Trim(), rd.GetInt32(4)));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>Solo los nombres de plantilla (combo del armado y del Mantenimiento).</summary>
+    public async Task<List<string>> GetPlantillasComboAsync()
+    {
+        var resumen = await GetPlantillasResumenAsync();
+        return resumen.Select(p => p.IdReserva).ToList();
+    }
+
+    /// <summary>
+    /// Filas de una plantilla (la grilla del Mantenimiento y del Armado). Los 5 slots de
+    /// adicionales se colapsan a un texto legible ("NOMBRE×cant, …"). Orden por hs_inicio como
+    /// el FoxPro. Trampa: hs/km/pax/adi_can_* son bigint → CAST(... AS int).
+    /// </summary>
+    public async Task<List<PlantillaFilaRow>> GetPlantillaFilasAsync(string idReserva)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = PlantillaFilaSelect
+            + " WHERE p._deleted = 0 AND RTRIM(p.id_reserva) = @id"
+            + " ORDER BY RTRIM(ISNULL(p.hs_inicio,'')), p.id";
+        cmd.Parameters.Add(NuevoParam(cmd, "@id", idReserva));
+        var result = new List<PlantillaFilaRow>();
+        using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+            result.Add(MapPlantillaFila(rd));
+        return result;
+    }
+
+    /// <summary>Ficha de una fila de plantilla (para ver/modifica/baja). Sin caché.</summary>
+    public async Task<PlantillaFilaRow?> GetPlantillaFilaRowAsync(int id)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = PlantillaFilaSelect + " WHERE p._deleted = 0 AND p.id = @id";
+        cmd.Parameters.Add(NuevoParam(cmd, "@id", id));
+        using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        return MapPlantillaFila(rd);
+    }
+
+    // Proyección compartida de una fila de plantilla (mantener en sync con MapPlantillaFila).
+    private const string PlantillaFilaSelect = """
+        SELECT
+            p.id                                       AS Id,
+            RTRIM(ISNULL(p.id_reserva,''))             AS IdReserva,
+            RTRIM(ISNULL(p.hs_inicio,''))              AS HoraIni,
+            RTRIM(ISNULL(p.hs_fin,''))                 AS HoraFin,
+            RTRIM(ISNULL(p.id_servici,''))             AS IdServicio,
+            RTRIM(ISNULL(s.nombre, p.id_servici))      AS Servicio,
+            RTRIM(ISNULL(p.id_vehicul,''))             AS TipoVeh,
+            RTRIM(ISNULL(p.desde,''))                  AS Desde,
+            RTRIM(ISNULL(p.hasta,''))                  AS Hasta,
+            CAST(ISNULL(p.pax,0) AS int)               AS Pax,
+            CAST(ISNULL(p.km,0) AS int)                AS Km,
+            CAST(ISNULL(p.hs,0) AS int)                AS Hs,
+            RTRIM(ISNULL(p.cabecera,''))               AS Cabecera,
+            RTRIM(ISNULL(p.nombre_gui,''))             AS Guia,
+            RTRIM(ISNULL(p.guia_dueno,''))             AS GuiaDueno,
+            RTRIM(ISNULL(p.empresa_de,''))             AS EmpresaDestino,
+            RTRIM(ISNULL(p.recorrido_,''))             AS Recorrido,
+            RTRIM(ISNULL(p.d_destino_,''))             AS Provincia,
+            RTRIM(ISNULL(p.comentario,''))             AS Comentario,
+            RTRIM(ISNULL(p.cronograma,''))             AS Cronograma,
+            RTRIM(ISNULL(p.adi_nom_1,'')) AS An1, CAST(ISNULL(p.adi_can_1,0) AS int) AS Ac1,
+            RTRIM(ISNULL(p.adi_nom_2,'')) AS An2, CAST(ISNULL(p.adi_can_2,0) AS int) AS Ac2,
+            RTRIM(ISNULL(p.adi_nom_3,'')) AS An3, CAST(ISNULL(p.adi_can_3,0) AS int) AS Ac3,
+            RTRIM(ISNULL(p.adi_nom_4,'')) AS An4, CAST(ISNULL(p.adi_can_4,0) AS int) AS Ac4,
+            RTRIM(ISNULL(p.adi_nom_5,'')) AS An5, CAST(ISNULL(p.adi_can_5,0) AS int) AS Ac5
+        FROM reserva_plantilla p
+        LEFT JOIN servicio s ON p.id_servici = s.id_servici
+        """;
+
+    private static PlantillaFilaRow MapPlantillaFila(System.Data.Common.DbDataReader rd)
+    {
+        // Colapsa los 5 slots de adicionales a texto "NOMBRE×cant, …" (ignora los vacíos).
+        var adics = new List<string>();
+        for (int i = 20; i <= 28; i += 2)
+        {
+            var nom = rd.GetString(i).Trim();
+            var can = rd.GetInt32(i + 1);
+            if (!string.IsNullOrWhiteSpace(nom))
+                adics.Add(can > 1 ? $"{nom}×{can}" : nom);
+        }
+        return new PlantillaFilaRow(
+            Id: rd.GetInt32(0),
+            IdReserva: rd.GetString(1).Trim(),
+            HoraIni: rd.GetString(2).Trim(),
+            HoraFin: rd.GetString(3).Trim(),
+            IdServicio: rd.GetString(4).Trim(),
+            Servicio: rd.GetString(5).Trim(),
+            TipoVeh: rd.GetString(6).Trim(),
+            Desde: rd.GetString(7).Trim(),
+            Hasta: rd.GetString(8).Trim(),
+            Pax: rd.GetInt32(9),
+            Km: rd.GetInt32(10),
+            Hs: rd.GetInt32(11),
+            Cabecera: rd.GetString(12).Trim(),
+            Guia: rd.GetString(13).Trim(),
+            GuiaDueno: rd.GetString(14).Trim(),
+            EmpresaDestino: rd.GetString(15).Trim(),
+            Recorrido: rd.GetString(16).Trim(),
+            Provincia: rd.GetString(17).Trim(),
+            Comentario: rd.GetString(18).Trim(),
+            Cronograma: rd.GetString(19).Trim(),
+            Adicionales: string.Join(", ", adics));
+    }
+
+    /// <summary>
+    /// Feriados en un rango (tabla `feriado`) — el armado los usa para excluir/incluir generación.
+    /// ⚠ Hoy hay 0 feriados de 2026 cargados (alerta documentada en FERIADO_ABM.md): el armado
+    /// debe avisar como el FoxPro. Sin caché (poca data, rango variable).
+    /// </summary>
+    public async Task<List<DateOnly>> GetFeriadosRangoAsync(DateOnly desde, DateOnly hasta)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT fecha FROM feriado WHERE _deleted = 0 AND fecha BETWEEN @d AND @h ORDER BY fecha";
+        cmd.Parameters.Add(NuevoParam(cmd, "@d", desde.ToDateTime(TimeOnly.MinValue)));
+        cmd.Parameters.Add(NuevoParam(cmd, "@h", hasta.ToDateTime(TimeOnly.MinValue)));
+        var result = new List<DateOnly>();
+        using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+            if (!rd.IsDBNull(0)) result.Add(DateOnly.FromDateTime(rd.GetDateTime(0)));
+        return result;
+    }
+}
+
+// ── DTOs de Fleteros ─────────────────────────────────────────────────────────────
+
+/// <summary>Fila de la grilla de Fleteros (fletero.scx). Egresado = FDelete con valor.</summary>
+public record FleteroRow(
+    int Id, string IdContrat, string RazonSocial, string Nombre, long Orden,
+    string Cuit, string Localidad, string Telefono, string Email, DateOnly? FDelete);
+
+/// <summary>Ficha completa de un fletero (fletero_abm.scx).</summary>
+public class FleteroDetalleDto
+{
+    public int Id { get; set; }
+    public string IdContrat { get; set; } = "";
+    public string RazonSocial { get; set; } = "";
+    public string Nombre { get; set; } = "";
+    public long Orden { get; set; }
+    public string Cuit { get; set; } = "";
+    public string TipoResp { get; set; } = "";
+    public string Domicilio { get; set; } = "";
+    public string Localidad { get; set; } = "";
+    public string Postal { get; set; } = "";
+    public string Provincia { get; set; } = "";
+    public string Telefono { get; set; } = "";
+    public string Celular { get; set; } = "";
+    public string Email { get; set; } = "";
+    public string Contacto { get; set; } = "";
+    public string IdListaP { get; set; } = "";
+    public string IdLista2 { get; set; } = "";
+    public string ModoLiq { get; set; } = "";
+    public string FcPrefere { get; set; } = "";
+    public bool Diagrama { get; set; }
+    public DateOnly? FCreate { get; set; }
+    public DateOnly? FModify { get; set; }
+    public DateOnly? FDelete { get; set; }
+}
+
+// ── DTOs de Tipo de Vehículos ────────────────────────────────────────────────────
+
+/// <summary>Fila de la grilla de Tipo de Vehículos (vehiculo_tipo.scx). Codigo = id_vehicul
+/// (PK lógica del TIPO: BUS/VAN/MINI/…). Egresado = FDelete con valor.</summary>
+public record TipoVehiculoRow(
+    int Id, string Codigo, string Nombre, int Pax, string Subtipo,
+    decimal? ConsumoMin, decimal? ConsumoMax, bool Vende, string DirDibujo, DateOnly? FDelete);
+
+// ── DTOs del módulo Reservas: Operadores · Grupos · Destinos ─────────────────────
+
+/// <summary>Fila de la grilla de Operadores (cliente_operador.scx). IdOperador = PK lógica global.
+/// RazonSocial sale del LEFT JOIN a cliente ("" si el cliente no existe). Sin f_delete (baja física).</summary>
+public record OperadorRow(
+    int Id, string IdOperador, string IdCliente, string RazonSocial, string Nombre,
+    string Telefono, string Celular, string Interno, string Email, string Comentario);
+
+/// <summary>Fila de la grilla de Grupos (cliente_grupo.scx). La dupla (IdCliente, Nombre) es la clave
+/// lógica. FFacturo con valor = grupo CERRADO (candado: no se renombra ni cambia fecha). Sin papelera
+/// (baja = DELETE físico). Truncados: f_grupo_in→FInicio, f_grupo_fi→FFin, f_grupo_fc→FFacturo.</summary>
+public record GrupoRow(
+    int Id, string IdCliente, string RazonSocial, string Nombre,
+    DateOnly? FInicio, DateOnly? FFin, DateOnly? FFacturo)
+{
+    /// <summary>Grupo facturado (candado): tiene fecha de facturación.</summary>
+    public bool Cerrado => FFacturo is not null;
+}
+
+/// <summary>Fila de la grilla de Destinos (destino.scx). Destino = nombre (clave lógica, MAYÚSCULAS).
+/// Mas100Km = recargo por distancia que se copia a viaje.mas100km. Sin f_delete (baja física).</summary>
+public record DestinoRow(
+    int Id, string Destino, string Direccion, string Localidad, string Telefono,
+    string Correo, string Contacto, string Cabecera, bool Mas100Km);
+
+// ── DTOs de Agenda de Vencimientos ───────────────────────────────────────────────
+
+/// <summary>Chofer con vencimientos de registro/CNRT/AEP (agenda_vencimiento.scx, 1er cursor).</summary>
+public record ChoferVtoRow(
+    string IdChofer, string Nombre, string Fletero, string RegistroNro,
+    DateOnly? RegistroVto, DateOnly? CnrtVto, DateOnly? AepVto);
+
+/// <summary>Vehículo propio con vencimientos de VTV/matafuegos (agenda_vencimiento.scx, 2do cursor).</summary>
+public record VehiculoVtoRow(
+    int Interno, string Dominio,
+    DateOnly? VtvVto, DateOnly? MatafuegoVto, DateOnly? PolizaVto, DateOnly? HabilitacionVto)
+{
+    /// <summary>Interno con formato de la Planilla de Tráfico: NT + 4 dígitos.</summary>
+    public string InternoNT => Interno == 0 ? "—" : "NT" + Interno.ToString("D4");
+}
+
+// ── DTOs de Tráfico: Cabeceras · Francos · Viáticos ─────────────────────────────
+
+/// <summary>Fila de Cabeceras/Recorridos (cabecera_recorrido.scx). codigo = PK lógica;
+/// nombre/nombre1/nombre2 = las 3 descripciones; recorrido = texto largo (detalle del itinerario).</summary>
+public record CabeceraRow(int Id, string Codigo, string Nombre, string Nombre1, string Nombre2, string Recorrido);
+
+/// <summary>Fila del Mantenimiento de Francos (chofer_franco.scx). Trabajo = flag de si trabajó igual.</summary>
+public record FrancoRow(
+    int Id, string IdChofer, string Nombre, string Codigo, string Motivo, DateOnly Fecha, bool Trabajo);
+
+/// <summary>Fila de la Auditoría de Francos (chofer_franco_auditoria.scx). Dias es un arreglo 1..N
+/// (índice 0 sin usar) donde cada celda es "" (nada), "trb" (trabajó), el código del franco en
+/// minúscula, o "DUP" (franco + trabajo el mismo día = problema).</summary>
+public record FrancoAuditoriaRow(string IdChofer, string Nombre, string[] Dias, int DiasTrab, int Problemas);
+
+/// <summary>Fila de Viáticos (chofer_viatico.scx).</summary>
+public record ViaticoRow(
+    int Id, DateOnly Fecha, string IdChofer, string Conductor, string Motivo,
+    string FormaLiquida, string FormaPago, decimal Importe, DateOnly? FPago);
+
+/// <summary>Fila de un catálogo simple id+nombre (chofer_viatico_motivo / chofer_viatico_liquida).
+/// IdChofer se usa solo cuando el catálogo es la lista de choferes para combos.</summary>
+public record CatalogoSimpleRow(int Id, string Nombre)
+{
+    public string IdChofer { get; init; } = "";
+}
+
+// ── DTOs de Tráfico: Voucher · Guardia · Contactos · Lista de pasajeros (06/07/2026) ──
+
+/// <summary>Fila de la auditoría de vouchers (trafico_voucher.scx). VoucherRecep con valor = recibido.
+/// Truncados: voucher_nr→VoucherNro, voucher_re→VoucherRecep, hs_s_inici→Hora.</summary>
+public record VoucherRow(
+    long VoucherNro, DateOnly? VoucherRecep, long IdViaje, DateOnly? FReserva, string Hora,
+    int Interno, string Destino, string IdChofer, string Vehiculo, string IdCliente, string Comentario)
+{
+    /// <summary>Interno con formato de la Planilla de Tráfico (NT + 4 dígitos).</summary>
+    public string InternoNT => Interno == 0 ? "—" : "NT" + Interno.ToString("D4");
+    /// <summary>true = ya se recepcionó el voucher (tiene fecha).</summary>
+    public bool Recepcionado => VoucherRecep is not null;
+}
+
+/// <summary>Fila de la grilla de Guardias (trafico_guardia.scx). FPago con valor = guardia ya pagada
+/// (candado del modifica). Truncados: id_vehicul→IdVehiculo, nombre_cho→Nombre. Baja física.</summary>
+public record GuardiaRow(
+    int Id, int Interno, string IdVehiculo, string IdChofer, string Nombre, bool Franco,
+    DateOnly? Fecha, DateTime? HsInicio, DateTime? HsFin, DateOnly? FPago)
+{
+    /// <summary>Interno con formato NT + 4 dígitos.</summary>
+    public string InternoNT => Interno == 0 ? "—" : "NT" + Interno.ToString("D4");
+    /// <summary>Guardia pagada (candado): tiene fecha de pago.</summary>
+    public bool Pagada => FPago is not null;
+}
+
+/// <summary>Fila de la grilla de Contactos/Proveedores (estacion.scx). RubroId = FK a estacion_rubro.
+/// Rubro = nombre del rubro (LEFT JOIN). Sin f_delete (baja física).</summary>
+public record ContactoRow(
+    int Id, long RubroId, string Rubro, string Nombre, string Domicilio, string Localidad,
+    string Provincia, string Telefono, string Celular, string Radio, string Contacto1, string Contacto2);
+
+/// <summary>Ficha completa de un contacto (estacion_abm.scx). Los campos control_sa/ult_lote/ypf_ruta/
+/// esso_card/cta_cte/cairo_* son legacy del módulo Combustible (la mayoría de proveedores no los usa).</summary>
+public class ContactoDetalleDto
+{
+    public int Id { get; set; }
+    public long RubroId { get; set; }
+    public string Nombre { get; set; } = "";
+    public string Domicilio { get; set; } = "";
+    public string Localidad { get; set; } = "";
+    public string Provincia { get; set; } = "";
+    public string Telefono { get; set; } = "";
+    public string Celular { get; set; } = "";
+    public string Radio { get; set; } = "";
+    public string Email { get; set; } = "";
+    public string Contacto1 { get; set; } = "";
+    public string Contacto2 { get; set; } = "";
+    public string MedioPago { get; set; } = "";
+    public bool ControlSaldo { get; set; }
+    public long UltLote { get; set; }
+    public string CairoCodigo { get; set; } = "";
+    public string CairoIibb { get; set; } = "";
+    public bool YpfRuta { get; set; }
+    public bool EssoCard { get; set; }
+    public bool CtaCte { get; set; }
+}
+
+/// <summary>Fila de la grilla de Rubros de contacto (estacion_rubro.scx). audita = flag que activa
+/// validaciones extra en la carga de combustible (hoy apagado en casi todos). Baja física.</summary>
+public record RubroContactoRow(int Id, string Rubro, bool Audita);
+
+/// <summary>Fila del buscador de viajes de la pantalla Lista de pasajeros. Punto de entrada al
+/// ListaPasajerosDialog ya existente.</summary>
+public record ViajeBuscadorRow(
+    long IdViaje, DateOnly? FReserva, int Interno, string Servicio, string Cliente,
+    string Destino, string Hora, string Estado)
+{
+    /// <summary>Interno con formato NT + 4 dígitos.</summary>
+    public string InternoNT => Interno == 0 ? "—" : "NT" + Interno.ToString("D4");
+}
+
+// ── DTOs del módulo Combustible (07/07/2026) ─────────────────────────────────────
+
+/// <summary>Una carga de combustible para el cálculo de consumos (vehiculo_combustible_consumo).
+/// El l/100km NO se calcula acá: se hace en memoria en la página entre cargas LLENO. Lleno=false =
+/// carga parcial (no cierra tramo). Importe llega en 0 en datos recientes (tarjeta prepaga).</summary>
+public record CargaConsumoRow(
+    string Dominio, int Interno, DateOnly FCarga, string Hora, string Chofer, string Estacion,
+    string TipoCarga, long Odometro, decimal Litros, decimal Importe, bool Lleno)
+{
+    /// <summary>Interno con formato de la Planilla de Tráfico (NT + 4 dígitos).</summary>
+    public string InternoNT => Interno == 0 ? "—" : "NT" + Interno.ToString("D4");
+}
+
+/// <summary>Fila de la grilla del conciliador (vehiculo_combustible_mant_sobre_lote). NSobre≠0 =
+/// carga ya conciliada (fila amarilla). Rubro = nombre del rubro (LEFT JOIN estacion_rubro).</summary>
+public record CargaCombustibleRow(
+    int Id, DateOnly FCarga, string Hora, string Estacion, string TipoCarga, string Dominio,
+    int Interno, long Odometro, bool Lleno, decimal Litros, decimal Importe, long NSobre,
+    string FPago, string Chofer, string Rubro)
+{
+    /// <summary>Interno con formato NT + 4 dígitos.</summary>
+    public string InternoNT => Interno == 0 ? "—" : "NT" + Interno.ToString("D4");
+    /// <summary>Carga ya conciliada (asignada a un lote).</summary>
+    public bool Conciliada => NSobre != 0;
+}
+
+/// <summary>Ficha completa de una carga (vehiculo_combustible_carga_sobre) para el editor/andamiaje.</summary>
+public class CargaCombustibleDetalleDto
+{
+    public int Id { get; set; }
+    public int Interno { get; set; }
+    public string Dominio { get; set; } = "";
+    public int IdRubro { get; set; }
+    public int EstacionId { get; set; }
+    public string Estacion { get; set; } = "";
+    public string TipoCarga { get; set; } = "";
+    public DateOnly FCarga { get; set; }
+    public string Hora { get; set; } = "";
+    public string Chofer { get; set; } = "";
+    public long Odometro { get; set; }
+    public decimal Litros { get; set; }
+    public decimal Importe { get; set; }
+    public decimal PxLtr { get; set; }
+    public bool Lleno { get; set; }
+    public bool DosCarga { get; set; }
+    public string FPago { get; set; } = "";
+    public long NSobre { get; set; }
+    public string UCreate { get; set; } = "";
+    public DateTime? FCreate { get; set; }
+    public string UModify { get; set; } = "";
+    public DateTime? FModify { get; set; }
+
+    public string InternoNT => Interno == 0 ? "—" : "NT" + Interno.ToString("D4");
+    public bool Conciliada => NSobre != 0;
+}
+
+/// <summary>Resumen de un lote de conciliación (n_sobre agrupado): cargas, litros e importe.</summary>
+public record LoteCombustibleRow(long Lote, int Cargas, decimal Litros, decimal Importe);
+
+/// <summary>Consumo agregado por unidad (calculado en memoria en la página con el método correcto:
+/// Σlitros/Σkm entre cargas LLENO). KmRecorridos = suma de tramos válidos; L100 = litros/km×100 del
+/// total; CostoKm = importe/km (null si no hay importe — tarjeta prepaga). Cargas = total de cargas.</summary>
+public record ConsumoUnidadRow(
+    string Dominio, int Interno, int Cargas, long KmRecorridos, decimal Litros,
+    decimal Importe, double? L100, decimal? CostoKm)
+{
+    public string InternoNT => Interno == 0 ? "—" : "NT" + Interno.ToString("D4");
+}
+
+/// <summary>Estación de servicio del combustible (estacion WHERE rubro = rubro_comb).
+/// ControlSaldo = participa del control de saldos/depósitos (solo 3 YPF históricamente).</summary>
+public record EstacionCombustibleRow(int Id, string Nombre, bool ControlSaldo);
+
+/// <summary>Saldo por estación (vehiculo_estacion_saldo, informe histórico 2013-2017).
+/// Debe = depósitos; Haber = consumos; Saldo = Debe − Haber.</summary>
+public record SaldoEstacionRow(int EstacionId, string Estacion, decimal Debe, decimal Haber, decimal Saldo);
+
+/// <summary>Un movimiento de depósito (vehiculo_estacion_saldo). Importe negativo = egreso.
+/// Sin f_delete → baja física.</summary>
+public record DepositoEstacionRow(
+    int Id, int EstacionId, string Estacion, DateOnly Fecha, string FormaPago,
+    string Usuario, decimal Importe, string Comentario)
+{
+    /// <summary>true = egreso (importe negativo); false = ingreso/depósito.</summary>
+    public bool EsEgreso => Importe < 0;
+}
+
+/// <summary>Fila del control de días sin cargar (trafico_vehiculo_combustible). Dias = días desde
+/// la última carga hasta hoy. Odometro = odómetro de esa última carga.</summary>
+public record ControlCargaRow(int Interno, string Dominio, DateOnly UltCarga, int Dias, long Odometro)
+{
+    public string InternoNT => Interno == 0 ? "—" : "NT" + Interno.ToString("D4");
+}
+
+/// <summary>Fila del consumo mensual (litros por mes × unidad × estación × tipo). Mes = "yyyy-MM".
+/// Importe viene 0 con tarjeta prepaga → la métrica del informe es Litros, no Costo.</summary>
+public record ConsumoMensualRow(
+    string Mes, string Dominio, int Interno, string Estacion, string TipoCarga,
+    int Cargas, decimal Litros, decimal Importe)
+{
+    public string InternoNT => Interno == 0 ? "—" : "NT" + Interno.ToString("D4");
+    /// <summary>Mes como "MM/yyyy" para mostrar.</summary>
+    public string MesTexto => Mes.Length == 7 ? $"{Mes.Substring(5, 2)}/{Mes.Substring(0, 4)}" : Mes;
+}
+
+/// <summary>Fila de Artículos por rubro de consumo (estacion_rubro_articulo.scx). RubroId = FK a
+/// estacion_rubro; Rubro = su nombre. Para rubro 1 (combustible) son los tipos de combustible.
+/// Sin f_delete → baja física.</summary>
+public record ArticuloRubroRow(int Id, int RubroId, string Rubro, string Nombre);

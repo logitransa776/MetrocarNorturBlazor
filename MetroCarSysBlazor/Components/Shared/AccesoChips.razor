@@ -1,0 +1,30 @@
+@* Muestra el string `acceso` (usuario.acceso) como chips de una letra, cada uno con su
+   color de familia y un tooltip nativo "Letra = Módulo". Fuente única: PermisosCatalogo.
+   Reutilizable en la grilla de Usuarios y en Auditoría de accesos. *@
+
+@if (string.IsNullOrWhiteSpace(Acceso))
+{
+    <span style="color:#C4CDDA;">—</span>
+}
+else
+{
+    <span class="acc-chips">
+        @foreach (var letra in LetrasOrdenadas)
+        {
+            var p = PermisosCatalogo.Buscar(letra);
+            var titulo = p is null ? $"{letra} = (desconocido)" : $"{letra} = {p.Etiqueta}";
+            <span class="acc-chip" style="@($"background:{PermisosCatalogo.Color(letra)};")" title="@titulo">@letra</span>
+        }
+    </span>
+}
+
+@code {
+    /// <summary>El string acceso (ej. "SA"). Puede venir vacío/null.</summary>
+    [Parameter] public string? Acceso { get; set; }
+
+    // Las letras presentes, en el orden fijo del catálogo (no en el orden en que vengan escritas).
+    private IEnumerable<char> LetrasOrdenadas =>
+        PermisosCatalogo.Todos
+            .Where(p => PermisosCatalogo.Tiene(Acceso, p.Letra))
+            .Select(p => p.Letra);
+}

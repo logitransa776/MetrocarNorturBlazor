@@ -1,0 +1,760 @@
+@page "/reservas-por-cliente"
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject IDialogService DialogService
+@rendermode InteractiveServer
+
+<PageTitle>Reservas por cliente</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-3">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+        Reservas por cliente
+    </MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Metrocar Nortur · viajes de transportación por cliente, mes y tipo de unidad
+    </MudText>
+</div>
+
+@* ── Barra de filtros (horizontal, compacta) — mismo patrón que los otros informes de Reservas ── *@
+<MudPaper Elevation="1" Class="rfs-filtros mb-4">
+    <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudSize.Small" Style="color:#003AA0; flex-shrink:0;" />
+
+    <div class="rfs-fechas">
+        <MudDatePicker Label="Desde" @bind-Date="_desde"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+        <MudDatePicker Label="Hasta" @bind-Date="_hasta"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+    </div>
+
+    @* Ver: reservas activas (no canceladas) o análisis de canceladas. A diferencia del
+       FoxPro, el modo canceladas SIEMPRE respeta el período y deja elegir los motivos. *@
+    <MudSelect T="string" Label="Ver" @bind-Value="_verSel" Dense="true"
+               Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:170px;">
+        <MudSelectItem T="string" Value="@("Activas")">Reservas activas</MudSelectItem>
+        <MudSelectItem T="string" Value="@("Canceladas")">Canceladas</MudSelectItem>
+    </MudSelect>
+
+    @if (_verSel == "Canceladas")
+    {
+        <MudSelect T="int" Label="Motivos" MultiSelection="true" @bind-SelectedValues="_motivosSel"
+                   SelectAll="true" SelectAllText="Todos" Dense="true"
+                   Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:230px;"
+                   MultiSelectionTextFunc="@(s => s.Count == _motivos.Count ? "Todos" : $"{s.Count} de {_motivos.Count}")">
+            @foreach (var m in _motivos)
+            {
+                <MudSelectItem T="int" Value="@m.Id">@m.Motivo</MudSelectItem>
+            }
+        </MudSelect>
+    }
+
+    @* Internos: suma el cliente interno NORTUR (parametro.id_cliente — guardias y traslados
+       internos, ~30% del volumen acá). Excluido por defecto, como en los otros informes. *@
+    <MudSwitch T="bool" @bind-Value="_internos" Color="MudColor.Primary" Size="MudSize.Small"
+               Label="Internos" LabelPlacement="Placement.End" Style="flex-shrink:0;" />
+
+    <div class="rfs-metrica">
+        <MudRadioGroup T="string" Value="_metrica" ValueChanged="CambiarMetrica">
+            <MudRadio T="string" Value="@("Reservas")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Viajes</MudRadio>
+            <MudRadio T="string" Value="@("Pax")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Pax</MudRadio>
+        </MudRadioGroup>
+    </div>
+
+    <span style="flex:1 1 auto;"></span>
+
+    <MudButton Variant="Variant.Filled" Color="MudColor.Primary"
+               OnClick="Cargar" Disabled="_cargando" StartIcon="@Icons.Material.Filled.Search"
+               Style="border-radius:8px; height:40px; text-transform:none; flex-shrink:0;">
+        @(_cargando ? "Cargando..." : "Aplicar filtros")
+    </MudButton>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else if (_filas.Count == 0)
+{
+    <MudAlert Severity="Severity.Warning" Style="border-radius:12px;">No hay viajes para los filtros seleccionados.</MudAlert>
+}
+else
+{
+    @* ── KPIs ── con foco activo se recalculan al subconjunto enfocado (cross-filter) *@
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="@(_metrica == "Pax" ? "Total pax" : "Total viajes")" Value="@Fmt(_totalMetrica)"
+                 Sub="@($"prom. {Fmt(_promedioMensual)} {UnidadMetrica}/mes")" Color="@NorturColors.Azul" />
+        <KpiCard Label="Clientes con actividad" Value="@_clientesActivos.ToString()" Sub="en el período" Color="@NorturColors.Verde" />
+        <KpiCard Label="Cliente líder" Value="@_clienteLider"
+                 Sub="@($"{Fmt(_maxCliente)} {UnidadMetrica}")" Color="@NorturColors.Naranja" />
+        <KpiCard Label="Contratados" Value="@Fmt(_totalContratado)"
+                 Sub="@($"{_pctContratado}% del total")" Color="@NorturColors.Rojo" />
+    </div>
+
+    <div @key="_chartsKey">
+        @* ── Barras apiladas mes × tipo (evolución mensual) ── *@
+        <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
+            @CabeceraFoco($"{(_metrica == "Pax" ? "Pax" : "Viajes")} por mes y tipo de unidad")
+            <ApexChart TItem="ChartItem" Options="_optsBarMes" Height="320" @ref="_barMesChart"
+                       OnDataPointSelection="OnBarMesSelection" OnLegendClicked="OnBarMesLegendClicked">
+                @foreach (var tipo in _tiposPresentes)
+                {
+                    var t = tipo;
+                    <ApexPointSeries TItem="ChartItem"
+                                     Items="_chartData.Where(x => x.Tipo == t).ToList()"
+                                     Name="@t"
+                                     SeriesType="SeriesType.Bar"
+                                     XValue="@(x => x.Mes)"
+                                     YValue="@(x => x.Valor)" />
+                }
+            </ApexChart>
+        </MudPaper>
+
+        @* ── Ranking de clientes + donut por tipo ── *@
+        <MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
+            <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
+                <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                    <div class="rfs-bar-head mb-2">
+                        <div class="rfs-bar-title">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@($"{(_metrica == "Pax" ? "Pax" : "Viajes")} por cliente — {TituloTopN}")</MudText>
+                            <MudSelect T="int" Value="_topN" ValueChanged="CambiarTopN"
+                                       Label="Mostrar" Dense="true" Margin="Margin.Dense"
+                                       Variant="Variant.Outlined" Class="rfs-topn-select">
+                                <MudSelectItem T="int" Value="10">Top 10</MudSelectItem>
+                                <MudSelectItem T="int" Value="15">Top 15</MudSelectItem>
+                                <MudSelectItem T="int" Value="20">Top 20</MudSelectItem>
+                                <MudSelectItem T="int" Value="999">Todos (@_rankingClientes.Count)</MudSelectItem>
+                            </MudSelect>
+                        </div>
+                        @ChipsFoco
+                    </div>
+                    <ApexChart TItem="BarItem" Options="_optsBarCli" Height="@_altoBarras" @ref="_barCliChart"
+                               OnDataPointSelection="OnBarCliSelection">
+                        <ApexPointSeries TItem="BarItem"
+                                         Items="_barItems"
+                                         Name="@_metrica"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="@(x => x.Cliente)"
+                                         YValue="@(x => x.Valor)" />
+                    </ApexChart>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="5" Style="display:flex; flex-direction:column;">
+                <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                    @CabeceraFoco("Distribución por tipo de unidad")
+                    <ApexChart TItem="DonutItem" Options="_optsPieTipo" Height="320" @ref="_pieTipoChart"
+                               OnDataPointSelection="OnPieTipoSelection" OnLegendClicked="OnPieTipoLegendClicked">
+                        <ApexPointSeries TItem="DonutItem"
+                                         Items="_donutTipo"
+                                         Name="@UnidadMetrica"
+                                         SeriesType="SeriesType.Donut"
+                                         XValue="@(x => x.Label)"
+                                         YValue="@(x => x.Valor)" />
+                    </ApexChart>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    </div>
+
+    @* ── Tabla pivote cliente × mes ── *@
+    <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
+        <div class="d-flex justify-space-between align-center flex-wrap mb-3" style="gap:8px;">
+            <div>
+                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                    Detalle: @(_metrica == "Pax" ? "pax" : "viajes") por cliente y mes
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                    Click en una celda para ver los viajes uno por uno · click en el nombre de un cliente para enfocar el tablero
+                </MudText>
+            </div>
+            <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                       StartIcon="@Icons.Material.Filled.Download"
+                       OnClick="DescargarExcel" Disabled="_cargandoDet"
+                       Style="border-radius:8px; text-transform:none;">
+                Descargar Excel
+            </MudButton>
+        </div>
+        @if (_cargandoDet)
+        {
+            <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-2" Style="border-radius:4px;" />
+        }
+        <div class="rfs-tabla-wrap">
+            <table class="rfs-tabla">
+                <thead>
+                    <tr>
+                        <th class="rfs-col-fecha" style="min-width:220px;">Cliente</th>
+                        @foreach (var m in _pivMeses)
+                        {
+                            <th class="rfs-th-serv">@FmtMes(m)</th>
+                        }
+                        <th class="rfs-th-total">TOTAL</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @* Virtualize: pueden ser cientos de clientes (regla de performance). *@
+                    <Virtualize Items="_pivClientes" Context="cli" ItemSize="30" OverscanCount="12" SpacerElement="tr">
+                        <tr>
+                            @{ var atenua = _clienteFocus is not null && !EnFocoCliente(cli) ? "rfs-atenua" : ""; }
+                            <td class="rfs-col-fecha rfs-click @(EnFocoCliente(cli) && _clienteFocus is not null ? "rfs-col-foco" : "") @atenua"
+                                style="max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+                                title="Clic para enfocar el tablero en @NombreDe(cli)"
+                                @onclick="() => ToggleFocoCliente(cli)">@NombreDe(cli)</td>
+                            @foreach (var m in _pivMeses)
+                            {
+                                var mes = m;
+                                var v = PivVal(cli, mes);
+                                if (v > 0)
+                                {
+                                    <td class="rfs-num rfs-click @atenua" title="Ver viajes de @NombreDe(cli) en @FmtMes(mes)"
+                                        @onclick="() => AbrirDetalleCelda(cli, mes)">@Fmt(v)</td>
+                                }
+                                else
+                                {
+                                    <td class="rfs-num rfs-cero @atenua">·</td>
+                                }
+                            }
+                            <td class="rfs-num rfs-tot rfs-click @atenua" title="Ver todos los viajes de @NombreDe(cli)"
+                                @onclick="() => AbrirDetalleCliente(cli)">@Fmt(PivTotFila(cli))</td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td class="rfs-col-fecha rfs-tot">TOTAL</td>
+                        @foreach (var m in _pivMeses)
+                        {
+                            var mes = m;
+                            <td class="rfs-num rfs-tot rfs-click" title="Ver todos los viajes de @FmtMes(mes)"
+                                @onclick="() => AbrirDetalleMes(mes)">@Fmt(PivTotCol(mes))</td>
+                        }
+                        <td class="rfs-num rfs-tot rfs-grantot">@Fmt(_granTotal)</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+
+    // ── Filtros en edición ──
+    // Default: los últimos 6 meses calendario (el pivote tiene columnas mensuales).
+    private DateTime? _desde = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-5);
+    private DateTime? _hasta = DateTime.Today;
+    private string _verSel = "Activas";                 // "Activas" | "Canceladas"
+    private List<MotivoCancelaDto> _motivos = new();
+    private IReadOnlyCollection<int> _motivosSel = new HashSet<int>();
+    private bool _internos;                             // default: cliente interno NORTUR excluido
+    private string _metrica = "Reservas";               // "Reservas" (viajes) | "Pax"
+
+    // ── Foco / cross-filter (estilo Power BI) — DOS dimensiones combinables ──
+    // Cliente AND tipo de unidad, como banda × vehículo en el informe de banda horaria.
+    // El foco de una dimensión RESALTA en sus propios visuales y FILTRA los de la otra,
+    // los KPIs y la tabla. Todo en memoria, sin re-query. null = sin foco.
+    private string? _clienteFocus;   // IdCliente (clave estable; el nombre puede repetirse)
+    private string? _tipoFocus;
+    private bool EnFocoCliente(string idCli) => _clienteFocus is null || _clienteFocus == idCli;
+
+    // ── Filtros APLICADOS (snapshot al tocar "Aplicar") ──
+    private DateOnly _fDesdeAp, _fHastaAp;
+    private bool _internosAp;
+    private bool _canceladasAp;
+    private List<int> _motAp = new();
+
+    private List<ReservaClienteRow> _filas = new();
+    private List<ReservaClienteDetalleRow>? _detalle;   // lazy: se trae al primer drill-down/Excel
+    private bool _cargando;
+    private bool _cargandoDet;
+    private Guid _chartsKey = Guid.NewGuid();
+
+    private static readonly IReadOnlyList<string> _tipos = ReportService.TiposReservaCliente;
+
+    // KPIs
+    private int _totalMetrica;
+    private int _promedioMensual;
+    private int _clientesActivos;
+    private string _clienteLider = "—";
+    private int _maxCliente;
+    private int _totalContratado;
+    private int _pctContratado;
+    private string UnidadMetrica => _metrica == "Pax" ? "pax" : "viajes";
+
+    // ── Gráficos ApexCharts ──
+    private record ChartItem(string Mes, string Tipo, decimal Valor);
+    private record BarItem(string IdCliente, string Cliente, decimal Valor);
+    private record DonutItem(string Label, decimal Valor);
+    private List<ChartItem> _chartData = new();
+    private List<string> _tiposPresentes = new();
+    private List<BarItem> _barItems = new();
+    private List<DonutItem> _donutTipo = new();
+
+    private ApexChart<ChartItem>? _barMesChart;
+    private ApexChart<BarItem>? _barCliChart;
+    private ApexChart<DonutItem>? _pieTipoChart;
+
+    // Color fijo por tipo de unidad (3 categorías, semántica estable en todo el informe):
+    // PROPIO azul, CONTRATADO naranja, SIN REALIZAR gris (todavía sin unidad asignada).
+    private static readonly Dictionary<string, string> _colorTipo = new()
+    {
+        ["PROPIO"] = "#2058D0",
+        ["CONTRATADO"] = "#F99410",
+        ["SIN REALIZAR"] = "#94A3B8",
+    };
+    private static string ColorTipo(string tipo) => _colorTipo.TryGetValue(tipo, out var c) ? c : "#94A3B8";
+
+    // Paleta categórica de 15 hues para el ranking de clientes (la misma del informe de
+    // fecha/servicio, validada con dataviz) + gris para los que caen fuera del top 15.
+    private static readonly List<string> _paletteCli = new()
+    {
+        "#2058D0", "#F99410", "#16A34A", "#DC2626", "#0EA5E9",
+        "#7C3AED", "#B45309", "#DB2777", "#0D9488", "#65A30D",
+        "#4F46E5", "#EA580C", "#059669", "#9333EA", "#0891B2"
+    };
+    private const string _colorOtros = "#94A3B8";
+
+    // Mapa cliente → color por ranking del dataset COMPLETO (color y orden estables: no
+    // cambian al enfocar). Color por entidad, no por posición (regla dataviz).
+    private Dictionary<string, string> _colorPorCliente = new();
+    private Dictionary<string, string> _nombrePorCliente = new();
+    private string ColorCli(string idCli) => _colorPorCliente.TryGetValue(idCli, out var c) ? c : _colorOtros;
+    private string NombreDe(string idCli) => _nombrePorCliente.TryGetValue(idCli, out var n) ? n : idCli;
+
+    // Color ATENUADO (gris claro) si hay foco en esa dimensión y no es la categoría enfocada.
+    private string ColorFocoCli(string idCli) =>
+        (_clienteFocus is null || idCli == _clienteFocus) ? ColorCli(idCli) : "#D9E1EC";
+    private string ColorFocoTipo(string tipo) =>
+        (_tipoFocus is null || tipo == _tipoFocus) ? ColorTipo(tipo) : "#D9E1EC";
+
+    // Cuántos clientes muestra el gráfico de barras (selector "Mostrar").
+    private int _topN = 15;
+    private List<(string Id, string Nombre, int Total)> _rankingClientes = new();
+    private string TituloTopN => _topN >= 999
+        ? $"todos ({_barItems.Count})"
+        : $"top {Math.Min(_topN, _barItems.Count)}";
+    private int _altoBarras = 360;
+
+    // Chips de foco (o hint) — a la derecha del título de cada panel de gráfico. La ✕ de
+    // cualquier chip limpia ESE foco en todo el tablero.
+    private RenderFragment ChipsFoco => __builder =>
+    {
+        @if (_clienteFocus is not null || _tipoFocus is not null)
+        {
+            <div style="display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                @if (_clienteFocus is not null)
+                {
+                    <div class="rfs-focus">
+                        <span class="rfs-focus__lbl">Cliente:</span>
+                        <span class="rfs-focus__val" style="@($"background:{ColorCli(_clienteFocus)};")">@NombreDe(_clienteFocus)</span>
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                       OnClick="LimpiarFocoCliente" Title="Quitar filtro de cliente"
+                                       Style="color:#64748B; padding:2px;" />
+                    </div>
+                }
+                @if (_tipoFocus is not null)
+                {
+                    <div class="rfs-focus">
+                        <span class="rfs-focus__lbl">Tipo:</span>
+                        <span class="rfs-focus__val" style="@($"background:{ColorTipo(_tipoFocus)};")">@_tipoFocus</span>
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                       OnClick="LimpiarFocoTipo" Title="Quitar filtro de tipo"
+                                       Style="color:#64748B; padding:2px;" />
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <span class="rfs-focus-hint">💡 Clic en un cliente o un tipo de unidad para enfocar el tablero</span>
+        }
+    };
+
+    private RenderFragment CabeceraFoco(string titulo) => __builder =>
+    {
+        <div class="rfs-bar-head mb-3">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@titulo</MudText>
+            @ChipsFoco
+        </div>
+    };
+
+    private readonly ApexChartOptions<ChartItem> _optsBarMes = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Stacked = true, Animations = new() { Enabled = false } },
+        PlotOptions = new() { Bar = new() { BorderRadius = 2, BorderRadiusApplication = BorderRadiusApplication.End } },
+        Colors = new List<string> { "#2058D0", "#F99410", "#94A3B8" },
+        Xaxis = new() { Labels = new() { Style = new() { FontSize = "11px", Colors = "#7A90AD" } } },
+        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px", Colors = "#7A90AD" } } } },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
+        Legend = new() { Position = LegendPosition.Top, FontSize = "11px", OnItemClick = new() { ToggleDataSeries = false } },
+        Theme = new() { Mode = Mode.Light },
+        // Sin realce interno de ApexCharts (selección/hover): el highlight del foco es por color.
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
+    private readonly ApexChartOptions<BarItem> _optsBarCli = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        PlotOptions = new()
+        {
+            // Distributed: un color por barra (con una sola serie, sin esto todas usarían Colors[0]).
+            Bar = new() { Horizontal = true, BorderRadius = 4, BorderRadiusApplication = BorderRadiusApplication.End, Distributed = true }
+        },
+        Legend = new() { Show = false },
+        Colors = new List<string> { "#2058D0" },   // reemplazado por barra en Recalcular()
+        Xaxis = new() { Labels = new() { Style = new() { FontSize = "11px" } } },
+        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px" }, MaxWidth = 180 } } },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
+        Theme = new() { Mode = Mode.Light },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
+    private readonly ApexChartOptions<DonutItem> _optsPieTipo = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        Colors = new List<string> { "#2058D0", "#F99410", "#94A3B8" },
+        Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px", OnItemClick = new() { ToggleDataSeries = false } },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
+    // ── Pivote ──
+    private List<string> _pivMeses = new();
+    private List<string> _pivClientes = new();          // IdCliente, orden por total desc
+    private Dictionary<(string, string), int> _pivMap = new();
+    private Dictionary<string, int> _pivTotFila = new();
+    private Dictionary<string, int> _pivTotCol = new();
+    private int _granTotal;
+
+    // "2026-02" → "02/2026"
+    private static string FmtMes(string mes) =>
+        mes.Length == 7 ? $"{mes[5..]}/{mes[..4]}" : mes;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('R'))   // módulo Reservas
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        _motivos = await Reports.GetMotivosCancelacionAsync();
+        // Default del modo canceladas: solo "CANCELADO POR CLIENTE" (motivo 2, el del FoxPro).
+        _motivosSel = new HashSet<int>(_motivos.Where(m => m.Id == 2).Select(m => m.Id));
+        if (_motivosSel.Count == 0)
+            _motivosSel = new HashSet<int>(_motivos.Select(m => m.Id));
+        await Cargar();
+    }
+
+    private async Task Cargar()
+    {
+        if (_desde is null || _hasta is null) return;
+        _cargando = true;
+        StateHasChanged();
+
+        // Snapshot de filtros aplicados (convención del service: lista de motivos vacía = todos)
+        _fDesdeAp = DateOnly.FromDateTime(_desde.Value);
+        _fHastaAp = DateOnly.FromDateTime(_hasta.Value);
+        _internosAp = _internos;
+        _canceladasAp = _verSel == "Canceladas";
+        _motAp = !_canceladasAp || _motivosSel.Count == _motivos.Count
+            ? new List<int>()
+            : _motivosSel.ToList();
+        _detalle = null;
+        // Un nuevo conjunto de filtros descarta los focos anteriores.
+        _clienteFocus = null;
+        _tipoFocus = null;
+
+        _filas = await Reports.GetReservasPorClienteAsync(_fDesdeAp, _fHastaAp, _internosAp, _canceladasAp, _motAp);
+        Recalcular();
+        _chartsKey = Guid.NewGuid();   // datos nuevos → remontar los charts
+
+        _cargando = false;
+    }
+
+    // Cambio de métrica: recálculo en memoria, sin nueva query. Cambia la forma de los
+    // gráficos → se remontan con un key nuevo.
+    private void CambiarMetrica(string metrica)
+    {
+        _metrica = metrica;
+        if (_filas.Count > 0)
+        {
+            Recalcular();
+            _chartsKey = Guid.NewGuid();
+        }
+    }
+
+    // Cambio de "Mostrar Top N": cambia la cantidad de barras (la FORMA) → remontar.
+    private void CambiarTopN(int topN)
+    {
+        _topN = topN;
+        if (_filas.Count > 0)
+        {
+            Recalcular();
+            _chartsKey = Guid.NewGuid();
+        }
+    }
+
+    private void Recalcular()
+    {
+        Func<ReservaClienteRow, int> val = _metrica == "Pax" ? f => f.Pax : f => f.Viajes;
+
+        // Subconjuntos según el foco (modelo Power BI): los visuales de CLIENTE (barras, tabla)
+        // usan los datos filtrados por TIPO (el foco de cliente en ellos es resaltado por
+        // color/CSS), los visuales de TIPO (apilado mensual, donut) usan los filtrados por
+        // CLIENTE, y los KPIs / totales llevan AMBOS focos combinados.
+        var datosTipo = _tipoFocus is null ? _filas : _filas.Where(f => f.Tipo == _tipoFocus).ToList();
+        var datosCliente = _clienteFocus is null ? _filas : _filas.Where(f => f.IdCliente == _clienteFocus).ToList();
+        var datos = _clienteFocus is null ? datosTipo : datosTipo.Where(f => f.IdCliente == _clienteFocus).ToList();
+
+        // Nombre visible por cliente (canónico, del dataset completo).
+        _nombrePorCliente = _filas
+            .GroupBy(f => f.IdCliente)
+            .ToDictionary(g => g.Key, g => g.First().Cliente);
+
+        // ── KPIs: sobre el dataset con ambos focos ──
+        _totalMetrica = datos.Sum(val);
+        var meses = datos.Select(f => f.Mes).Distinct().Count();
+        _promedioMensual = meses > 0 ? (int)Math.Round((double)_totalMetrica / meses) : 0;
+        _clientesActivos = datos.Select(f => f.IdCliente).Distinct().Count();
+
+        var porCliente = datos.GroupBy(f => f.IdCliente)
+            .Select(g => (Id: g.Key, Total: g.Sum(val)))
+            .OrderByDescending(x => x.Total).ToList();
+        _clienteLider = porCliente.Count > 0 ? NombreDe(porCliente[0].Id) : "—";
+        _maxCliente = porCliente.Count > 0 ? porCliente[0].Total : 0;
+
+        _totalContratado = datos.Where(f => f.Tipo == "CONTRATADO").Sum(val);
+        _pctContratado = _totalMetrica > 0 ? (int)Math.Round(100.0 * _totalContratado / _totalMetrica) : 0;
+
+        // ── Pivote: filas = clientes (foco de cliente = resaltado por CSS, la lista completa
+        //    queda visible), celdas y totales de fila con foco de TIPO; los totales de columna
+        //    y el gran total llevan AMBOS focos ──
+        _pivMeses = _filas.Select(f => f.Mes).Distinct().OrderBy(m => m).ToList();
+        _pivMap = datosTipo
+            .GroupBy(f => (f.IdCliente, f.Mes))
+            .ToDictionary(g => ((string, string))g.Key, g => g.Sum(val));
+        _pivTotFila = datosTipo.GroupBy(f => f.IdCliente).ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivClientes = datosTipo.GroupBy(f => f.IdCliente)
+            .Select(g => (Id: g.Key, Total: g.Sum(val)))
+            .OrderByDescending(x => x.Total).ThenBy(x => NombreDe(x.Id))
+            .Select(x => x.Id).ToList();
+        _pivTotCol = datos.GroupBy(f => f.Mes).ToDictionary(g => g.Key, g => g.Sum(val));
+        _granTotal = _totalMetrica;
+
+        // ── Apilado mensual: series = tipos del dataset COMPLETO (cantidad estable para el
+        //    update en el lugar), valores con foco de CLIENTE, todos los meses con 0-fill ──
+        _tiposPresentes = _tipos.Where(t => _filas.Any(f => f.Tipo == t)).ToList();
+        var mapaMesTipo = datosCliente
+            .GroupBy(f => (f.Mes, f.Tipo))
+            .ToDictionary(g => g.Key, g => g.Sum(val));
+        _chartData = _pivMeses
+            .SelectMany(mes => _tiposPresentes.Select(tipo =>
+                new ChartItem(FmtMes(mes), tipo, mapaMesTipo.TryGetValue((mes, tipo), out var v) ? v : 0)))
+            .ToList();
+
+        // ── Barras de clientes: ranking y colores del dataset COMPLETO (orden estable),
+        //    valores con foco de TIPO ──
+        _rankingClientes = _filas.GroupBy(f => f.IdCliente)
+            .Select(g => (Id: g.Key, Nombre: g.First().Cliente, Total: g.Sum(val)))
+            .OrderByDescending(x => x.Total).ThenBy(x => x.Nombre).ToList();
+        _colorPorCliente = _rankingClientes
+            .Select((x, i) => (x.Id, i))
+            .ToDictionary(t => t.Id, t => t.i < _paletteCli.Count ? _paletteCli[t.i] : _colorOtros);
+
+        // Nombres repetidos entre clientes distintos: desambiguar con el código para que
+        // ApexCharts no funda dos barras en una misma etiqueta X.
+        var nombresRepetidos = _rankingClientes.GroupBy(x => x.Nombre)
+            .Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
+        var valoresCli = datosTipo.GroupBy(f => f.IdCliente).ToDictionary(g => g.Key, g => g.Sum(val));
+        _barItems = _rankingClientes.Take(_topN)
+            .Select(x => new BarItem(
+                x.Id,
+                nombresRepetidos.Contains(x.Nombre) ? $"{x.Nombre} ({x.Id})" : x.Nombre,
+                valoresCli.TryGetValue(x.Id, out var v) ? v : 0))
+            .ToList();
+        _altoBarras = Math.Max(360, _barItems.Count * 30);
+
+        // ── Donut por tipo: categorías completas en orden fijo (0-fill si el foco de cliente
+        //    las vacía), valores con foco de CLIENTE ──
+        var tipoValores = datosCliente.GroupBy(f => f.Tipo).ToDictionary(g => g.Key, g => g.Sum(val));
+        _donutTipo = _tiposPresentes
+            .Select(t => new DonutItem(t, tipoValores.TryGetValue(t, out var v) ? v : 0))
+            .ToList();
+
+        // Colores de cada gráfico, atenuando lo no enfocado (efecto highlight de Power BI).
+        _optsBarMes.Colors = _tiposPresentes.Select(ColorFocoTipo).ToList();
+        _optsBarCli.Colors = _barItems.Select(b => ColorFocoCli(b.IdCliente)).ToList();
+        _optsPieTipo.Colors = _donutTipo.Select(d => ColorFocoTipo(d.Label)).ToList();
+    }
+
+    private int PivVal(string cli, string mes) => _pivMap.TryGetValue((cli, mes), out var v) ? v : 0;
+    private int PivTotFila(string cli) => _pivTotFila.TryGetValue(cli, out var v) ? v : 0;
+    private int PivTotCol(string mes) => _pivTotCol.TryGetValue(mes, out var v) ? v : 0;
+
+    // ── Cross-filter: toggles y actualización de los charts ──
+
+    private async Task ToggleFocoCliente(string idCli)
+    {
+        _clienteFocus = _clienteFocus == idCli ? null : idCli;
+        Recalcular();                 // en memoria, sin re-query
+        await ActualizarGraficos();   // repinta EN SU LUGAR (sin remontar → sin parpadeo)
+    }
+
+    private async Task ToggleFocoTipo(string tipo)
+    {
+        _tipoFocus = _tipoFocus == tipo ? null : tipo;
+        Recalcular();
+        await ActualizarGraficos();
+    }
+
+    private Task LimpiarFocoCliente() => ToggleFocoCliente(_clienteFocus ?? "");
+    private Task LimpiarFocoTipo() => ToggleFocoTipo(_tipoFocus ?? "");
+
+    // El foco de una dimensión cambia los VALORES de los gráficos de la otra →
+    // UpdateOptions (colores) + UpdateSeries (valores) en los tres.
+    private async Task ActualizarGraficos()
+    {
+        if (_barMesChart is not null)
+        {
+            await _barMesChart.UpdateOptionsAsync(true, true, false);
+            await _barMesChart.UpdateSeriesAsync(true);
+        }
+        if (_barCliChart is not null)
+        {
+            await _barCliChart.UpdateOptionsAsync(true, true, false);
+            await _barCliChart.UpdateSeriesAsync(true);
+        }
+        if (_pieTipoChart is not null)
+        {
+            await _pieTipoChart.UpdateOptionsAsync(true, true, false);
+            await _pieTipoChart.UpdateSeriesAsync(true);
+        }
+    }
+
+    // En el apilado cada serie ya viene filtrada por tipo → el primer item trae el tipo
+    // de la serie clickeada.
+    private async Task OnBarMesSelection(SelectedData<ChartItem> e)
+    {
+        var tipo = e.DataPoint?.Items?.FirstOrDefault()?.Tipo;
+        if (tipo is not null) await ToggleFocoTipo(tipo);
+    }
+
+    private async Task OnBarMesLegendClicked(LegendClicked<ChartItem> e)
+    {
+        var tipo = e.Series?.Name;
+        if (!string.IsNullOrEmpty(tipo)) await ToggleFocoTipo(tipo);
+    }
+
+    private async Task OnBarCliSelection(SelectedData<BarItem> e)
+    {
+        var idCli = e.DataPoint?.Items?.FirstOrDefault()?.IdCliente;
+        if (idCli is not null) await ToggleFocoCliente(idCli);
+    }
+
+    private async Task OnPieTipoSelection(SelectedData<DonutItem> e)
+    {
+        var tipo = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (tipo is not null) await ToggleFocoTipo(tipo);
+    }
+
+    private async Task OnPieTipoLegendClicked(LegendClicked<DonutItem> e)
+    {
+        var tipo = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (tipo is not null) await ToggleFocoTipo(tipo);
+    }
+
+    // ── Drill-down: los viajes uno por uno detrás del número ──
+
+    private async Task<List<ReservaClienteDetalleRow>> GetDetalleAsync()
+    {
+        if (_detalle is null)
+        {
+            _cargandoDet = true;
+            StateHasChanged();
+            _detalle = await Reports.GetReservasPorClienteDetalleAsync(_fDesdeAp, _fHastaAp, _internosAp, _canceladasAp, _motAp);
+            _cargandoDet = false;
+        }
+        return _detalle;
+    }
+
+    // Los drills respetan el foco activo: el número visible corresponde al subconjunto
+    // enfocado y el detalle tiene que mostrar EXACTAMENTE esos viajes.
+    private bool PasaFocoTipo(ReservaClienteDetalleRow d) => _tipoFocus is null || d.Tipo == _tipoFocus;
+    private bool PasaFocoCliente(ReservaClienteDetalleRow d) => _clienteFocus is null || d.IdCliente == _clienteFocus;
+    private string SufijoFocoTipo => _tipoFocus is null ? "" : $" · {_tipoFocus}";
+
+    private Task AbrirDetalleCelda(string idCli, string mes) =>
+        AbrirDetalle(d => d.IdCliente == idCli && d.Mes == mes && PasaFocoTipo(d),
+                     $"{NombreDe(idCli)} — {FmtMes(mes)}{SufijoFocoTipo}");
+
+    private Task AbrirDetalleCliente(string idCli) =>
+        AbrirDetalle(d => d.IdCliente == idCli && PasaFocoTipo(d),
+                     $"{NombreDe(idCli)} — todo el período{SufijoFocoTipo}");
+
+    private Task AbrirDetalleMes(string mes) =>
+        AbrirDetalle(d => d.Mes == mes && PasaFocoCliente(d) && PasaFocoTipo(d),
+                     $"{(_clienteFocus is null ? "Todos los clientes" : NombreDe(_clienteFocus))} — {FmtMes(mes)}{SufijoFocoTipo}");
+
+    private async Task AbrirDetalle(Func<ReservaClienteDetalleRow, bool> filtro, string subtitulo)
+    {
+        var todas = await GetDetalleAsync();
+        var items = todas.Where(filtro).Select(d => d.Reserva).ToList();
+        if (items.Count == 0) return;
+
+        var parametros = new DialogParameters<ReservasFsDetalleDialog>
+        {
+            { x => x.Items, items },
+            { x => x.Subtitulo, subtitulo }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.ExtraLarge,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<ReservasFsDetalleDialog>("Detalle de viajes", parametros, opciones);
+    }
+
+    private async Task DescargarExcel()
+    {
+        var viajes = await GetDetalleAsync();
+        var bytes = Excel.ReservasPorCliente(_filas, _metrica, viajes);
+        var nombre = $"reservas_por_cliente_{_fDesdeAp:yyyyMMdd}_{_fHastaAp:yyyyMMdd}.xlsx";
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    private static string Fmt(int n) => n.ToString("#,0", System.Globalization.CultureInfo.GetCultureInfo("es-AR"));
+}

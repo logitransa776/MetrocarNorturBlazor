@@ -1,0 +1,240 @@
+@inject ReportService Reports
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Depósito de estación — réplica de vehiculo_estacion_saldo_carga. Modos "ver" / "alta" / "baja".
+   ⚠ ANDAMIAJE (07/07/2026): escritura construida pero apagada por DepositosCombustibleAbmActivo.
+   Circuito histórico (sin uso desde 2017). Egreso = importe × −1. empresa = "NORTUR".
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@_icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@_titulo</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">@_chip</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:160px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_noExiste)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">El depósito ya no existe.</MudAlert>
+        }
+        else
+        {
+            @if (EsAlta && !_abmActivo)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    <b>Vista previa del ABM.</b> El circuito de depósitos está sin uso desde 2017; esta
+                    pantalla queda lista por si se reactivara el control de saldos.
+                </MudAlert>
+            }
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+            }
+
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Movimiento</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Estación</div>
+                        @if (EsAlta)
+                        {
+                            <MudSelect T="int" @bind-Value="_estacionId" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                @foreach (var e in _estaciones)
+                                {
+                                    <MudSelectItem T="int" Value="@e.Id">@e.Nombre</MudSelectItem>
+                                }
+                            </MudSelect>
+                        }
+                        else { <div class="zoom-field__value">@_model?.Estacion</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Fecha</div>
+                        @if (EsAlta)
+                        {
+                            <MudDatePicker @bind-Date="_fecha" DateFormat="dd/MM/yyyy"
+                                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value">@_model?.Fecha.ToString("dd/MM/yyyy")</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Tipo</div>
+                        @if (EsAlta)
+                        {
+                            <MudSelect T="bool" @bind-Value="_esEgreso" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem T="bool" Value="false">Ingreso</MudSelectItem>
+                                <MudSelectItem T="bool" Value="true">Egreso</MudSelectItem>
+                            </MudSelect>
+                        }
+                        else { <div class="zoom-field__value">@(_model?.EsEgreso == true ? "EGRESO" : "INGRESO")</div> }
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Forma de pago</div>
+                        @if (EsAlta)
+                        {
+                            <MudSelect T="string" @bind-Value="_formaPago" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                @foreach (var f in _formasPago)
+                                {
+                                    <MudSelectItem T="string" Value="@f">@f</MudSelectItem>
+                                }
+                            </MudSelect>
+                        }
+                        else { <div class="zoom-field__value">@_model?.FormaPago</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Importe</div>
+                        @if (EsAlta)
+                        {
+                            <MudNumericField @bind-Value="_importe" Min="0" Format="0.00" HideSpinButtons="true"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value">@(_model?.Importe.ToString("C2", _ar))</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Comentario</div>
+                        @if (EsAlta)
+                        {
+                            <MudTextField @bind-Value="_comentario" MaxLength="70" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value" title="@_model?.Comentario">@V(_model?.Comentario)</div> }
+                    </div>
+                </div>
+            </div>
+
+            @if (EsBaja && _model is not null)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">
+                    Esta baja es <b>física</b> (DELETE) — no se puede deshacer.
+                </MudAlert>
+            }
+
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@(_abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                    @(SoloEscritura && !_abmActivo ? "Escritura preparada · circuito histórico" : SoloEscritura ? "Edición habilitada" : "Vista de solo lectura")
+                </div>
+                <div class="cli-footer__btns">
+                    @if (EsAlta)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Grabando…" : "Agregar")
+                        </MudButton>
+                    }
+                    else if (EsBaja)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Delete" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Procesando…" : "Eliminar")
+                        </MudButton>
+                    }
+                    <MudButton Variant="@(SoloLectura ? Variant.Filled : Variant.Text)"
+                               Color="@(SoloLectura ? Color.Primary : Color.Default)" Size="Size.Small"
+                               OnClick="Cerrar">@(SoloLectura ? "Cerrar" : "Cancelar")</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Modo { get; set; } = "ver";
+    [Parameter] public int Id { get; set; }
+
+    private static bool _abmActivo => AbmFeatureFlags.DepositosCombustibleAbmActivo;
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private DepositoEstacionRow? _model;
+    private List<EstacionCombustibleRow> _estaciones = new();
+    private readonly List<string> _formasPago = new()
+    { "CHEQUE PROPIO", "TARJETA DE CREDITO", "TRANSFERENCIA BANCARIA", "AJUSTE DE SALDOS",
+      "EFECTIVO", "CHEQUE TERCERO", "SALDO INICIAL" };
+
+    private int _estacionId;
+    private DateTime? _fecha = DateTime.Today;
+    private bool _esEgreso;
+    private string _formaPago = "";
+    private decimal _importe;
+    private string _comentario = "";
+
+    private bool _cargando = true, _grabando, _noExiste;
+    private string? _error;
+
+    private bool EsAlta => Modo == "alta";
+    private bool EsBaja => Modo == "baja";
+    private bool SoloLectura => Modo == "ver" || EsBaja;
+    private bool SoloEscritura => EsAlta;
+
+    private string _titulo => EsAlta ? "Alta de depósito" : EsBaja ? "Eliminar depósito" : "Datos del depósito";
+    private string _chip => EsAlta ? "Nuevo" : EsBaja ? "Baja física" : "Solo lectura";
+    private string _icono => EsAlta ? Icons.Material.Filled.AddCircle
+        : EsBaja ? Icons.Material.Filled.RemoveCircle : Icons.Material.Filled.AccountBalance;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _estaciones = await Reports.GetEstacionesCombustibleAsync();
+        // Solo estaciones con control de saldo tienen sentido en depósitos (defaulteamos la 1ª).
+        var conCtrl = _estaciones.Where(e => e.ControlSaldo).ToList();
+        if (conCtrl.Any()) _estacionId = conCtrl[0].Id;
+        else if (_estaciones.Any()) _estacionId = _estaciones[0].Id;
+        _formaPago = _formasPago[0];
+
+        if (EsAlta) { _cargando = false; return; }
+
+        var d = await Reports.GetDepositoEstacionRowAsync(Id);
+        if (d is null) { _noExiste = true; _cargando = false; return; }
+        _model = d;
+        _cargando = false;
+    }
+
+    private async Task Grabar()
+    {
+        if (!_abmActivo)
+        {
+            _error = "La escritura de depósitos todavía no está habilitada (sigue en FoxPro).";
+            return;
+        }
+        _error = null; _grabando = true;
+
+        if (EsBaja)
+        {
+            Finalizar(await Abm.BajaDepositoEstacionAsync(Id));
+            return;
+        }
+
+        var estacionNombre = _estaciones.FirstOrDefault(e => e.Id == _estacionId)?.Nombre ?? "";
+        var input = new DepositoEstacionInput(
+            _estacionId, estacionNombre, DateOnly.FromDateTime(_fecha ?? DateTime.Today),
+            _formaPago, _importe, _esEgreso, "BUSLINK", _comentario);
+        Finalizar(await Abm.AltaDepositoEstacionAsync(input));
+    }
+
+    private void Finalizar(AbmService.AbmResult r)
+    {
+        _grabando = false;
+        if (r.Ok) MudDialog.Close(DialogResult.Ok(true));
+        else { _error = r.Error; StateHasChanged(); }
+    }
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+    private static string V(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+}

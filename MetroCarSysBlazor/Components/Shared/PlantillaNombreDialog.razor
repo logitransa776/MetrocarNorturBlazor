@@ -1,0 +1,115 @@
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Renombrar / Duplicar plantilla — réplica de reserva_plantilla_mantenimiento_nombre.scx.
+   Texto libre (nombre nuevo) o combo de plantillas existentes (fusiona/suma filas).
+   ANDAMIAJE: Grabar apagado por AbmFeatureFlags.PlantillasAbmActivo (hoy false).
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@(_esRenombra ? Icons.Material.Filled.DriveFileRenameOutline : Icons.Material.Filled.ContentCopy)"
+                     Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@(_esRenombra ? "Renombrar plantilla" : "Duplicar plantilla")</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (!_abmActivo)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                <b>Vista previa.</b> El mantenimiento de plantillas todavía se hace en FoxPro; se activa el día del corte a Buslink.
+            </MudAlert>
+        }
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+        }
+
+        <MudText Typo="Typo.body2" Class="mb-2">
+            Plantilla origen: <b>@Origen</b>
+        </MudText>
+
+        <MudRadioGroup T="bool" @bind-Value="_usarExistente" Class="mb-2">
+            <MudRadio T="bool" Value="false" Size="Size.Small">Nombre nuevo</MudRadio>
+            <MudRadio T="bool" Value="true" Size="Size.Small">Fusionar con existente</MudRadio>
+        </MudRadioGroup>
+
+        @if (_usarExistente)
+        {
+            <MudSelect T="string" Label="Plantilla destino" @bind-Value="_destino" Dense="true"
+                       Variant="Variant.Outlined" Margin="Margin.Dense">
+                @foreach (var p in Existentes.Where(x => x != Origen))
+                {
+                    <MudSelectItem T="string" Value="@p">@p</MudSelectItem>
+                }
+            </MudSelect>
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">
+                El destino ya existe: se <b>duplicarán servicios</b> (se suman las filas).
+            </MudAlert>
+        }
+        else
+        {
+            <MudTextField @bind-Value="_destino" Label="Nombre nuevo" MaxLength="30" Immediate="true"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+        }
+
+        <div class="cli-footer mt-2">
+            <div class="cli-footer__hint">
+                <MudIcon Icon="@(_abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                @(_abmActivo ? "Habilitado" : "Pendiente de activar en Buslink")
+            </div>
+            <div class="cli-footer__btns">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                    @(_grabando ? "Procesando…" : (_esRenombra ? "Renombrar" : "Duplicar"))
+                </MudButton>
+                <MudButton Variant="Variant.Text" Color="Color.Default" Size="Size.Small" OnClick="Cerrar">Cancelar</MudButton>
+            </div>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string Modo { get; set; } = "renombra";   // "renombra" | "duplica"
+    [Parameter] public string Origen { get; set; } = "";
+    [Parameter] public List<string> Existentes { get; set; } = new();
+
+    private static bool _abmActivo => AbmFeatureFlags.PlantillasAbmActivo;
+    private bool _esRenombra => Modo == "renombra";
+    private bool _usarExistente;
+    private string _destino = "";
+    private bool _grabando;
+    private string? _error;
+
+    private async Task Grabar()
+    {
+        if (!_abmActivo)
+        {
+            _error = "La escritura de plantillas todavía no está habilitada (sigue en FoxPro).";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_destino))
+        {
+            _error = "Cargá el nombre de la plantilla destino.";
+            return;
+        }
+        _error = null; _grabando = true;
+
+        var res = _esRenombra
+            ? await Abm.RenombrarPlantillaAsync(Origen, _destino)
+            : await Abm.DuplicarPlantillaAsync(Origen, _destino);
+
+        _grabando = false;
+        if (res.Ok) MudDialog.Close(DialogResult.Ok(true));
+        else { _error = res.Error; StateHasChanged(); }
+    }
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+}

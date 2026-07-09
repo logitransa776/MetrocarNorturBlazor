@@ -69,7 +69,8 @@ public static class NorturIdentityFactory
 {
     public const string AuthScheme = "NorturAuth";
 
-    public static ClaimsPrincipal Crear(string usuario, string acceso, string nivel, bool operador)
+    public static ClaimsPrincipal Crear(
+        string usuario, string acceso, string nivel, bool operador, Guid? sesion = null)
     {
         var claims = new List<Claim> { new(ClaimTypes.Name, usuario) };
 
@@ -80,6 +81,10 @@ public static class NorturIdentityFactory
 
         if (operador)
             claims.Add(new Claim(NorturClaims.Operador, "1"));
+
+        // GUID de la sesión (para cruzar el logout con su LOGIN en la bitácora usuarios_logs).
+        if (sesion is not null)
+            claims.Add(new Claim(NorturClaims.Sesion, sesion.Value.ToString()));
 
         var identity = new ClaimsIdentity(claims, AuthScheme);
         return new ClaimsPrincipal(identity);

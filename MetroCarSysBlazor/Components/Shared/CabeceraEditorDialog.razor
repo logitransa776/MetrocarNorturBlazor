@@ -1,0 +1,238 @@
+@inject ReportService Reports
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Cabeceras/Recorridos — réplica del form FoxPro cabecera_recorrido_abm.scx. 4 modos:
+   "ver" (solo lectura), "alta", "modifica", "baja". Campos: código (PK lógica, no editable
+   en modifica), 3 descripciones y recorrido (texto largo = itinerario detallado).
+
+   ⚠ ANDAMIAJE (05/07/2026): la ESCRITURA está construida (AbmService.*CabeceraAsync) pero el
+   botón Grabar está DESHABILITADO — la tabla `cabecera` sigue con dueño FoxPro. El día que se
+   active: AbmFeatureFlags.CabecerasAbmActivo=true + bloquear FoxPro + apagar sync + replicar
+   la tabla al server nuevo. 🐛 Baja FÍSICA (DELETE), no lógica (la tabla no tiene f_delete).
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@_icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@_titulo</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">@_chip</span>
+            @if (!string.IsNullOrEmpty(_encabezado))
+            {
+                <span class="zoom-title-bar__nro">@_encabezado</span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:160px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_noExiste)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">La cabecera ya no existe.</MudAlert>
+        }
+        else
+        {
+            @if (SoloEscritura && !_abmActivo)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    <b>Vista previa del ABM.</b> La edición de cabeceras todavía se hace en FoxPro;
+                    esta pantalla queda lista para activarse el día que la tabla pase a Buslink.
+                </MudAlert>
+            }
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+            }
+
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Cabecera</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Código</div>
+                        @if (EsAlta)
+                        {
+                            <MudTextField @bind-Value="_codigo" MaxLength="20" Immediate="true"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          Style="text-transform:uppercase;" />
+                        }
+                        else
+                        {
+                            <div class="zoom-field__value zoom-field__value--acento" title="@_codigo">@_codigo</div>
+                        }
+                    </div>
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">1ª descripción</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_nombre" MaxLength="140" Immediate="true"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_nombre">@V(_nombre)</div> }
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">2ª descripción</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_nombre1" MaxLength="140"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_nombre1">@V(_nombre1)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">3ª descripción</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_nombre2" MaxLength="140"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_nombre2">@V(_nombre2)</div> }
+                    </div>
+                </div>
+            </div>
+
+            <div class="zoom-box zoom-box--sec mt-2">
+                <span class="zoom-box__label">Recorrido</span>
+                <div class="pa-2">
+                    @if (SoloEscritura)
+                    {
+                        <MudTextField @bind-Value="_recorrido" Lines="8" AutoGrow="true"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                                      Placeholder="Detalle del itinerario…" />
+                    }
+                    else
+                    {
+                        <div class="zoom-field__value" style="white-space:pre-wrap;" title="@_recorrido">@V(_recorrido)</div>
+                    }
+                </div>
+            </div>
+
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@(SoloEscritura && _abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                    @(SoloEscritura && !_abmActivo
+                        ? "Escritura preparada · pendiente de activar en Buslink"
+                        : SoloEscritura ? "Edición habilitada" : "Vista de solo lectura")
+                </div>
+                <div class="cli-footer__btns">
+                    @if (EsAlta)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Grabando…" : "Agregar")
+                        </MudButton>
+                    }
+                    else if (EsModifica)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Grabando…" : "Modificar")
+                        </MudButton>
+                    }
+                    else if (EsBaja)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Delete" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Procesando…" : "Eliminar")
+                        </MudButton>
+                    }
+                    <MudButton Variant="@(SoloLectura ? Variant.Filled : Variant.Text)"
+                               Color="@(SoloLectura ? Color.Primary : Color.Default)" Size="Size.Small"
+                               OnClick="Cerrar">@(SoloLectura ? "Cerrar" : "Cancelar")</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Modo: "ver" | "alta" | "modifica" | "baja".</summary>
+    [Parameter] public string Modo { get; set; } = "ver";
+    /// <summary>Id de la cabecera (para ver/modifica/baja). En alta se ignora.</summary>
+    [Parameter] public int Id { get; set; }
+
+    private static bool _abmActivo => AbmFeatureFlags.CabecerasAbmActivo;
+
+    private string _codigo = "", _nombre = "", _nombre1 = "", _nombre2 = "", _recorrido = "";
+    private bool _cargando = true, _grabando, _noExiste;
+    private string? _error;
+
+    private bool EsAlta => Modo == "alta";
+    private bool EsModifica => Modo == "modifica";
+    private bool EsBaja => Modo == "baja";
+    private bool SoloLectura => Modo == "ver" || EsBaja;
+    private bool SoloEscritura => EsAlta || EsModifica;
+
+    private string _titulo => EsAlta ? "Alta de Cabecera"
+        : EsModifica ? "Modificar Cabecera"
+        : EsBaja ? "Eliminar Cabecera"
+        : "Datos de la Cabecera";
+    private string _chip => EsAlta ? "Nueva" : EsModifica ? "Edición" : EsBaja ? "Baja física" : "Solo lectura";
+    private string _encabezado => EsAlta ? "" : _codigo;
+    private string _icono => EsAlta ? Icons.Material.Filled.AddCircle
+        : EsBaja ? Icons.Material.Filled.RemoveCircle
+        : Icons.Material.Filled.AltRoute;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (EsAlta) { _cargando = false; return; }
+
+        var cab = (await Reports.GetCabecerasAsync()).FirstOrDefault(c => c.Id == Id);
+        if (cab is null) { _noExiste = true; _cargando = false; return; }
+        _codigo = cab.Codigo;
+        _nombre = cab.Nombre;
+        _nombre1 = cab.Nombre1;
+        _nombre2 = cab.Nombre2;
+        _recorrido = cab.Recorrido;
+        _cargando = false;
+    }
+
+    private async Task Grabar()
+    {
+        if (!_abmActivo)
+        {
+            _error = "La escritura de cabeceras todavía no está habilitada (sigue en FoxPro).";
+            return;
+        }
+        _error = null; _grabando = true;
+
+        if (EsBaja)
+        {
+            Finalizar(await Abm.BajaCabeceraAsync(Id));
+            return;
+        }
+
+        var input = new CabeceraInput(
+            EsAlta ? _codigo : _codigo, _nombre, _nombre1, _nombre2, _recorrido);
+
+        Finalizar(EsAlta
+            ? await Abm.AltaCabeceraAsync(input)
+            : await Abm.ModificaCabeceraAsync(Id, input));
+    }
+
+    private void Finalizar(AbmService.AbmResult r)
+    {
+        _grabando = false;
+        if (r.Ok) MudDialog.Close(DialogResult.Ok(true));
+        else { _error = r.Error; StateHasChanged(); }
+    }
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+    private static string V(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+}

@@ -157,6 +157,65 @@
                 }
             </div>
 
+            @* ── Historial de sesiones (solo en modo ver) ── *@
+            @if (SoloLectura)
+            {
+                <div class="zoom-box zoom-box--sec">
+                    <span class="zoom-box__label">
+                        Historial de sesiones
+                        @if (_sesiones.Count > 0)
+                        {
+                            <span style="font-weight:400; color:#7A90AD;">· últimas @_sesiones.Count</span>
+                        }
+                    </span>
+                    @if (_sesiones.Count == 0)
+                    {
+                        <div class="zoom-row pa-2">
+                            <div class="zoom-field__value" style="color:#94A3B8;">
+                                Este usuario todavía no registró ingresos desde Buslink.
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="usr-ses">
+                            <table class="usr-ses__tbl">
+                                <thead>
+                                    <tr>
+                                        <th>Inicio</th>
+                                        <th>Fin</th>
+                                        <th>Estado</th>
+                                        <th>IP</th>
+                                        <th>Equipo</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var s in _sesiones)
+                                    {
+                                        <tr>
+                                            <td>@(s.Inicio?.ToString("dd/MM/yy HH:mm:ss") ?? "—")</td>
+                                            <td>@(s.Fin?.ToString("dd/MM/yy HH:mm:ss") ?? "—")</td>
+                                            <td>
+                                                @if (s.Activa)
+                                                {
+                                                    <span class="usr-conn usr-conn--on">● En curso</span>
+                                                }
+                                                else
+                                                {
+                                                    <span style="color:#7A90AD;">@(string.IsNullOrEmpty(s.MotivoFin) ? "Cerrada" : Motivo(s.MotivoFin))</span>
+                                                }
+                                            </td>
+                                            <td style="font-family:monospace;">@(string.IsNullOrEmpty(s.Ip) ? "—" : s.Ip)</td>
+                                            <td>@(string.IsNullOrEmpty(s.Hostname) ? "—" : s.Hostname)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+            }
+
             @* ── Botonera ── *@
             <div class="cli-footer">
                 <div class="cli-footer__hint">
@@ -203,6 +262,7 @@
     [Parameter] public int Id { get; set; }
 
     private UsuarioDetalleDto _model = new();
+    private List<SesionRow> _sesiones = new();
     private string _usuario = "";
     private readonly HashSet<char> _perms = new();
     private string _password = "", _passwordRepite = "";
@@ -247,8 +307,21 @@
         _inhabilitado = d.FDelete is not null;
         foreach (var c in (d.Acceso ?? "").ToUpperInvariant().Where(char.IsLetter))
             _perms.Add(c);
+
+        // Historial de sesiones: solo se consulta cuando se está viendo la ficha.
+        if (SoloLectura)
+            _sesiones = await Reports.GetSesionesUsuarioAsync(Id);
+
         _cargando = false;
     }
+
+    // Motivo de cierre de una sesión, en texto legible.
+    private static string Motivo(string m) => m switch
+    {
+        "LOGOUT" => "Cerró sesión",
+        "EXPIRADA" => "Expirada / reingreso",
+        _ => "Cerrada"
+    };
 
     // 'C' (Avisos) solo si hay 'T'; 'X' (Tablero) solo si el editor es SUPERVISOR.
     private bool DeshabilitarPermiso(PermisosCatalogo.Permiso p)

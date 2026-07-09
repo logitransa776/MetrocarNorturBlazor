@@ -14,7 +14,9 @@ asigna unidades/choferes. Es el módulo más usado y el primero en migración.
 | --- | --- | --- |
 | `viaje` | un servicio/reserva (512K filas) | columnas truncadas: `cronogram2` (=U/Pr), `cronograma` (=U/Cb), `id_vehicu2`, `nombre_gui` |
 | `vehiculo` | **estado VIVO de cada unidad** | `estado`, `id_viaje`, `pax`, `hs_inicio`, `id_chofer`, `id_chofer2` se PISAN en cada asignación |
-| `chofer_franco` | francos por chofer y fecha | `codigo`, `fecha`, `motivo` |
+| `chofer_franco` | francos por chofer y fecha (71k filas) | `codigo`, `fecha`, `motivo`, `trabajo`. **Baja física**. ✅ solo lectura + andamiaje ABM (`/francos`) |
+| `cabecera` | catálogo de cabeceras/recorridos (187 filas) | `codigo`, `nombre`, `nombre1`, `nombre2`, `recorrido`. **Baja física**. ✅ solo lectura + andamiaje ABM (`/cabeceras-recorridos`) |
+| `chofer_viatico` + `_motivo`/`_liquida` | viáticos de conductores (VACÍAS, sin uso) | `id_motivo`/`id_liquida` bigint. **Baja física**. ✅ solo lectura + andamiaje ABM (`/viaticos`) |
 | `fletero` | empresas (orden de listado, flag `diagrama`) | `id_contrat`, `orden`, `cronograma` |
 | `viaje_motivo_cancela` | motivos de cancelación | join por `viaje.id_motivo` |
 | `cronograma` | cronogramas de servicio | ABM en menú sistema |
@@ -52,6 +54,30 @@ SIN ASIGNAR ──asignar──► ASIGNADO ──fin──► FINALIZADO ──
 | Export Excel (planilla, cancelados, historial) | `ExcelExportService` |
 | **Auto-refresh inteligente 60s** (token de versión + flash de cambios) | `PlanillaTrafico.razor` + `GetTraficoVersionAsync` |
 | Grilla estilo "Ops Densa" (barra de estado + tinte, paleta desaturada) | clases `fila-estado--*` en `app.css` |
+| **Cabeceras - Recorridos** (solo lectura + andamiaje ABM) | `CabecerasRecorridos.razor` (`/cabeceras-recorridos`) + `CabeceraEditorDialog` · doc: `trafico/CABECERA_RECORRIDO.md` |
+| **Francos** (mantenimiento + ingreso masivo + auditoría) | `Francos.razor` (`/francos`) · `FrancosIngreso.razor` + `FrancoAltaDialog` · `FrancosAuditoria.razor` (informe matriz chofer×día) · doc: `trafico/CHOFER_FRANCO.md` |
+| **Viáticos** (grilla + 2 catálogos, solo lectura + andamiaje ABM) | `Viaticos.razor` + `ViaticoEditorDialog` · `ViaticosMotivo`/`ViaticosFormaLiquidacion` + `CatalogoSimpleEditorDialog` · doc: `trafico/CHOFER_VIATICO.md` |
+| **Voucher Recepción** (auditoría de vouchers, 3 modos) | `VoucherRecepcion.razor` (`/voucher-recepcion`) · escritura sobre `viaje` (`voucher_re`) → día D · doc: `trafico/TRAFICO_VOUCHER_GUARDIA_CONTACTOS.md` |
+| **Guardia** (ABM `viaje_guardia`, solo lectura + andamiaje) | `Guardias.razor` (`/guardias`) + `GuardiaEditorDialog` · baja física · doc: ídem |
+| **Contactos y Proveedores** (`estacion` + `estacion_rubro`) | `Contactos.razor` (`/contactos`) + `ContactoEditorDialog` · `RubrosContacto.razor` (`/rubros-contacto`) · **compartido con Combustible** · baja física · doc: ídem |
+| **Lista de pasajeros** (buscador de viaje → dialog existente) | `ListaPasajeros.razor` (`/lista-pasajeros`) reusa `ListaPasajerosDialog` · `GetViajesParaBuscadorAsync` |
+
+> **07/07/2026 — Voucher · Guardia · Contactos · Lista de pasajeros** migrados solo lectura +
+> andamiaje ABM: los 4 ítems restantes del menú Tráfico (ya no quedan placeholders). Flags nuevos
+> `GuardiaAbmActivo`, `ContactosAbmActivo`, `RubrosContactoAbmActivo`, `VoucherRecepcionActivo` (todos
+> false). Las 3 tablas nuevas (`viaje_guardia`, `estacion`, `estacion_rubro`) **SÍ están replicadas**
+> en el server activo. 🐛 **Bug corregido:** `viaje.interno` es bigint → `CAST(...AS int)` (Voucher +
+> buscador de Lista de pasajeros). `estacion` compartida con Combustible → coordinar dueño al activar.
+> Guardia: default de rango amplio (datos históricos 2006-2008). Doc: `trafico/TRAFICO_VOUCHER_GUARDIA_CONTACTOS.md`.
+
+> **05/07/2026 — Cabeceras · Francos · Viáticos** migrados solo lectura + andamiaje ABM (patrón
+> Fleteros/TipoVehiculo, flags en `AbmFeatureFlags` en `false`). **🐛 Baja FÍSICA** en las 5 tablas
+> (`cabecera`, `chofer_franco`, `chofer_viatico`, `_motivo`, `_liquida`) — no tienen `f_delete`.
+> **⚠️ Esas 5 tablas están en el server VIEJO pero NO en el nuevo (172.25.69.217)** → replicar antes
+> del día D. Métodos nuevos: `GetCabecerasAsync`, `GetFrancosAsync`, `GetFrancoMotivosAsync`,
+> `GetFrancoAuditoriaAsync`, `GetViaticosAsync`, `GetViaticoMotivosAsync`, `GetViaticoLiquidaAsync`,
+> `GetChoferesComboAsync`. Escritura en `AbmService` (Cabecera, `AltaFrancosAsync` masivo + `BajaFrancoAsync`,
+> Viático, catálogos). Auditoría validada jun 2026 = 98 choferes; Cabeceras = 187.
 
 Queries del módulo en `ReportService.cs`: `GetPlanillaTraficoAsync`,
 `GetTraficoCanceladosAsync`, `GetCombosUnidadesTraficoAsync`, `GetPanelBusesAsync`,

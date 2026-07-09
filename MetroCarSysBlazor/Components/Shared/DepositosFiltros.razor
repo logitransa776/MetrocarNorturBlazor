@@ -1,0 +1,53 @@
+@* Barra de filtros compartida por las 2 pantallas de Depósitos (Carga y Mantenimiento):
+   estación (opcional) + rango de fechas + botonera (Filtro / Actualizar / Excel). *@
+
+<MudPaper Class="pa-2 mb-3 odo-filtros" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudSelect T="int?" Value="EstacionId" ValueChanged="OnEstacionChanged" Label="Estación" Dense="true"
+                   Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:210px;">
+            @foreach (var e in Estaciones)
+            {
+                <MudSelectItem T="int?" Value="@e.Id">@e.Nombre</MudSelectItem>
+            }
+        </MudSelect>
+
+        <div class="odo-grupo">
+            <MudDatePicker Label="Desde" Date="Desde" DateChanged="OnDesdeChanged" DateFormat="dd/MM/yyyy"
+                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:170px;" />
+            <MudDatePicker Label="Hasta" Date="Hasta" DateChanged="OnHastaChanged" DateFormat="dd/MM/yyyy"
+                           PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:170px;" />
+        </div>
+
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="OnAplicar" Disabled="Cargando">Filtro</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="OnRefrescar" Disabled="Cargando">Actualizar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="OnExcel"
+                       Disabled="Cargando || !PuedeExcel">Excel</MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@code {
+    [Parameter] public int? EstacionId { get; set; }
+    [Parameter] public EventCallback<int?> EstacionIdChanged { get; set; }
+    [Parameter] public DateTime? Desde { get; set; }
+    [Parameter] public EventCallback<DateTime?> DesdeChanged { get; set; }
+    [Parameter] public DateTime? Hasta { get; set; }
+    [Parameter] public EventCallback<DateTime?> HastaChanged { get; set; }
+
+    [Parameter] public List<EstacionCombustibleRow> Estaciones { get; set; } = new();
+    [Parameter] public bool Cargando { get; set; }
+    [Parameter] public bool PuedeExcel { get; set; }
+
+    [Parameter] public EventCallback OnAplicar { get; set; }
+    [Parameter] public EventCallback OnRefrescar { get; set; }
+    [Parameter] public EventCallback OnExcel { get; set; }
+
+    private Task OnEstacionChanged(int? v) => EstacionIdChanged.InvokeAsync(EstacionId = v);
+    private Task OnDesdeChanged(DateTime? v) => DesdeChanged.InvokeAsync(Desde = v);
+    private Task OnHastaChanged(DateTime? v) => HastaChanged.InvokeAsync(Hasta = v);
+}

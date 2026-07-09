@@ -1,0 +1,280 @@
+@inject ReportService Reports
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Operadores — réplica del form FoxPro cliente_operador_abm.scx. 4 modos:
+   "ver" (solo lectura), "alta", "modifica", "baja".
+
+   ⚠ ANDAMIAJE (06/07/2026): la ESCRITURA está construida (AbmService.*OperadorAsync) pero el
+   botón Grabar está DESHABILITADO — la tabla `cliente_operador` sigue con dueño FoxPro (sync
+   viva). Para activar: AbmFeatureFlags.OperadoresAbmActivo=true + bloquear FoxPro + apagar sync.
+   Grupo A del plan Buslink (cutover temprano). Baja FÍSICA. Ver abm-metrocar + CLIENTE_OPERADOR_ABM.md.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@_icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@_titulo</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">@_chip</span>
+            @if (!string.IsNullOrEmpty(_encabezado))
+            {
+                <span class="zoom-title-bar__nro">@_encabezado</span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:160px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_noExiste)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">El operador ya no existe.</MudAlert>
+        }
+        else
+        {
+            @if (SoloEscritura && !_abmActivo)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    <b>Vista previa del ABM.</b> La edición de operadores todavía se hace en FoxPro;
+                    esta pantalla queda lista para activarse el día que la tabla pase a Buslink.
+                </MudAlert>
+            }
+            @if (EsBaja)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                    Baja <b>física</b>: el operador se elimina definitivamente (así lo hace el FoxPro).
+                </MudAlert>
+            }
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+            }
+
+            @* ── Datos del operador ── *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Operador</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Cód. Operador</div>
+                        @if (EsAlta)
+                        {
+                            <MudTextField @bind-Value="_codigo" MaxLength="15" Immediate="true"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          Style="text-transform:uppercase;" />
+                        }
+                        else
+                        {
+                            <div class="zoom-field__value zoom-field__value--acento" title="@_codigo">@_codigo</div>
+                        }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Cód. Cliente</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_idCliente" MaxLength="15" Immediate="true"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_idCliente">@V(_idCliente)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Razón social del cliente</div>
+                        <div class="zoom-field__value" title="@_razonSocial">@V(_razonSocial)</div>
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Nombre del operador</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_nombre" MaxLength="40" Immediate="true"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_nombre">@V(_nombre)</div> }
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Teléfono</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_telefono" MaxLength="20"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value">@V(_telefono)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Interno</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_interno" MaxLength="20"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value">@V(_interno)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Celular</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_celular" MaxLength="20"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value">@V(_celular)</div> }
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">E-mail</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_email" MaxLength="70"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        }
+                        else { <div class="zoom-field__value" title="@_email">@V(_email)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Comentario</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudTextField @bind-Value="_comentario" MaxLength="70"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-transform:uppercase;" />
+                        }
+                        else { <div class="zoom-field__value" title="@_comentario">@V(_comentario)</div> }
+                    </div>
+                </div>
+            </div>
+
+            @* ── Botonera ── *@
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@(SoloEscritura && _abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                    @(SoloEscritura && !_abmActivo
+                        ? "Escritura preparada · pendiente de activar en Buslink"
+                        : SoloEscritura ? "Edición habilitada" : "Vista de solo lectura")
+                </div>
+                <div class="cli-footer__btns">
+                    @if (EsAlta)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Grabando…" : "Agregar")
+                        </MudButton>
+                    }
+                    else if (EsModifica)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Grabando…" : "Modificar")
+                        </MudButton>
+                    }
+                    else if (EsBaja)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Delete" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Procesando…" : "Eliminar")
+                        </MudButton>
+                    }
+                    <MudButton Variant="@(SoloLectura ? Variant.Filled : Variant.Text)"
+                               Color="@(SoloLectura ? Color.Primary : Color.Default)" Size="Size.Small"
+                               OnClick="Cerrar">@(SoloLectura ? "Cerrar" : "Cancelar")</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Modo: "ver" | "alta" | "modifica" | "baja".</summary>
+    [Parameter] public string Modo { get; set; } = "ver";
+    /// <summary>Id del operador (para ver/modifica/baja). En alta se ignora.</summary>
+    [Parameter] public int Id { get; set; }
+
+    // ⚠ Interruptor del andamiaje — centralizado en AbmFeatureFlags. Mientras sea false el botón
+    // Grabar está deshabilitado Y Grabar() aborta antes de tocar la base (doble candado).
+    private static bool _abmActivo => AbmFeatureFlags.OperadoresAbmActivo;
+
+    private string _codigo = "", _idCliente = "", _razonSocial = "", _nombre = "";
+    private string _telefono = "", _celular = "", _interno = "", _email = "", _comentario = "";
+    private bool _cargando = true, _grabando, _noExiste;
+    private string? _error;
+
+    private bool EsAlta => Modo == "alta";
+    private bool EsModifica => Modo == "modifica";
+    private bool EsBaja => Modo == "baja";
+    private bool SoloLectura => Modo == "ver" || EsBaja;
+    private bool SoloEscritura => EsAlta || EsModifica;
+
+    private string _titulo => EsAlta ? "Alta de Operador"
+        : EsModifica ? "Modificar Operador"
+        : EsBaja ? "Eliminar Operador"
+        : "Datos del Operador";
+    private string _chip => EsAlta ? "Nuevo" : EsModifica ? "Edición" : EsBaja ? "Baja física" : "Solo lectura";
+    private string _encabezado => EsAlta ? "" : _codigo;
+    private string _icono => EsAlta ? Icons.Material.Filled.AddCircle
+        : EsBaja ? Icons.Material.Filled.RemoveCircle
+        : Icons.Material.Filled.SupportAgent;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (EsAlta) { _cargando = false; return; }
+
+        var op = await Reports.GetOperadorRowAsync(Id);
+        if (op is null) { _noExiste = true; _cargando = false; return; }
+        _codigo = op.IdOperador;
+        _idCliente = op.IdCliente;
+        _razonSocial = op.RazonSocial;
+        _nombre = op.Nombre;
+        _telefono = op.Telefono;
+        _celular = op.Celular;
+        _interno = op.Interno;
+        _email = op.Email;
+        _comentario = op.Comentario;
+        _cargando = false;
+    }
+
+    private async Task Grabar()
+    {
+        if (!_abmActivo)
+        {
+            _error = "La escritura de operadores todavía no está habilitada (sigue en FoxPro).";
+            return;
+        }
+        _error = null; _grabando = true;
+
+        if (EsBaja)
+        {
+            Finalizar(await Abm.BajaOperadorAsync(Id));
+            return;
+        }
+
+        var input = new OperadorInput(
+            EsAlta ? _codigo : _codigo, _idCliente, _nombre, _telefono,
+            _celular, _interno, _email, _comentario);
+
+        Finalizar(EsAlta
+            ? await Abm.AltaOperadorAsync(input)
+            : await Abm.ModificaOperadorAsync(Id, input));
+    }
+
+    private void Finalizar(AbmService.AbmResult r)
+    {
+        _grabando = false;
+        if (r.Ok) MudDialog.Close(DialogResult.Ok(true));
+        else { _error = r.Error; StateHasChanged(); }
+    }
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+
+    private static string V(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+}

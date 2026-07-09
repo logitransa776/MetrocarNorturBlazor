@@ -1,0 +1,198 @@
+@page "/operadores"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Operadores — NORTUR</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Operadores</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Reservas · Contactos de las agencias (operadoras que piden reservas) — vista de solo lectura (lista para el ABM)
+    </MudText>
+</div>
+
+@* ── Filtros (réplica de la toolbar FoxPro cliente_operador.scx) ── *@
+<MudPaper Class="pa-2 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudTextField @bind-Value="_busqueda" Label="Buscar (operador, cliente, nombre)"
+                      Immediate="true" DebounceInterval="200"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Style="min-width:300px;" />
+        <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">
+            @Filtrados.Count() de @_ops.Count
+        </MudChip>
+
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">
+                Actualizar
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || !Filtrados.Any()">
+                Excel
+            </MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="Filtrados" Dense="true" Hover="true" Striped="true"
+                  FixedHeader="true" Height="calc(100vh - 320px)"
+                  Bordered="false" Class="cli-grid grid-compacta"
+                  RowClass="cli-grid__row" RowClassFunc="@RowClass"
+                  OnRowClick="@OnRowClick" T="OperadorRow" Virtualize="true">
+            <HeaderContent>
+                <MudTh><MudTableSortLabel InitialDirection="SortDirection.Ascending" SortBy="new Func<OperadorRow, object>(x => x.Nombre)">Nombre</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<OperadorRow, object>(x => x.IdOperador)">Cód. Operador</MudTableSortLabel></MudTh>
+                <MudTh>Cliente</MudTh>
+                <MudTh>Razón social</MudTh>
+                <MudTh>Teléfono</MudTh>
+                <MudTh>Interno</MudTh>
+                <MudTh>Celular</MudTh>
+                <MudTh>E-mail</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Nombre" Style="font-weight:600;">@context.Nombre</MudTd>
+                <MudTd DataLabel="Cód. Operador" Style="font-weight:700; color:#003AA0;">@context.IdOperador</MudTd>
+                <MudTd DataLabel="Cliente">@context.IdCliente</MudTd>
+                <MudTd DataLabel="Razón social">@(string.IsNullOrWhiteSpace(context.RazonSocial) ? "·" : context.RazonSocial)</MudTd>
+                <MudTd DataLabel="Teléfono">@Dash(context.Telefono)</MudTd>
+                <MudTd DataLabel="Interno">@Dash(context.Interno)</MudTd>
+                <MudTd DataLabel="Celular">@Dash(context.Celular)</MudTd>
+                <MudTd DataLabel="E-mail">@Dash(context.Email)</MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">No hay operadores para el filtro aplicado.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        @* ── Botonera réplica FoxPro — ANDAMIAJE: se habilita con AbmFeatureFlags.OperadoresAbmActivo (hoy false) ── *@
+        <div class="cli-toolbar usr-toolbar">
+            <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.Add"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Agregar" Disabled="!_abmActivo">Agregar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Eliminar" Disabled="!_abmActivo || _sel is null">Eliminar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Modificar" Disabled="!_abmActivo || _sel is null">Modificar</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Visibility"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Ver" Disabled="_sel is null">Ver ficha</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                @(_abmActivo
+                    ? "ABM habilitado · doble clic para ver la ficha"
+                    : "Solo lectura · el ABM se activa el día del corte a Buslink · doble clic para ver la ficha")
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    // Interruptor del andamiaje (centralizado). Hoy false → botonera de escritura deshabilitada.
+    private static bool _abmActivo => AbmFeatureFlags.OperadoresAbmActivo;
+
+    private List<OperadorRow> _ops = new();
+    private bool _cargando = true;
+    private string? _busqueda;
+    private OperadorRow? _sel;
+
+    private IEnumerable<OperadorRow> Filtrados =>
+        _ops.Where(o =>
+            string.IsNullOrWhiteSpace(_busqueda)
+            || o.Nombre.Contains(_busqueda, StringComparison.OrdinalIgnoreCase)
+            || o.IdOperador.Contains(_busqueda, StringComparison.OrdinalIgnoreCase)
+            || o.IdCliente.Contains(_busqueda, StringComparison.OrdinalIgnoreCase)
+            || o.RazonSocial.Contains(_busqueda, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('R'))   // módulo Reservas
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        _ops = await Reports.GetOperadoresListaAsync();
+        if (_sel is not null)
+            _sel = _ops.FirstOrDefault(o => o.Id == _sel.Id);
+        _cargando = false;
+    }
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private string RowClass(OperadorRow o, int _) =>
+        _sel is not null && _sel.Id == o.Id ? "cli-grid__row--sel" : "";
+
+    private void OnRowClick(TableRowClickEventArgs<OperadorRow> args)
+    {
+        _sel = args.Item;
+        if (args.MouseEventArgs.Detail >= 2 && _sel is not null)
+            _ = AbrirDialog("ver", _sel.Id);
+    }
+
+    private Task Agregar() => AbrirDialog("alta", 0);
+    private Task Ver() => _sel is null ? Task.CompletedTask : AbrirDialog("ver", _sel.Id);
+    private Task Modificar() => _sel is null ? Task.CompletedTask : AbrirDialog("modifica", _sel.Id);
+    private Task Eliminar() => _sel is null ? Task.CompletedTask : AbrirDialog("baja", _sel.Id);
+
+    private async Task AbrirDialog(string modo, int id)
+    {
+        var parametros = new DialogParameters<OperadorEditorDialog>
+        {
+            { x => x.Modo, modo },
+            { x => x.Id, id }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = false
+        };
+        var dlg = await DialogService.ShowAsync<OperadorEditorDialog>("Operador", parametros, opciones);
+        var res = await dlg.Result;
+        if (res is not null && !res.Canceled && res.Data is bool grabo && grabo)
+            await Refrescar();
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.Operadores(Filtrados.ToList());
+        await JS.InvokeVoidAsync("downloadFile", "Operadores.xlsx", Convert.ToBase64String(bytes));
+    }
+
+    private static string Dash(string? s) => string.IsNullOrWhiteSpace(s) ? "·" : s;
+}

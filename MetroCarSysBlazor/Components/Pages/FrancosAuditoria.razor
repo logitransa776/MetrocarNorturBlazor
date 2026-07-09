@@ -1,0 +1,183 @@
+@page "/francos-auditoria"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Auditoría de Francos — NORTUR</PageTitle>
+
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Auditoría de Francos</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Tráfico · Control de francos cargados vs. días trabajados — informe de solo lectura
+    </MudText>
+</div>
+
+@* ── Filtros (réplica de chofer_franco_auditoria.scx: mes/año) ── *@
+<MudPaper Class="pa-2 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudSelect T="int" @bind-Value="_mes" Label="Mes" Dense="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:150px;">
+            @for (var m = 1; m <= 12; m++)
+            {
+                var mm = m;
+                <MudSelectItem T="int" Value="@mm">@_nombresMes[mm - 1]</MudSelectItem>
+            }
+        </MudSelect>
+        <MudNumericField T="int" @bind-Value="_ano" Label="Año" Min="2021" Max="2027"
+                         Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:110px;" HideSpinButtons="false" />
+        <MudCheckBox T="bool" @bind-Value="_excluyeAuditores" Label="Excluir auditores" Color="Color.Primary" Size="Size.Small" />
+        <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">@_filas.Count choferes</MudChip>
+
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.ManageSearch" OnClick="Aplicar" Disabled="_cargando">Procesar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || _filas.Count == 0">Excel</MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    @* ── KPIs ── *@
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="CHOFERES" Value="@_filas.Count.ToString("N0")" Sub="@PeriodoTexto" />
+        <KpiCard Label="DÍAS TRABAJADOS" Value="@_filas.Sum(f => f.DiasTrab).ToString("N0")"
+                 Sub="suma del período" Color="@NorturColors.Verde" />
+        <KpiCard Label="PROBLEMAS (DUP)" Value="@_filas.Sum(f => f.Problemas).ToString("N0")"
+                 Sub="franco + trabajo el mismo día" Color="@NorturColors.Rojo" />
+    </div>
+
+    @* ── Leyenda ── *@
+    <div class="d-flex align-center mb-2" style="gap:16px; font-size:0.78rem; color:#5A6B82;">
+        <span><span class="fa-cell fa-cell--trb">T</span> Trabajó</span>
+        <span><span class="fa-cell fa-cell--fr">FT</span> Franco cargado</span>
+        <span><span class="fa-cell fa-cell--dup">DUP</span> Duplicado (franco + trabajo)</span>
+    </div>
+
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:auto;">
+        <table class="fa-table">
+            <thead>
+                <tr>
+                    <th class="fa-th fa-th--nombre">Chofer</th>
+                    @for (var d = 1; d <= _diasMes; d++)
+                    {
+                        <th class="fa-th fa-th--dia">@d</th>
+                    }
+                    <th class="fa-th">Trab.</th>
+                    <th class="fa-th">Prob.</th>
+                </tr>
+            </thead>
+            <tbody>
+                <Virtualize Items="_filas" Context="f" SpacerElement="tr">
+                    <tr class="fa-tr">
+                        <td class="fa-td fa-td--nombre" title="@f.Nombre">@f.Nombre</td>
+                        @for (var d = 1; d <= _diasMes; d++)
+                        {
+                            var v = (d < f.Dias.Length ? f.Dias[d] : "") ?? "";
+                            <td class="fa-td @CeldaClase(v)">@Celda(v)</td>
+                        }
+                        <td class="fa-td fa-td--num">@f.DiasTrab</td>
+                        <td class="fa-td fa-td--num @(f.Problemas > 0 ? "fa-td--prob" : "")">@f.Problemas</td>
+                    </tr>
+                </Virtualize>
+            </tbody>
+        </table>
+        @if (_filas.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Class="pa-4">No hay datos para ese mes. Probá con otro período.</MudText>
+        }
+    </MudPaper>
+}
+
+<style>
+    .fa-table { border-collapse: collapse; font-size: 0.74rem; min-width: 100%; }
+    .fa-th { position: sticky; top: 0; background: #112F5B; color: #fff; font-weight: 600;
+             padding: 4px 5px; text-align: center; white-space: nowrap; z-index: 2; }
+    .fa-th--nombre { position: sticky; left: 0; z-index: 3; text-align: left; min-width: 180px; }
+    .fa-th--dia { min-width: 26px; }
+    .fa-td { padding: 2px 4px; text-align: center; border-bottom: 1px solid #EEF2F7; white-space: nowrap; }
+    .fa-td--nombre { position: sticky; left: 0; background: #fff; text-align: left; font-weight: 600;
+                     min-width: 180px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+    .fa-td--num { font-weight: 700; }
+    .fa-td--prob { color: #DC2626; }
+    .fa-tr:hover .fa-td { background: #F3F7FF; }
+    .fa-tr:hover .fa-td--nombre { background: #F3F7FF; }
+    .fa-cell { display: inline-block; min-width: 22px; padding: 0 4px; border-radius: 4px; font-weight: 700; text-align: center; }
+    .fa-cell--trb, .fa-td--trb { background: #DCFCE7; color: #166534; }
+    .fa-cell--fr,  .fa-td--fr  { background: #DBEAFE; color: #1E40AF; }
+    .fa-cell--dup, .fa-td--dup { background: #FEE2E2; color: #991B1B; font-weight: 700; }
+</style>
+
+@code {
+    private List<FrancoAuditoriaRow> _filas = new();
+    private bool _cargando = true;
+    private int _mes = DateTime.Today.Month;
+    private int _ano = DateTime.Today.Year;
+    private bool _excluyeAuditores = true;
+    private int _diasMes = DateTime.DaysInMonth(DateTime.Today.Year, DateTime.Today.Month);
+
+    private static readonly string[] _nombresMes =
+        { "Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre" };
+
+    private string PeriodoTexto => $"{_nombresMes[_mes - 1]} {_ano}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('T'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        _diasMes = DateTime.DaysInMonth(_ano, _mes);
+        _filas = await Reports.GetFrancoAuditoriaAsync(_mes, _ano, _excluyeAuditores);
+        _cargando = false;
+    }
+
+    private async Task Aplicar() => await CargarAsync();
+
+    private static string Celda(string v) => v switch
+    {
+        "" => "",
+        "trb" => "T",
+        "DUP" => "DUP",
+        _ => v.ToUpperInvariant()
+    };
+
+    private static string CeldaClase(string v) => v switch
+    {
+        "trb" => "fa-td--trb",
+        "DUP" => "fa-td--dup",
+        "" => "",
+        _ => "fa-td--fr"
+    };
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.FrancosAuditoria(_filas, _mes, _ano);
+        await JS.InvokeVoidAsync("downloadFile", $"Auditoria_Francos_{_ano}{_mes:D2}.xlsx", Convert.ToBase64String(bytes));
+    }
+}

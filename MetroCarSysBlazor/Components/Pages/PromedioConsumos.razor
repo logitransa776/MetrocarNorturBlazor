@@ -1,0 +1,451 @@
+@page "/promedio-consumos"
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject IDialogService DialogService
+@rendermode InteractiveServer
+
+<PageTitle>Promedio de Consumos — NORTUR</PageTitle>
+
+@* ── Encabezado ── *@
+<div class="page-header mb-3">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Promedio de Consumos</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Combustible · litros cada 100 km por unidad (medido entre cargas LLENO) — datos en vivo desde replicaVPF
+    </MudText>
+</div>
+
+@* ── Barra de filtros ── *@
+<MudPaper Elevation="1" Class="rfs-filtros mb-4">
+    <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudSize.Small" Style="color:#003AA0; flex-shrink:0;" />
+
+    <div class="rfs-fechas">
+        <MudDatePicker Label="Desde" @bind-Date="_desde" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+        <MudDatePicker Label="Hasta" @bind-Date="_hasta" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+    </div>
+
+    <MudAutocomplete T="string" @bind-Value="_dominio" Label="Dominio (opcional)" Dense="true"
+                     SearchFunc="@BuscarDominio" ResetValueOnEmptyText="true" Clearable="true" CoerceValue="true"
+                     Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:170px;" />
+
+    <span style="flex:1 1 auto;"></span>
+    <div class="d-flex align-center" style="gap:6px;">
+        <MudButton Variant="Variant.Filled" Color="MudColor.Primary" Size="MudSize.Small"
+                   StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="Aplicar" Disabled="_cargando">Filtro</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="MudColor.Primary" Size="MudSize.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">Actualizar</MudButton>
+        <MudButton Variant="Variant.Filled" Color="MudColor.Success" Size="MudSize.Small"
+                   StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                   Disabled="_cargando || !_ranking.Any()">Excel</MudButton>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    @* ── KPIs (reflejan el foco) ── *@
+    <div class="rfs-kpis mb-4">
+        <KpiCard Label="UNIDADES" Value="@_kpiUnidades.ToString("N0", _ar)" Sub="@PeriodoTexto" />
+        <KpiCard Label="LITROS" Value="@_kpiLitros.ToString("N0", _ar)"
+                 Sub="total cargado" Color="@NorturColors.Naranja" />
+        <KpiCard Label="KM RECORRIDOS" Value="@_kpiKm.ToString("N0", _ar)"
+                 Sub="tramos LLENO válidos" Color="@NorturColors.Azul" />
+        <KpiCard Label="CONSUMO PROMEDIO" Value="@(_kpiL100 is double l ? l.ToString("N1", _ar) : "—")"
+                 Sub="l/100 km (flota, Σlitros/Σkm)" Color="@NorturColors.Verde" />
+        @if (_kpiCostoKm is decimal ck)
+        {
+            <KpiCard Label="COSTO / KM" Value="@ck.ToString("C2", _ar)"
+                     Sub="solo cargas con importe" Color="@NorturColors.AzulNoche" />
+        }
+    </div>
+
+    @if (!_ranking.Any())
+    {
+        <MudAlert Severity="Severity.Info" Class="mb-4">
+            No hay cargas de combustible en el período (o no alcanzan para medir un tramo entre cargas LLENO).
+            Probá ampliar el rango o quitar el filtro de dominio.
+        </MudAlert>
+    }
+    else
+    {
+        <div @key="_chartsKey">
+        <MudGrid Class="mb-2 nt-chart-row">
+            @* ── Barras: consumo por unidad (top N) ── *@
+            <MudItem xs="12" md="7">
+                <MudPaper Elevation="1" Class="pa-3" Style="border-radius:14px;">
+                    <div class="rfs-bar-head">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                            Consumo por unidad (l/100 km)
+                        </MudText>
+                        <div class="d-flex align-center" style="gap:10px;">
+                            @ChipFoco()
+                            <MudSelect T="int" @bind-Value="_topN" Dense="true" Margin="Margin.Dense"
+                                       Variant="Variant.Outlined" Style="width:120px;" Label="Mostrar"
+                                       SelectedValuesChanged="@(_ => RemontarCharts())">
+                                <MudSelectItem T="int" Value="10">Top 10</MudSelectItem>
+                                <MudSelectItem T="int" Value="15">Top 15</MudSelectItem>
+                                <MudSelectItem T="int" Value="20">Top 20</MudSelectItem>
+                                <MudSelectItem T="int" Value="999">Todas</MudSelectItem>
+                            </MudSelect>
+                        </div>
+                    </div>
+                    <div class="nt-chart-fill">
+                        <ApexChart @ref="_chartBar" TItem="ConsumoUnidadRow" Options="_optsBar" Height="@_altoBarras"
+                                   OnDataPointSelection="OnBarSelection">
+                            <ApexPointSeries TItem="ConsumoUnidadRow" Items="_barItems" Name="l/100 km"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="@(x => x.Dominio)"
+                                             YValue="@(x => (decimal)(x.L100 ?? 0))" />
+                        </ApexChart>
+                    </div>
+                </MudPaper>
+            </MudItem>
+
+            @* ── Evolución mensual de litros ── *@
+            <MudItem xs="12" md="5">
+                <MudPaper Elevation="1" Class="pa-3" Style="border-radius:14px;">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;" Class="mb-2">
+                        Litros cargados por mes
+                    </MudText>
+                    <div class="nt-chart-fill">
+                        <ApexChart @ref="_chartArea" TItem="MesLitros" Options="_optsArea" Height="@_altoBarras">
+                            <ApexPointSeries TItem="MesLitros" Items="_mesItems" Name="Litros"
+                                             SeriesType="SeriesType.Area"
+                                             XValue="@(x => x.Mes)"
+                                             YValue="@(x => x.Litros)" />
+                        </ApexChart>
+                    </div>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+        </div>
+
+        @* ── Tabla por unidad ── *@
+        <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+            <MudTable Items="_ranking" Dense="true" Hover="true" Striped="true" FixedHeader="true"
+                      Height="calc(100vh - 470px)" Bordered="false" Class="cli-grid grid-compacta"
+                      Virtualize="true" T="ConsumoUnidadRow">
+                <HeaderContent>
+                    <MudTh><MudTableSortLabel SortBy="new Func<ConsumoUnidadRow, object>(x => x.Interno)">Interno</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel SortBy="new Func<ConsumoUnidadRow, object>(x => x.Dominio)">Dominio</MudTableSortLabel></MudTh>
+                    <MudTh Style="text-align:right"><MudTableSortLabel SortBy="new Func<ConsumoUnidadRow, object>(x => x.Cargas)">Cargas</MudTableSortLabel></MudTh>
+                    <MudTh Style="text-align:right"><MudTableSortLabel SortBy="new Func<ConsumoUnidadRow, object>(x => x.KmRecorridos)">Km recorridos</MudTableSortLabel></MudTh>
+                    <MudTh Style="text-align:right"><MudTableSortLabel SortBy="new Func<ConsumoUnidadRow, object>(x => x.Litros)">Litros</MudTableSortLabel></MudTh>
+                    <MudTh Style="text-align:right"><MudTableSortLabel InitialDirection="SortDirection.Descending" SortBy="new Func<ConsumoUnidadRow, object>(x => x.L100 ?? 0)">l/100 km</MudTableSortLabel></MudTh>
+                    <MudTh Style="text-align:right">Costo/km</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Interno" Style="font-weight:700; color:#003AA0; cursor:pointer;"
+                           @onclick="@(() => AbrirDetalle(context))">@context.InternoNT</MudTd>
+                    <MudTd DataLabel="Dominio" Style="font-weight:600; cursor:pointer;"
+                           @onclick="@(() => AbrirDetalle(context))">@context.Dominio</MudTd>
+                    <MudTd DataLabel="Cargas" Style="text-align:right">@context.Cargas</MudTd>
+                    <MudTd DataLabel="Km recorridos" Style="text-align:right">@context.KmRecorridos.ToString("N0", _ar)</MudTd>
+                    <MudTd DataLabel="Litros" Style="text-align:right">@context.Litros.ToString("N1", _ar)</MudTd>
+                    <MudTd DataLabel="l/100 km" Style="text-align:right; font-weight:700;"
+                           title="@ClasificaConsumo(context.L100)">
+                        @(context.L100 is double v ? v.ToString("N1", _ar) : "—")
+                    </MudTd>
+                    <MudTd DataLabel="Costo/km" Style="text-align:right">
+                        @(context.CostoKm is decimal c ? c.ToString("C2", _ar) : "—")
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent><MudText Typo="Typo.body2" Class="pa-4">Sin datos.</MudText></NoRecordsContent>
+            </MudTable>
+            <div class="cli-toolbar">
+                <MudIcon Icon="@Icons.Material.Filled.TouchApp" Size="MudSize.Small" />
+                <span class="cli-toolbar__hint">
+                    Clic en una unidad → ficha de sus cargas. El consumo se mide entre cargas LLENO (Σlitros/Σkm),
+                    descartando saltos de odómetro incoherentes.
+                </span>
+            </div>
+        </MudPaper>
+    }
+}
+
+@code {
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    // Paleta categórica del proyecto (dataviz) + gris.
+    private static readonly List<string> _palette = new()
+    { "#2058D0","#F99410","#16A34A","#DC2626","#0EA5E9","#7C3AED","#B45309","#DB2777","#0D9488","#65A30D" };
+    private const string _colorFuera = "#94A3B8";
+
+    private List<CargaConsumoRow> _cargas = new();       // dataset crudo traído
+    private List<ConsumoUnidadRow> _ranking = new();      // agregado por unidad (ordenado)
+    private List<ConsumoUnidadRow> _barItems = new();     // top N para el gráfico
+    private List<MesLitros> _mesItems = new();
+    private List<string> _dominios = new();
+
+    private bool _cargando = true;
+    private int _topN = 10;
+    private DateTime? _desde = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-3);
+    private DateTime? _hasta = DateTime.Today;
+    private string? _dominio;
+    private string? _focoDominio;                          // cross-filter 1D por unidad
+    private Guid _chartsKey = Guid.NewGuid();
+    private int _altoBarras = 360;
+
+    private ApexChart<ConsumoUnidadRow>? _chartBar;
+    private ApexChart<MesLitros>? _chartArea;
+    private ApexChartOptions<ConsumoUnidadRow> _optsBar = new();
+    private ApexChartOptions<MesLitros> _optsArea = new();
+
+    // KPIs (dependen del foco)
+    private int _kpiUnidades; private decimal _kpiLitros; private long _kpiKm;
+    private double? _kpiL100; private decimal? _kpiCostoKm;
+
+    private string PeriodoTexto => $"{(_desde ?? DateTime.Today):dd/MM/yyyy} – {(_hasta ?? DateTime.Today):dd/MM/yyyy}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('M'))   // módulo Combustible
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        ConfigurarGraficos();
+        _dominios = await Reports.GetDominiosFlotaPropiaAsync();
+        await Cargar();
+    }
+
+    private void ConfigurarGraficos()
+    {
+        _optsBar = new ApexChartOptions<ConsumoUnidadRow>
+        {
+            Chart = new() { Toolbar = new() { Show = false }, Animations = new() { Enabled = false } },
+            PlotOptions = new() { Bar = new() { Distributed = true, Horizontal = false, ColumnWidth = "60%" } },
+            Legend = new() { Show = false },
+            DataLabels = new() { Enabled = false },
+            // Eje Y sin decimales basura (ApexCharts muestra "60.0000000000" si no se formatea).
+            Yaxis = new() { new() { Labels = new() { Formatter = "function(v){ return v==null?'':v.toFixed(1); }" } } },
+            Tooltip = new() { Y = new() { Formatter = "function(v){ return v==null?'':v.toFixed(1)+' l/100km'; }" } },
+            States = new()
+            {
+                Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+                Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+            },
+        };
+        _optsArea = new ApexChartOptions<MesLitros>
+        {
+            Chart = new() { Toolbar = new() { Show = false }, Animations = new() { Enabled = false } },
+            Colors = new List<string> { NorturColors.Azul },
+            Stroke = new() { Curve = Curve.Smooth, Width = 2 },
+            DataLabels = new() { Enabled = false },
+            Yaxis = new() { new() { Labels = new() { Formatter = "function(v){ return v==null?'':Math.round(v).toLocaleString('es-AR'); }" } } },
+        };
+    }
+
+    private async Task<IEnumerable<string>> BuscarDominio(string value, CancellationToken _)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return _dominios.Take(50);
+        return _dominios.Where(d => d.Contains(value, StringComparison.OrdinalIgnoreCase)).Take(50);
+    }
+
+    private async Task Cargar()
+    {
+        _cargando = true;
+        StateHasChanged();
+        var desde = DateOnly.FromDateTime(_desde ?? DateTime.Today.AddMonths(-3));
+        var hasta = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
+        _cargas = await Reports.GetPromedioConsumosAsync(_dominio, desde, hasta);
+        _focoDominio = null;
+        _chartsKey = Guid.NewGuid();
+        Recalcular();
+        _cargando = false;
+    }
+
+    private async Task Aplicar() => await Cargar();
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await Cargar();
+    }
+
+    private void RemontarCharts()
+    {
+        _chartsKey = Guid.NewGuid();
+        Recalcular();
+    }
+
+    /// <summary>Rehace el ranking por unidad (método correcto: Σlitros/Σkm entre cargas LLENO,
+    /// descartando saltos de odómetro ≤0 o >1000 km) y los datos de los gráficos y KPIs.</summary>
+    private void Recalcular()
+    {
+        // 1) Ranking por unidad SIEMPRE sobre el dataset completo (no cambia con el foco).
+        _ranking = CalcularRanking(_cargas);
+
+        // 2) Colores por dominio según ranking (color por entidad).
+        var colorPorDom = _ranking
+            .Select((x, i) => (x.Dominio, i))
+            .ToDictionary(t => t.Dominio, t => t.i < _palette.Count ? _palette[t.i] : _colorFuera);
+        string ColorFoco(string d) =>
+            (_focoDominio is null || d == _focoDominio)
+                ? (colorPorDom.TryGetValue(d, out var c) ? c : _colorFuera)
+                : "#D9E1EC";
+
+        _barItems = _ranking.Where(x => x.L100 is not null).Take(_topN).ToList();
+        _optsBar.Colors = _barItems.Select(b => ColorFoco(b.Dominio)).ToList();
+        _altoBarras = Math.Max(300, Math.Min(720, _barItems.Count * 34 + 60));
+
+        // 3) KPIs + evolución mensual → sobre el subconjunto enfocado.
+        var foco = _focoDominio is null ? _cargas : _cargas.Where(c => c.Dominio == _focoDominio).ToList();
+        var rankFoco = _focoDominio is null ? _ranking : _ranking.Where(r => r.Dominio == _focoDominio).ToList();
+
+        _kpiUnidades = rankFoco.Count;
+        _kpiLitros = rankFoco.Sum(r => r.Litros);
+        _kpiKm = rankFoco.Sum(r => r.KmRecorridos);
+        _kpiL100 = _kpiKm > 0 ? (double)rankFoco.Where(r => r.L100 is not null).Sum(r => r.Litros) / _kpiKm * 100 : null;
+        var impFoco = rankFoco.Sum(r => r.Importe);
+        _kpiCostoKm = (impFoco > 0 && _kpiKm > 0) ? Math.Round(impFoco / _kpiKm, 2) : null;
+
+        _mesItems = foco
+            .GroupBy(c => new DateOnly(c.FCarga.Year, c.FCarga.Month, 1))
+            .OrderBy(g => g.Key)
+            .Select(g => new MesLitros(g.Key.ToString("MM/yyyy"), g.Sum(x => x.Litros)))
+            .ToList();
+    }
+
+    /// <summary>Consumo por unidad con el método correcto: se recorren las cargas ordenadas por
+    /// fecha+hora; un tramo se cierra en cada carga LLENO. Δkm = odómetro − odómetro del cierre
+    /// anterior (descartando ≤0 o >1000). Σlitros del tramo / Σkm × 100 = l/100km del tramo; el
+    /// total por unidad es Σlitros / Σkm de todos sus tramos válidos.</summary>
+    private List<ConsumoUnidadRow> CalcularRanking(List<CargaConsumoRow> cargas)
+    {
+        var res = new List<ConsumoUnidadRow>();
+        foreach (var g in cargas.GroupBy(c => c.Dominio))
+        {
+            var ord = g.OrderBy(c => c.FCarga).ThenBy(c => c.Hora).ToList();
+            long odoTramoInicio = -1;              // odómetro del último cierre (carga LLENO)
+            decimal litrosTramo = 0;                // litros acumulados en el tramo abierto
+            long kmValidosTot = 0; decimal litrosValidosTot = 0; decimal importeValidoTot = 0;
+            decimal litrosTot = 0; decimal importeTot = 0;
+            int interno = ord[0].Interno;
+
+            foreach (var c in ord)
+            {
+                litrosTot += c.Litros;
+                importeTot += c.Importe;
+                litrosTramo += c.Litros;
+                importeValidoTot += 0;             // se suma abajo solo si el tramo es válido
+
+                if (c.Lleno)   // cierra tramo
+                {
+                    if (odoTramoInicio >= 0)
+                    {
+                        long dkm = c.Odometro - odoTramoInicio;
+                        if (dkm > 0 && dkm <= 1000)  // tramo válido (sanitiza odómetro incoherente)
+                        {
+                            kmValidosTot += dkm;
+                            litrosValidosTot += litrosTramo;
+                        }
+                    }
+                    odoTramoInicio = c.Odometro;
+                    litrosTramo = 0;
+                }
+            }
+
+            double? l100 = kmValidosTot > 0 ? (double)litrosValidosTot / kmValidosTot * 100 : null;
+            // Costo/km: solo si hubo importe en el período (tarjeta prepaga carga 0).
+            decimal? costoKm = (importeTot > 0 && kmValidosTot > 0) ? Math.Round(importeTot / kmValidosTot, 2) : null;
+
+            res.Add(new ConsumoUnidadRow(
+                g.Key, interno, ord.Count, kmValidosTot, litrosTot, importeTot, l100, costoKm));
+        }
+        // Orden: primero los que tienen consumo medible (mayor l/100 arriba = candidatos a revisar).
+        return res
+            .OrderByDescending(r => r.L100 ?? -1)
+            .ThenByDescending(r => r.Litros)
+            .ToList();
+    }
+
+    // ── Cross-filter 1D por unidad ──
+    private RenderFragment ChipFoco() => builder =>
+    {
+        if (_focoDominio is null) return;
+        builder.OpenComponent<MudChip<string>>(0);
+        builder.AddAttribute(1, "T", "string");
+        builder.AddAttribute(2, "Color", MudColor.Primary);
+        builder.AddAttribute(3, "Size", MudSize.Small);
+        builder.AddAttribute(4, "OnClose", EventCallback.Factory.Create<MudChip<string>>(this, _ => LimpiarFoco()));
+        builder.AddAttribute(5, "Label", true);
+        builder.AddAttribute(6, "ChildContent", (RenderFragment)(b => b.AddContent(0, $"Unidad: {_focoDominio}")));
+        builder.CloseComponent();
+    };
+
+    private async Task OnBarSelection(SelectedData<ConsumoUnidadRow> e)
+    {
+        var d = e.DataPoint?.Items?.FirstOrDefault()?.Dominio;
+        if (d is not null) await ToggleFoco(d);
+    }
+
+    private async Task ToggleFoco(string d)
+    {
+        _focoDominio = _focoDominio == d ? null : d;
+        Recalcular();
+        await ActualizarGraficos();
+    }
+
+    private async Task LimpiarFoco()
+    {
+        _focoDominio = null;
+        Recalcular();
+        await ActualizarGraficos();
+    }
+
+    private async Task ActualizarGraficos()
+    {
+        if (_chartBar is not null) await _chartBar.UpdateOptionsAsync(true, true, false);
+        if (_chartArea is not null) await _chartArea.UpdateSeriesAsync(true);
+        StateHasChanged();
+    }
+
+    private async Task AbrirDetalle(ConsumoUnidadRow u)
+    {
+        var desde = DateOnly.FromDateTime(_desde ?? DateTime.Today.AddMonths(-3));
+        var hasta = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
+        var parametros = new DialogParameters<CargasUnidadDialog>
+        {
+            { x => x.Dominio, u.Dominio },
+            { x => x.Interno, u.Interno },
+            { x => x.Desde, desde },
+            { x => x.Hasta, hasta },
+        };
+        var opts = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = false, CloseOnEscapeKey = true };
+        await DialogService.ShowAsync<CargasUnidadDialog>("Cargas de la unidad", parametros, opts);
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = Excel.PromedioConsumos(_ranking, _cargas);
+        var nombre = $"PromedioConsumos_{(_desde ?? DateTime.Today):yyyyMMdd}_{(_hasta ?? DateTime.Today):yyyyMMdd}.xlsx";
+        await JS.InvokeVoidAsync("downloadFile", nombre, Convert.ToBase64String(bytes));
+    }
+
+    private string ClasificaConsumo(double? l100) =>
+        l100 is null ? "Sin tramo LLENO medible en el período"
+        : l100 < 15 ? "Consumo bajo" : l100 < 30 ? "Consumo normal" : "Consumo alto — revisar";
+
+    private record MesLitros(string Mes, decimal Litros);
+}

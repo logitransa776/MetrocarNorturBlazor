@@ -1,0 +1,207 @@
+@page "/grupos"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Grupos — NORTUR</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Grupos de Clientes</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Reservas · Agrupación de viajes de un cliente para facturarlos juntos — vista de solo lectura (lista para el ABM)
+    </MudText>
+</div>
+
+@* ── Filtros (réplica de la toolbar FoxPro cliente_grupo.scx) ── *@
+<MudPaper Class="pa-2 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudTextField @bind-Value="_busqueda" Label="Buscar (cliente, razón social, grupo)"
+                      Immediate="true" DebounceInterval="200"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Style="min-width:280px;" />
+        <MudSelect T="int" @bind-Value="_filtro" Label="Estado" Dense="true" Variant="Variant.Outlined"
+                   Margin="Margin.Dense" Style="min-width:180px;" @bind-Value:after="CargarAsync">
+            <MudSelectItem Value="0">Grupos no finalizados</MudSelectItem>
+            <MudSelectItem Value="1">Grupos finalizados</MudSelectItem>
+            <MudSelectItem Value="2">Todos los grupos</MudSelectItem>
+        </MudSelect>
+        <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">
+            @Filtrados.Count() de @_grupos.Count
+        </MudChip>
+
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">
+                Actualizar
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || !Filtrados.Any()">
+                Excel
+            </MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="Filtrados" Dense="true" Hover="true" Striped="true"
+                  FixedHeader="true" Height="calc(100vh - 320px)"
+                  Bordered="false" Class="cli-grid grid-compacta"
+                  RowClass="cli-grid__row" RowClassFunc="@RowClass"
+                  OnRowClick="@OnRowClick" T="GrupoRow" Virtualize="true">
+            <HeaderContent>
+                <MudTh><MudTableSortLabel InitialDirection="SortDirection.Ascending" SortBy="new Func<GrupoRow, object>(x => x.RazonSocial)">Razón social</MudTableSortLabel></MudTh>
+                <MudTh>Cliente</MudTh>
+                <MudTh><MudTableSortLabel SortBy="new Func<GrupoRow, object>(x => x.Nombre)">Grupo</MudTableSortLabel></MudTh>
+                <MudTh>F. Fin</MudTh>
+                <MudTh>F. Facturó</MudTh>
+                <MudTh Style="text-align:center">Estado</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Razón social" Style="font-weight:600;">@Dash(context.RazonSocial)</MudTd>
+                <MudTd DataLabel="Cliente" Style="color:#003AA0; font-weight:700;">@context.IdCliente</MudTd>
+                <MudTd DataLabel="Grupo">@context.Nombre</MudTd>
+                <MudTd DataLabel="F. Fin">@Fecha(context.FFin)</MudTd>
+                <MudTd DataLabel="F. Facturó">@Fecha(context.FFacturo)</MudTd>
+                <MudTd DataLabel="Estado" Style="text-align:center">
+                    @if (context.Cerrado)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">Facturado</MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text">Abierto</MudChip>
+                    }
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">No hay grupos para el filtro aplicado.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        @* ── Botonera réplica FoxPro — ANDAMIAJE: se habilita con AbmFeatureFlags.GruposAbmActivo (hoy false) ──
+             SIN "Agregar": los grupos nacen desde la carga de Reservas. ── *@
+        <div class="cli-toolbar usr-toolbar">
+            <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Eliminar" Disabled="!_abmActivo || _sel is null">Eliminar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Modificar" Disabled="!_abmActivo || _sel is null">Modificar</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Visibility"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Ver" Disabled="_sel is null">Ver ficha</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                @(_abmActivo
+                    ? "ABM habilitado · el alta de grupos se hace desde Reservas · doble clic para ver la ficha"
+                    : "Solo lectura · el ABM se activa el día D (cancela/arrastra viajes) · doble clic para ver la ficha")
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private static bool _abmActivo => AbmFeatureFlags.GruposAbmActivo;
+
+    private List<GrupoRow> _grupos = new();
+    private bool _cargando = true;
+    private string? _busqueda;
+    private int _filtro = 0;   // 0=No finalizados (default), 1=Finalizados, 2=Todos
+    private GrupoRow? _sel;
+
+    private IEnumerable<GrupoRow> Filtrados =>
+        _grupos.Where(g =>
+            string.IsNullOrWhiteSpace(_busqueda)
+            || g.RazonSocial.Contains(_busqueda, StringComparison.OrdinalIgnoreCase)
+            || g.IdCliente.Contains(_busqueda, StringComparison.OrdinalIgnoreCase)
+            || g.Nombre.Contains(_busqueda, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('R'))   // módulo Reservas
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        _grupos = await Reports.GetGruposListaAsync(_filtro);
+        if (_sel is not null)
+            _sel = _grupos.FirstOrDefault(g => g.Id == _sel.Id);
+        _cargando = false;
+    }
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private string RowClass(GrupoRow g, int _) =>
+        _sel is not null && _sel.Id == g.Id ? "cli-grid__row--sel" : "";
+
+    private void OnRowClick(TableRowClickEventArgs<GrupoRow> args)
+    {
+        _sel = args.Item;
+        if (args.MouseEventArgs.Detail >= 2 && _sel is not null)
+            _ = AbrirDialog("ver", _sel.Id);
+    }
+
+    private Task Ver() => _sel is null ? Task.CompletedTask : AbrirDialog("ver", _sel.Id);
+    private Task Modificar() => _sel is null ? Task.CompletedTask : AbrirDialog("modifica", _sel.Id);
+    private Task Eliminar() => _sel is null ? Task.CompletedTask : AbrirDialog("baja", _sel.Id);
+
+    private async Task AbrirDialog(string modo, int id)
+    {
+        var parametros = new DialogParameters<GrupoEditorDialog>
+        {
+            { x => x.Modo, modo },
+            { x => x.Id, id }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = false
+        };
+        var dlg = await DialogService.ShowAsync<GrupoEditorDialog>("Grupo", parametros, opciones);
+        var res = await dlg.Result;
+        if (res is not null && !res.Canceled && res.Data is bool grabo && grabo)
+            await Refrescar();
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.Grupos(Filtrados.ToList());
+        await JS.InvokeVoidAsync("downloadFile", "Grupos.xlsx", Convert.ToBase64String(bytes));
+    }
+
+    private static string Dash(string? s) => string.IsNullOrWhiteSpace(s) ? "·" : s;
+    private static string Fecha(DateOnly? f) => f is null ? "·" : f.Value.ToString("dd/MM/yyyy");
+}

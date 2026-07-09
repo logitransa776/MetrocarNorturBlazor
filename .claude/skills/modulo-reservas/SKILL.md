@@ -88,7 +88,38 @@ Las tres insertan con `estado_viaje = 'SIN ASIGNAR'` y `cronograma = cronogram2 
 - **Informe 1** Reservas por fecha y servicio: `ReservasFechaServicio.razor`.
 - **Informe 2** banda horaria: `ReservasBandaHoraria.razor` — **ACTIVO** en
   `/reservas-banda-horaria` (link vivo en el drawer; lógica en `RESERVAS_INFORME_BANDA_HORARIA.md`).
+- **Informe 3** Reservas por cliente: `ReservasPorCliente.razor` (`/reservas-por-cliente`).
 - Lectura de viajes (Planilla de Tráfico, Zoom) — skill `modulo-trafico`.
+- **Reservas Especiales · Plantillas · Armado (07/07/2026)** — las 2 puertas de alta principales
+  del menú, solo lectura + **andamiaje ABM** (patrón Fleteros; escritura fiel a los planos pero
+  apagada por flag). ⚠ NO son catálogos: insertan en `viaje` (circuito) → Fase 4 / día D.
+  - `ReservasEspeciales.razor` (`/reservas-especiales`) — grilla de `viaje.origen='T'` (reusa
+    `ReservaFsDetalleRow` + `ReservasFsDetalleDialog`) + botón "Nueva reserva" →
+    `ReservaEspecialEditorDialog` (form de alta FIEL: grupo, guía, destinos, **Valor Especial**
+    con permiso `'F'`, adicionales, modo ruta, preview días×servicios).
+  - `PlantillasMantenimiento.razor` (`/plantillas-mantenimiento`) — combo 9 plantillas + grilla
+    de filas (`reserva_plantilla`) + `PlantillaFilaEditorDialog` (4 modos) + `PlantillaNombreDialog`.
+  - `ReservasPorPlantillas.razor` (`/reservas-por-plantillas`) — armado: combo + Buscar + cliente
+    + fechas + días, **preview/dry-run EN MEMORIA** (786 viajes = fechas×filas), Generar apagado.
+  - Métodos: `GetReservasEspecialesAsync`, `GetPlantillasResumenAsync`/`…ComboAsync`/
+    `GetPlantillaFilasAsync`/`…RowAsync`, `GetFeriadosRangoAsync`. Escritura: `AltaReservaEspecialAsync`
+    (fiel a `graba_viaje`, CON transacción), ABM plantilla, `ArmarPlantillaAsync`. Flags:
+    `ReservasEspecialesAbmActivo`/`PlantillasAbmActivo`/`ArmadoPlantillasActivo` (**Fase 4, día D**, todos false).
+  - 🐛 Bigint en `viaje` y `reserva_plantilla` → `CAST(...AS int)`; `reserva_plantilla` baja FÍSICA;
+    0 feriados 2026 (el armado avisa); trampa de concatenar raw strings SQL (usar `+ " WHERE …"`).
+    Validado UI+SQL (378 res / 9 plantillas·574 filas / 786 viajes). Ver CLAUDE.md § Módulo Reservas.
+- **Catálogos Operadores · Grupos · Destinos (06/07/2026)** — solo lectura + **andamiaje ABM**
+  (escritura escrita en `AbmService` pero apagada por `AbmFeatureFlags`, patrón Fleteros/TipoVehiculo):
+  - `Operadores.razor` (`/operadores`) + `OperadorEditorDialog` — `cliente_operador` (128). Baja física.
+  - `Grupos.razor` (`/grupos`) + `GrupoEditorDialog` — `cliente_grupo` (11.272, Virtualize + combo de
+    estado). **Sin alta** (nacen en Reservas); modifica/baja **en cascada sobre `viaje`**.
+  - `Destinos.razor` (`/destinos`) + `DestinoEditorDialog` — `destino` (398) + `destino_localidad` (34).
+    Baja física. 🐛 Bug `contacto=contacto` del modifica FoxPro corregido.
+  - Flags: `OperadoresAbmActivo` / `DestinosAbmActivo` (Grupo A, cutover temprano) / `GruposAbmActivo`
+    (Grupo B, día D — su cascada toca el circuito viaje). Todos `false`. Ver CLAUDE.md § Módulo Reservas.
+  - 🐛 Baja de Grupos vs Modifica clasifican estados **distinto**: en **modifica FINALIZADO es
+    modificable**; en **baja FINALIZADO/FACTURADO bloquean** el DELETE (se cancelan solo los SIN
+    ASIGNAR). Reglas completas verificadas en `catalogos/CLIENTE_GRUPO_ABM.md`.
 
 ## Qué falta — el roadmap lo fija el plan Buslink (02/07/2026)
 

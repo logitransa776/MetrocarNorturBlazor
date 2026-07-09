@@ -1,9 +1,15 @@
 ﻿<!DOCTYPE html>
-<html lang="en">
+<html lang="es-AR" translate="no">
 
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    @* App interna y privada: no se indexa ni se traduce. lang="es-AR" fija el idioma
+       (evita que Chrome ofrezca "traducir al español"); notranslate/robots apagan
+       el traductor del navegador y el SEO. *@
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="google" content="notranslate" />
+    <meta http-equiv="Content-Language" content="es-AR" />
     <base href="/" />
     <link rel="stylesheet" href="@Assets["lib/bootstrap/dist/css/bootstrap.min.css"]" />
     <link rel="stylesheet" href="@Assets["app.css"]" />

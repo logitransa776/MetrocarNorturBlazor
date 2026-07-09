@@ -1,0 +1,607 @@
+@page "/viajes-por-chofer"
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject IDialogService DialogService
+@rendermode InteractiveServer
+
+<PageTitle>Viajes por chofer</PageTitle>
+
+@* ── Encabezado de página ── *@
+<div class="page-header mb-3">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+        Viajes por chofer
+    </MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Metrocar Nortur · actividad diaria de los choferes: viajes, turismo, cabecera y kilómetros
+    </MudText>
+</div>
+
+@* ── Barra de filtros (horizontal, compacta) — mismo patrón que los otros informes ── *@
+<MudPaper Elevation="1" Class="rfs-filtros mb-4">
+    <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudSize.Small" Style="color:#003AA0; flex-shrink:0;" />
+
+    <div class="rfs-fechas">
+        <MudDatePicker Label="Desde" @bind-Date="_desde"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+        <MudDatePicker Label="Hasta" @bind-Date="_hasta"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+    </div>
+
+    @* Internos: suma el cliente interno NORTUR (guardias / traslados internos). Excluido por
+       defecto, como en todos los informes FoxPro. *@
+    <MudSwitch T="bool" @bind-Value="_internos" Color="MudColor.Primary" Size="MudSize.Small"
+               Label="Internos" LabelPlacement="Placement.End" Style="flex-shrink:0;" />
+
+    @* Contratados: el FoxPro fijaba solo PROPIO. Switch para sumar los CONTRATADO (fleteros). *@
+    <MudSwitch T="bool" @bind-Value="_contratados" Color="MudColor.Primary" Size="MudSize.Small"
+               Label="Incluir contratados" LabelPlacement="Placement.End" Style="flex-shrink:0;" />
+
+    <div class="rfs-metrica">
+        <MudRadioGroup T="string" Value="_metrica" ValueChanged="CambiarMetrica">
+            <MudRadio T="string" Value="@("Viajes")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Viajes</MudRadio>
+            <MudRadio T="string" Value="@("Km")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Km</MudRadio>
+            <MudRadio T="string" Value="@("Pax")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Pax</MudRadio>
+        </MudRadioGroup>
+    </div>
+
+    <span style="flex:1 1 auto;"></span>
+
+    <MudButton Variant="Variant.Filled" Color="MudColor.Primary"
+               OnClick="Cargar" Disabled="_cargando" StartIcon="@Icons.Material.Filled.Search"
+               Style="border-radius:8px; height:40px; text-transform:none; flex-shrink:0;">
+        @(_cargando ? "Cargando..." : "Aplicar filtros")
+    </MudButton>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else if (_filas.Count == 0)
+{
+    <MudAlert Severity="Severity.Warning" Style="border-radius:12px;">No hay viajes para los filtros seleccionados.</MudAlert>
+}
+else
+{
+    @* ── KPIs ── con foco activo se recalculan al subconjunto enfocado (cross-filter) *@
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="@KpiTotalLabel" Value="@Fmt(_totalMetrica)"
+                 Sub="@($"prom. {Fmt(_promedioDia)} {UnidadMetrica}/día activo")" Color="@NorturColors.Azul" />
+        <KpiCard Label="Choferes con actividad" Value="@_choferesActivos.ToString()"
+                 Sub="@($"{Fmt(_diasFranco)} días de franco")" Color="@NorturColors.Verde" />
+        <KpiCard Label="Chofer líder" Value="@_choferLider"
+                 Sub="@($"{Fmt(_maxChofer)} {UnidadMetrica}")" Color="@NorturColors.Naranja" />
+        <KpiCard Label="Turismo / Cabecera" Value="@($"{Fmt(_totalTurismo)} / {Fmt(_totalCabecera)}")"
+                 Sub="@($"{_pctTurismo}% turismo")" Color="@NorturColors.Rojo" />
+    </div>
+
+    <div @key="_chartsKey">
+        @* ── Evolución diaria (área): turismo vs cabecera ── *@
+        <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
+            @CabeceraFoco("Evolución diaria — turismo vs cabecera")
+            <ApexChart TItem="EvolItem" Options="_optsEvol" Height="300" @ref="_evolChart">
+                <ApexPointSeries TItem="EvolItem" Items="_evolData" Name="Turismo"
+                                 SeriesType="SeriesType.Area" XValue="@(x => x.Dia)" YValue="@(x => x.Turismo)" />
+                <ApexPointSeries TItem="EvolItem" Items="_evolData" Name="Cabecera"
+                                 SeriesType="SeriesType.Area" XValue="@(x => x.Dia)" YValue="@(x => x.Cabecera)" />
+            </ApexChart>
+        </MudPaper>
+
+        @* ── Ranking de choferes + donut turismo/cabecera ── *@
+        <MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
+            <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
+                <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                    <div class="rfs-bar-head mb-2">
+                        <div class="rfs-bar-title">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@($"{UnidadMetricaCap} por chofer — {TituloTopN}")</MudText>
+                            <MudSelect T="int" Value="_topN" ValueChanged="CambiarTopN"
+                                       Label="Mostrar" Dense="true" Margin="Margin.Dense"
+                                       Variant="Variant.Outlined" Class="rfs-topn-select">
+                                <MudSelectItem T="int" Value="10">Top 10</MudSelectItem>
+                                <MudSelectItem T="int" Value="15">Top 15</MudSelectItem>
+                                <MudSelectItem T="int" Value="20">Top 20</MudSelectItem>
+                                <MudSelectItem T="int" Value="999">Todos (@_rankingChoferes.Count)</MudSelectItem>
+                            </MudSelect>
+                        </div>
+                        @ChipsFoco
+                    </div>
+                    <ApexChart TItem="BarItem" Options="_optsBarCho" Height="@_altoBarras" @ref="_barChoChart"
+                               OnDataPointSelection="OnBarChoSelection">
+                        <ApexPointSeries TItem="BarItem" Items="_barItems" Name="@UnidadMetricaCap"
+                                         SeriesType="SeriesType.Bar" XValue="@(x => x.Chofer)" YValue="@(x => x.Valor)" />
+                    </ApexChart>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="5" Style="display:flex; flex-direction:column;">
+                <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                    @CabeceraFoco("Turismo vs cabecera")
+                    <ApexChart TItem="DonutItem" Options="_optsPie" Height="300" @ref="_pieChart">
+                        <ApexPointSeries TItem="DonutItem" Items="_donutOrigen" Name="Viajes"
+                                         SeriesType="SeriesType.Donut" XValue="@(x => x.Label)" YValue="@(x => x.Valor)" />
+                    </ApexChart>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    </div>
+
+    @* ── Tabla pivote chofer × día ── *@
+    <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
+        <div class="d-flex justify-space-between align-center flex-wrap mb-3" style="gap:8px;">
+            <div>
+                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                    Detalle: @UnidadMetrica por chofer y día
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                    Click en una celda para ver los viajes uno por uno · click en el nombre de un chofer para enfocar el tablero · <span style="color:#B08900;">franco</span> = día sin viajes
+                </MudText>
+            </div>
+            <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                       StartIcon="@Icons.Material.Filled.Download"
+                       OnClick="DescargarExcel" Disabled="_cargandoDet"
+                       Style="border-radius:8px; text-transform:none;">
+                Descargar Excel
+            </MudButton>
+        </div>
+        @if (_cargandoDet)
+        {
+            <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-2" Style="border-radius:4px;" />
+        }
+        <div class="rfs-tabla-wrap">
+            <table class="rfs-tabla">
+                <thead>
+                    <tr>
+                        <th class="rfs-col-fecha" style="min-width:220px;">Chofer</th>
+                        @foreach (var d in _pivDias)
+                        {
+                            <th class="rfs-th-serv @(EsFinde(d) ? "rfs-finde" : "")" title="@d.ToString("dddd dd/MM")">@d.ToString("dd/MM")</th>
+                        }
+                        <th class="rfs-th-total">TOTAL</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @* Virtualize: pueden ser cientos de choferes (regla de performance). *@
+                    <Virtualize Items="_pivChoferes" Context="cho" ItemSize="30" OverscanCount="12" SpacerElement="tr">
+                        <tr>
+                            @{ var atenua = _choferFocus is not null && !EnFocoChofer(cho) ? "rfs-atenua" : ""; }
+                            <td class="rfs-col-fecha rfs-click @(EnFocoChofer(cho) && _choferFocus is not null ? "rfs-col-foco" : "") @atenua"
+                                style="max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+                                title="Clic para enfocar el tablero en @NombreDe(cho)"
+                                @onclick="() => ToggleFocoChofer(cho)">@NombreDe(cho)</td>
+                            @foreach (var d in _pivDias)
+                            {
+                                var dia = d;
+                                var cell = PivCell(cho, dia);
+                                if (cell is null)
+                                {
+                                    <td class="rfs-num rfs-cero @atenua">·</td>
+                                }
+                                else if (cell.Franco)
+                                {
+                                    <td class="rfs-num rfs-finde-cell @atenua" title="@NombreDe(cho) — franco @dia.ToString("dd/MM")"
+                                        style="color:#B08900; font-style:italic;">F</td>
+                                }
+                                else
+                                {
+                                    <td class="rfs-num rfs-click @atenua" title="Ver viajes de @NombreDe(cho) el @dia.ToString("dd/MM")"
+                                        @onclick="() => AbrirDetalleCelda(cho, dia)">@Fmt(cell.Valor)</td>
+                                }
+                            }
+                            <td class="rfs-num rfs-tot rfs-click @atenua" title="Ver todos los viajes de @NombreDe(cho)"
+                                @onclick="() => AbrirDetalleChofer(cho)">@Fmt(PivTotFila(cho))</td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td class="rfs-col-fecha rfs-tot">TOTAL</td>
+                        @foreach (var d in _pivDias)
+                        {
+                            var dia = d;
+                            <td class="rfs-num rfs-tot rfs-click" title="Ver todos los viajes del @dia.ToString("dd/MM")"
+                                @onclick="() => AbrirDetalleDia(dia)">@Fmt(PivTotCol(dia))</td>
+                        }
+                        <td class="rfs-num rfs-tot rfs-grantot">@Fmt(_granTotal)</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+
+    // ── Filtros en edición ── Default: el mes calendario ANTERIOR completo. La tabla es día a
+    // día, así que un mes es un rango cómodo; el mes anterior siempre tiene datos cerrados
+    // (el mes en curso puede estar vacío o a medio cargar en la réplica).
+    private DateTime? _desde = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-1);
+    private DateTime? _hasta = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddDays(-1);
+    private bool _internos;
+    private bool _contratados;
+    private string _metrica = "Viajes";                 // "Viajes" | "Km" | "Pax"
+
+    // ── Foco / cross-filter (una dimensión: chofer) ──
+    private string? _choferFocus;                        // IdChofer (clave estable)
+    private bool EnFocoChofer(string id) => _choferFocus is null || _choferFocus == id;
+
+    // ── Filtros APLICADOS (snapshot al Aplicar) ──
+    private DateOnly _fDesdeAp, _fHastaAp;
+    private bool _internosAp, _contratadosAp;
+
+    private List<ViajesChoferRow> _filas = new();
+    private List<ViajesChoferDetalleRow>? _detalle;     // lazy: al primer drill-down/Excel
+    private bool _cargando, _cargandoDet;
+    private Guid _chartsKey = Guid.NewGuid();
+
+    // KPIs
+    private int _totalMetrica, _promedioDia, _choferesActivos, _diasFranco;
+    private string _choferLider = "—";
+    private int _maxChofer, _totalTurismo, _totalCabecera, _pctTurismo;
+    private string UnidadMetrica => _metrica switch { "Km" => "km", "Pax" => "pax", _ => "viajes" };
+    private string UnidadMetricaCap => _metrica switch { "Km" => "Km", "Pax" => "Pax", _ => "Viajes" };
+    private string KpiTotalLabel => _metrica switch { "Km" => "Total km", "Pax" => "Total pax", _ => "Total viajes" };
+
+    // ── Gráficos ApexCharts ──
+    private record EvolItem(string Dia, decimal Turismo, decimal Cabecera);
+    private record BarItem(string IdChofer, string Chofer, decimal Valor);
+    private record DonutItem(string Label, decimal Valor);
+    private List<EvolItem> _evolData = new();
+    private List<BarItem> _barItems = new();
+    private List<DonutItem> _donutOrigen = new();
+
+    private ApexChart<EvolItem>? _evolChart;
+    private ApexChart<BarItem>? _barChoChart;
+    private ApexChart<DonutItem>? _pieChart;
+
+    // Paleta categórica de 15 hues (la misma de los otros informes, validada con dataviz).
+    private static readonly List<string> _palette = new()
+    {
+        "#2058D0", "#F99410", "#16A34A", "#DC2626", "#0EA5E9",
+        "#7C3AED", "#B45309", "#DB2777", "#0D9488", "#65A30D",
+        "#4F46E5", "#EA580C", "#059669", "#9333EA", "#0891B2"
+    };
+    private const string _colorOtros = "#94A3B8";
+
+    private Dictionary<string, string> _colorPorChofer = new();
+    private Dictionary<string, string> _nombrePorChofer = new();
+    private string ColorCho(string id) => _colorPorChofer.TryGetValue(id, out var c) ? c : _colorOtros;
+    private string NombreDe(string id) => _nombrePorChofer.TryGetValue(id, out var n) ? n : id;
+    private string ColorFocoCho(string id) =>
+        (_choferFocus is null || id == _choferFocus) ? ColorCho(id) : "#D9E1EC";
+
+    // Selector "Mostrar Top N" del gráfico de barras.
+    private int _topN = 15;
+    private List<(string Id, string Nombre, int Total)> _rankingChoferes = new();
+    private string TituloTopN => _topN >= 999 ? $"todos ({_barItems.Count})" : $"top {Math.Min(_topN, _barItems.Count)}";
+    private int _altoBarras = 360;
+
+    private RenderFragment ChipsFoco => __builder =>
+    {
+        @if (_choferFocus is not null)
+        {
+            <div class="rfs-focus">
+                <span class="rfs-focus__lbl">Chofer:</span>
+                <span class="rfs-focus__val" style="@($"background:{ColorCho(_choferFocus)};")">@NombreDe(_choferFocus)</span>
+                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                               OnClick="LimpiarFoco" Title="Quitar filtro de chofer"
+                               Style="color:#64748B; padding:2px;" />
+            </div>
+        }
+        else
+        {
+            <span class="rfs-focus-hint">💡 Clic en un chofer para enfocar el tablero</span>
+        }
+    };
+
+    private RenderFragment CabeceraFoco(string titulo) => __builder =>
+    {
+        <div class="rfs-bar-head mb-3">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@titulo</MudText>
+            @ChipsFoco
+        </div>
+    };
+
+    private readonly ApexChartOptions<EvolItem> _optsEvol = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Stacked = true, Animations = new() { Enabled = false } },
+        Colors = new List<string> { "#2058D0", "#F99410" },
+        Stroke = new() { Curve = Curve.Smooth, Width = 2 },
+        Fill = new() { Type = FillType.Gradient, Gradient = new() { OpacityFrom = 0.5, OpacityTo = 0.1 } },
+        DataLabels = new() { Enabled = false },
+        Xaxis = new() { Labels = new() { Style = new() { FontSize = "11px", Colors = "#7A90AD" } } },
+        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px", Colors = "#7A90AD" } } } },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
+        Legend = new() { Position = LegendPosition.Top, FontSize = "11px" },
+        Theme = new() { Mode = Mode.Light },
+    };
+
+    private readonly ApexChartOptions<BarItem> _optsBarCho = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        PlotOptions = new()
+        {
+            Bar = new() { Horizontal = true, BorderRadius = 4, BorderRadiusApplication = BorderRadiusApplication.End, Distributed = true }
+        },
+        Legend = new() { Show = false },
+        Colors = new List<string> { "#2058D0" },
+        Xaxis = new() { Labels = new() { Style = new() { FontSize = "11px" } } },
+        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px" }, MaxWidth = 180 } } },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
+        Theme = new() { Mode = Mode.Light },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
+    private readonly ApexChartOptions<DonutItem> _optsPie = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        Colors = new List<string> { "#2058D0", "#F99410" },
+        Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px" },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        Theme = new() { Mode = Mode.Light },
+    };
+
+    // ── Pivote chofer × día ──
+    private record PivCellData(int Valor, bool Franco);
+    private List<DateOnly> _pivDias = new();
+    private List<string> _pivChoferes = new();          // IdChofer, orden por total desc
+    private Dictionary<(string, DateOnly), PivCellData> _pivMap = new();
+    private Dictionary<string, int> _pivTotFila = new();
+    private Dictionary<DateOnly, int> _pivTotCol = new();
+    private int _granTotal;
+
+    private static bool EsFinde(DateOnly d) => d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('V'))   // módulo Vehículos y Choferes
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await Cargar();
+    }
+
+    private async Task Cargar()
+    {
+        if (_desde is null || _hasta is null) return;
+        _cargando = true;
+        StateHasChanged();
+
+        _fDesdeAp = DateOnly.FromDateTime(_desde.Value);
+        _fHastaAp = DateOnly.FromDateTime(_hasta.Value);
+        _internosAp = _internos;
+        _contratadosAp = _contratados;
+        _detalle = null;
+        _choferFocus = null;
+
+        _filas = await Reports.GetViajesPorChoferAsync(_fDesdeAp, _fHastaAp, _internosAp, _contratadosAp);
+        Recalcular();
+        _chartsKey = Guid.NewGuid();
+
+        _cargando = false;
+    }
+
+    private void CambiarMetrica(string metrica)
+    {
+        _metrica = metrica;
+        if (_filas.Count > 0) { Recalcular(); _chartsKey = Guid.NewGuid(); }
+    }
+
+    private void CambiarTopN(int topN)
+    {
+        _topN = topN;
+        if (_filas.Count > 0) { Recalcular(); _chartsKey = Guid.NewGuid(); }
+    }
+
+    private void Recalcular()
+    {
+        Func<ViajesChoferRow, int> val = _metrica switch
+        {
+            "Km" => f => f.Km,
+            "Pax" => f => f.Pax,
+            _ => f => f.Viajes
+        };
+
+        // El foco de chofer FILTRA los KPIs, la evolución y el donut; en las barras y la tabla
+        // es resaltado por color/CSS (la lista completa sigue visible).
+        var datos = _choferFocus is null ? _filas : _filas.Where(f => f.IdChofer == _choferFocus).ToList();
+
+        _nombrePorChofer = _filas.GroupBy(f => f.IdChofer).ToDictionary(g => g.Key, g => g.First().Chofer);
+
+        // ── KPIs ──
+        _totalMetrica = datos.Sum(val);
+        var diasActivos = datos.Select(f => (f.IdChofer, f.Fecha)).Distinct().Count();
+        _promedioDia = diasActivos > 0 ? (int)Math.Round((double)_totalMetrica / diasActivos) : 0;
+        _choferesActivos = datos.Select(f => f.IdChofer).Distinct().Count();
+        _totalTurismo = datos.Sum(f => f.Turismo);
+        _totalCabecera = datos.Sum(f => f.Cabecera);
+        var totalOrigen = _totalTurismo + _totalCabecera;
+        _pctTurismo = totalOrigen > 0 ? (int)Math.Round(100.0 * _totalTurismo / totalOrigen) : 0;
+
+        var porChofer = datos.GroupBy(f => f.IdChofer)
+            .Select(g => (Id: g.Key, Total: g.Sum(val)))
+            .OrderByDescending(x => x.Total).ToList();
+        _choferLider = porChofer.Count > 0 ? NombreDe(porChofer[0].Id) : "—";
+        _maxChofer = porChofer.Count > 0 ? porChofer[0].Total : 0;
+
+        // ── Pivote chofer × día (con francos calculados en memoria, como el FoxPro) ──
+        // Días = todos los del rango aplicado (columna por día).
+        _pivDias = new();
+        for (var d = _fDesdeAp; d <= _fHastaAp; d = d.AddDays(1)) _pivDias.Add(d);
+
+        var val2 = val;   // capturado para las lambdas de abajo
+        _pivMap = new();
+        // El foco de chofer resalta por CSS → la tabla arma TODAS las filas (dataset completo).
+        foreach (var f in _filas)
+            _pivMap[(f.IdChofer, f.Fecha)] = new PivCellData(val2(f), Franco: false);
+
+        // Francos: para cada chofer, entre su primer y último día trabajado DENTRO del rango,
+        // los días sin viaje se marcan como franco (fila F en la grilla). Igual criterio que el
+        // form FoxPro (Do While con dCntFranco).
+        _diasFranco = 0;
+        foreach (var g in _filas.GroupBy(f => f.IdChofer))
+        {
+            var dias = g.Select(x => x.Fecha).OrderBy(x => x).ToList();
+            var primero = dias.First();
+            var ultimo = dias.Last();
+            for (var d = primero; d <= ultimo; d = d.AddDays(1))
+            {
+                if (!_pivMap.ContainsKey((g.Key, d)))
+                {
+                    _pivMap[(g.Key, d)] = new PivCellData(0, Franco: true);
+                    _diasFranco++;
+                }
+            }
+        }
+
+        _pivTotFila = _filas.GroupBy(f => f.IdChofer).ToDictionary(g => g.Key, g => g.Sum(val2));
+        _pivChoferes = _filas.GroupBy(f => f.IdChofer)
+            .Select(g => (Id: g.Key, Total: g.Sum(val2)))
+            .OrderByDescending(x => x.Total).ThenBy(x => NombreDe(x.Id))
+            .Select(x => x.Id).ToList();
+        _pivTotCol = _pivDias.ToDictionary(d => d, d => datos.Where(f => f.Fecha == d).Sum(val2));
+        _granTotal = _totalMetrica;
+
+        // ── Evolución diaria (turismo vs cabecera) — filtrada por el foco de chofer ──
+        var metricaTur = _metrica == "Pax";   // en Pax no separamos turismo/cabecera con exactitud
+        _evolData = _pivDias.Select(d =>
+        {
+            var delDia = datos.Where(f => f.Fecha == d).ToList();
+            return new EvolItem(d.ToString("dd/MM"), delDia.Sum(f => f.Turismo), delDia.Sum(f => f.Cabecera));
+        }).ToList();
+
+        // ── Ranking de choferes: ranking y colores del dataset COMPLETO (orden/color estables),
+        //    valores con el foco (que en las barras es resaltado por color) ──
+        _rankingChoferes = _filas.GroupBy(f => f.IdChofer)
+            .Select(g => (Id: g.Key, Nombre: g.First().Chofer, Total: g.Sum(val2)))
+            .OrderByDescending(x => x.Total).ThenBy(x => x.Nombre).ToList();
+        _colorPorChofer = _rankingChoferes
+            .Select((x, i) => (x.Id, i))
+            .ToDictionary(t => t.Id, t => t.i < _palette.Count ? _palette[t.i] : _colorOtros);
+
+        var nombresRepetidos = _rankingChoferes.GroupBy(x => x.Nombre)
+            .Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
+        _barItems = _rankingChoferes.Take(_topN)
+            .Select(x => new BarItem(x.Id,
+                nombresRepetidos.Contains(x.Nombre) ? $"{x.Nombre} ({x.Id})" : x.Nombre,
+                x.Total))
+            .ToList();
+        _altoBarras = Math.Max(360, _barItems.Count * 30);
+
+        // ── Donut turismo/cabecera — filtrado por el foco ──
+        _donutOrigen = new()
+        {
+            new DonutItem("Turismo", _totalTurismo),
+            new DonutItem("Cabecera", _totalCabecera),
+        };
+
+        // Colores con el highlight del foco.
+        _optsBarCho.Colors = _barItems.Select(b => ColorFocoCho(b.IdChofer)).ToList();
+    }
+
+    private PivCellData? PivCell(string cho, DateOnly d) => _pivMap.TryGetValue((cho, d), out var v) ? v : null;
+    private int PivTotFila(string cho) => _pivTotFila.TryGetValue(cho, out var v) ? v : 0;
+    private int PivTotCol(DateOnly d) => _pivTotCol.TryGetValue(d, out var v) ? v : 0;
+
+    // ── Cross-filter ──
+    private async Task ToggleFocoChofer(string id)
+    {
+        _choferFocus = _choferFocus == id ? null : id;
+        Recalcular();
+        await ActualizarGraficos();
+    }
+
+    private Task LimpiarFoco() => ToggleFocoChofer(_choferFocus ?? "");
+
+    private async Task ActualizarGraficos()
+    {
+        if (_evolChart is not null) { await _evolChart.UpdateSeriesAsync(true); }
+        if (_barChoChart is not null) { await _barChoChart.UpdateOptionsAsync(true, true, false); await _barChoChart.UpdateSeriesAsync(true); }
+        if (_pieChart is not null) { await _pieChart.UpdateSeriesAsync(true); }
+    }
+
+    private async Task OnBarChoSelection(SelectedData<BarItem> e)
+    {
+        var id = e.DataPoint?.Items?.FirstOrDefault()?.IdChofer;
+        if (id is not null) await ToggleFocoChofer(id);
+    }
+
+    // ── Drill-down ──
+    private async Task<List<ViajesChoferDetalleRow>> GetDetalleAsync()
+    {
+        if (_detalle is null)
+        {
+            _cargandoDet = true;
+            StateHasChanged();
+            _detalle = await Reports.GetViajesPorChoferDetalleAsync(_fDesdeAp, _fHastaAp, _internosAp, _contratadosAp);
+            _cargandoDet = false;
+        }
+        return _detalle;
+    }
+
+    private bool PasaFocoChofer(ViajesChoferDetalleRow d) => _choferFocus is null || d.IdChofer == _choferFocus;
+
+    private Task AbrirDetalleCelda(string id, DateOnly dia) =>
+        AbrirDetalle(d => d.IdChofer == id && d.Fecha == dia, $"{NombreDe(id)} — {dia:dd/MM/yyyy}");
+
+    private Task AbrirDetalleChofer(string id) =>
+        AbrirDetalle(d => d.IdChofer == id, $"{NombreDe(id)} — todo el período");
+
+    private Task AbrirDetalleDia(DateOnly dia) =>
+        AbrirDetalle(d => d.Fecha == dia && PasaFocoChofer(d),
+                     $"{(_choferFocus is null ? "Todos los choferes" : NombreDe(_choferFocus))} — {dia:dd/MM/yyyy}");
+
+    private async Task AbrirDetalle(Func<ViajesChoferDetalleRow, bool> filtro, string subtitulo)
+    {
+        var todas = await GetDetalleAsync();
+        var items = todas.Where(filtro).Select(d => d.Reserva).ToList();
+        if (items.Count == 0) return;
+
+        var parametros = new DialogParameters<ReservasFsDetalleDialog>
+        {
+            { x => x.Items, items },
+            { x => x.Subtitulo, subtitulo }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.ExtraLarge, FullWidth = true,
+            CloseButton = false, CloseOnEscapeKey = true, BackdropClick = true
+        };
+        await DialogService.ShowAsync<ReservasFsDetalleDialog>("Detalle de viajes", parametros, opciones);
+    }
+
+    private async Task DescargarExcel()
+    {
+        var viajes = await GetDetalleAsync();
+        var bytes = Excel.ViajesPorChofer(_filas, _metrica, _fDesdeAp, _fHastaAp, viajes);
+        var nombre = $"viajes_por_chofer_{_fDesdeAp:yyyyMMdd}_{_fHastaAp:yyyyMMdd}.xlsx";
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    private static string Fmt(int n) => n.ToString("#,0", System.Globalization.CultureInfo.GetCultureInfo("es-AR"));
+}

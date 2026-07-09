@@ -1,0 +1,155 @@
+@inject ReportService Reports
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Detalle de las cargas de combustible de UNA unidad en el período (drill-down del
+   informe Promedio de Consumos). Solo lectura. Muestra el tramo LLENO→LLENO y el
+   Δkm / l/100km de cada tramo, para auditar el número del ranking.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.LocalGasStation" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Cargas de combustible</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">@InternoNT · @Dominio</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:180px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else
+        {
+            <div class="d-flex align-center mb-2" style="gap:16px; flex-wrap:wrap;">
+                <MudText Typo="Typo.body2" Style="color:#5A6B82;">
+                    @_filas.Count cargas · @_totLitros.ToString("N1", _ar) litros
+                    @if (_consumo is double c) { <b> · @c.ToString("N1", _ar) l/100 km</b> }
+                </MudText>
+                <span style="flex:1;"></span>
+                <MudText Typo="Typo.caption" Style="color:#94A3B8;">
+                    Δkm = odómetro − odómetro del cierre anterior (LLENO). Tramos &gt;1000 km o negativos se descartan.
+                </MudText>
+            </div>
+
+            <MudTable Items="_filas" Dense="true" Hover="true" Striped="true" FixedHeader="true"
+                      Height="55vh" Bordered="false" Class="cli-grid grid-compacta" T="Fila">
+                <HeaderContent>
+                    <MudTh>Fecha</MudTh>
+                    <MudTh>Hora</MudTh>
+                    <MudTh>Estación</MudTh>
+                    <MudTh>Tipo</MudTh>
+                    <MudTh Style="text-align:right">Odómetro</MudTh>
+                    <MudTh Style="text-align:right">Δ km</MudTh>
+                    <MudTh Style="text-align:right">Litros</MudTh>
+                    <MudTh style="text-align:center">Carga</MudTh>
+                    <MudTh Style="text-align:right">l/100 km</MudTh>
+                    <MudTh>Chofer</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Fecha">@context.Fecha.ToString("dd/MM/yyyy", _ar)</MudTd>
+                    <MudTd DataLabel="Hora">@context.Hora</MudTd>
+                    <MudTd DataLabel="Estación">@context.Estacion</MudTd>
+                    <MudTd DataLabel="Tipo">@context.Tipo</MudTd>
+                    <MudTd DataLabel="Odómetro" Style="text-align:right">@context.Odometro.ToString("N0", _ar)</MudTd>
+                    <MudTd DataLabel="Δ km" Style="text-align:right">@(context.DeltaKm is long d ? d.ToString("N0", _ar) : "—")</MudTd>
+                    <MudTd DataLabel="Litros" Style="text-align:right">@context.Litros.ToString("N1", _ar)</MudTd>
+                    <MudTd DataLabel="Carga" Style="text-align:center">
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                                 Color="@(context.Lleno ? Color.Success : Color.Warning)">
+                            @(context.Lleno ? "LLENO" : "PARCIAL")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd DataLabel="l/100 km" Style="text-align:right; font-weight:600;">
+                        @(context.L100 is double v ? v.ToString("N1", _ar) : "—")
+                    </MudTd>
+                    <MudTd DataLabel="Chofer">@context.Chofer</MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Dominio { get; set; } = "";
+    [Parameter] public int Interno { get; set; }
+    [Parameter] public DateOnly Desde { get; set; }
+    [Parameter] public DateOnly Hasta { get; set; }
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private List<Fila> _filas = new();
+    private bool _cargando = true;
+    private decimal _totLitros;
+    private double? _consumo;
+
+    private string InternoNT => Interno == 0 ? "—" : "NT" + Interno.ToString("D4");
+
+    protected override async Task OnInitializedAsync()
+    {
+        var cargas = await Reports.GetPromedioConsumosAsync(Dominio, Desde, Hasta);
+        // Reproducimos el cálculo por tramo LLENO→LLENO (idéntico al del informe).
+        var ord = cargas.OrderBy(c => c.FCarga).ThenBy(c => c.Hora).ToList();
+        long odoCierreAnt = -1; decimal litrosTramo = 0;
+        long kmTot = 0; decimal litrosValidos = 0;
+
+        foreach (var c in ord)
+        {
+            long? dkm = null;
+            litrosTramo += c.Litros;
+            if (c.Lleno)
+            {
+                if (odoCierreAnt >= 0)
+                {
+                    long d = c.Odometro - odoCierreAnt;
+                    if (d > 0 && d <= 1000)
+                    {
+                        dkm = d;
+                        kmTot += d;
+                        litrosValidos += litrosTramo;
+                    }
+                }
+                odoCierreAnt = c.Odometro;
+                litrosTramo = 0;
+            }
+            double? l100 = (dkm is long dd && dd > 0) ? (double)LitrosDelTramoCerrado(ord, c) / dd * 100 : null;
+            _filas.Add(new Fila(c.FCarga, c.Hora, c.Estacion, c.TipoCarga, c.Odometro, dkm, c.Litros, c.Lleno, l100, c.Chofer));
+        }
+
+        _totLitros = ord.Sum(c => c.Litros);
+        _consumo = kmTot > 0 ? (double)litrosValidos / kmTot * 100 : null;
+        _cargando = false;
+    }
+
+    // Litros acumulados del tramo que cierra en la carga LLENO `cierre` (desde el LLENO anterior).
+    private static decimal LitrosDelTramoCerrado(List<CargaConsumoRow> ord, CargaConsumoRow cierre)
+    {
+        int idx = ord.IndexOf(cierre);
+        decimal acc = 0;
+        for (int i = idx; i >= 0; i--)
+        {
+            acc += ord[i].Litros;
+            if (i < idx && ord[i].Lleno) break;   // paró en el cierre anterior
+        }
+        return acc;
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private record Fila(
+        DateOnly Fecha, string Hora, string Estacion, string Tipo, long Odometro,
+        long? DeltaKm, decimal Litros, bool Lleno, double? L100, string Chofer);
+}

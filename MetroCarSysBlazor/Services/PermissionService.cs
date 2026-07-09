@@ -8,6 +8,7 @@ public static class NorturClaims
     public const string Modulo   = "nortur:modulo";
     public const string Nivel    = "nortur:nivel";
     public const string Operador = "nortur:operador";
+    public const string Sesion   = "nortur:sesion";   // GUID de la sesión (bitácora usuarios_logs)
 }
 
 /// <summary>

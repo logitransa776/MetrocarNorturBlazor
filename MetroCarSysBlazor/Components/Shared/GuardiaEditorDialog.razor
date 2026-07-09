@@ -1,0 +1,288 @@
+@inject ReportService Reports
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Guardias — réplica del form FoxPro trafico_guardia_abm.scx. 4 modos: ver/alta/modifica/baja.
+   Campos: interno (combo → id_vehiculo), chofer (combo → nombre), franco, fecha+hora de inicio
+   y de fin, fecha de pago (solo lectura — la escribe la Liquidación de choferes).
+
+   ⚠ ANDAMIAJE (07/07/2026): la ESCRITURA está construida (AbmService.*GuardiaAsync) pero el
+   botón Grabar está DESHABILITADO — la tabla `viaje_guardia` sigue con dueño FoxPro (5 filas).
+   El día que se active: AbmFeatureFlags.GuardiaAbmActivo=true + bloquear FoxPro + apagar sync.
+   🐛 Baja FÍSICA (DELETE). Modifica bloqueado si ya tiene fecha de pago. Truncados: id_vehicul,
+   nombre_cho.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@_icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@_titulo</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">@_chip</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:160px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_noExiste)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">La guardia ya no existe.</MudAlert>
+        }
+        else
+        {
+            @if (SoloEscritura && !_abmActivo)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    <b>Vista previa del ABM.</b> La carga de guardias todavía se hace en FoxPro;
+                    esta pantalla queda lista para activarse el día que la tabla pase a Buslink.
+                </MudAlert>
+            }
+            @if (_pagada && !SoloLectura)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                    La guardia ya fue pagada — no se puede modificar.
+                </MudAlert>
+            }
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+            }
+
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Unidad y chofer</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Interno</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudSelect T="long" @bind-Value="_interno" Dense="true"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense" OnClick="@(() => {})">
+                                @foreach (var v in _internos)
+                                {
+                                    <MudSelectItem Value="@v.Interno">@v.Codigo · @v.Dominio</MudSelectItem>
+                                }
+                            </MudSelect>
+                        }
+                        else { <div class="zoom-field__value zoom-field__value--acento">@_internoTexto</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Dominio</div>
+                        <div class="zoom-field__value" title="@_dominio">@V(_dominio)</div>
+                    </div>
+                </div>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--3">
+                        <div class="zoom-field__label">Chofer</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudSelect T="string" @bind-Value="_idChofer" Dense="true"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense">
+                                @foreach (var c in _choferes)
+                                {
+                                    <MudSelectItem Value="@c.IdChofer">@c.Nombre</MudSelectItem>
+                                }
+                            </MudSelect>
+                        }
+                        else { <div class="zoom-field__value" title="@_nombreChofer">@V(_nombreChofer)</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Franco</div>
+                        @if (SoloEscritura)
+                        {
+                            <MudCheckBox T="bool" @bind-Value="_franco" Color="Color.Primary" Size="Size.Small" Dense="true" />
+                        }
+                        else { <div class="zoom-field__value">@(_franco ? "Sí" : "No")</div> }
+                    </div>
+                </div>
+            </div>
+
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Horario de la guardia</span>
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Inicio</div>
+                        @if (SoloEscritura)
+                        {
+                            <div class="d-flex" style="gap:6px;">
+                                <MudDatePicker @bind-Date="_fechaIni" DateFormat="dd/MM/yyyy"
+                                               PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                <MudTimePicker @bind-Time="_horaIni" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width:110px;" />
+                            </div>
+                        }
+                        else { <div class="zoom-field__value">@_iniTexto</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--2">
+                        <div class="zoom-field__label">Fin</div>
+                        @if (SoloEscritura)
+                        {
+                            <div class="d-flex" style="gap:6px;">
+                                <MudDatePicker @bind-Date="_fechaFin" DateFormat="dd/MM/yyyy"
+                                               PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                <MudTimePicker @bind-Time="_horaFin" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width:110px;" />
+                            </div>
+                        }
+                        else { <div class="zoom-field__value">@_finTexto</div> }
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Fecha de pago</div>
+                        <div class="zoom-field__value">@(_fpago?.ToString("dd/MM/yyyy") ?? "—")</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@(SoloEscritura && _abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                    @(SoloEscritura && !_abmActivo
+                        ? "Escritura preparada · pendiente de activar en Buslink"
+                        : SoloEscritura ? "Edición habilitada" : "Vista de solo lectura")
+                </div>
+                <div class="cli-footer__btns">
+                    @if (EsAlta)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Grabando…" : "Agregar")
+                        </MudButton>
+                    }
+                    else if (EsModifica)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar" Disabled="!_abmActivo || _grabando || _pagada">
+                            @(_grabando ? "Grabando…" : "Modificar")
+                        </MudButton>
+                    }
+                    else if (EsBaja)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Delete" OnClick="Grabar" Disabled="!_abmActivo || _grabando">
+                            @(_grabando ? "Procesando…" : "Eliminar")
+                        </MudButton>
+                    }
+                    <MudButton Variant="@(SoloLectura ? Variant.Filled : Variant.Text)"
+                               Color="@(SoloLectura ? Color.Primary : Color.Default)" Size="Size.Small"
+                               OnClick="Cerrar">@(SoloLectura ? "Cerrar" : "Cancelar")</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Modo { get; set; } = "ver";
+    [Parameter] public int Id { get; set; }
+    /// <summary>Fila ya cargada (para ver/modifica/baja) — evita re-query.</summary>
+    [Parameter] public GuardiaRow? Fila { get; set; }
+
+    private static bool _abmActivo => AbmFeatureFlags.GuardiaAbmActivo;
+
+    private List<InternoOpcion> _internos = new();
+    private List<CatalogoSimpleRow> _choferes = new();
+    private long _interno;
+    private string _idChofer = "", _nombreChofer = "", _internoTexto = "—", _dominio = "";
+    private bool _franco;
+    private DateTime? _fechaIni = DateTime.Today, _fechaFin = DateTime.Today;
+    private TimeSpan? _horaIni = TimeSpan.Zero, _horaFin = TimeSpan.FromHours(8);
+    private DateOnly? _fpago;
+    private bool _pagada;
+    private bool _cargando = true, _grabando, _noExiste;
+    private string? _error;
+
+    private bool EsAlta => Modo == "alta";
+    private bool EsModifica => Modo == "modifica";
+    private bool EsBaja => Modo == "baja";
+    private bool SoloLectura => Modo == "ver" || EsBaja;
+    private bool SoloEscritura => EsAlta || EsModifica;
+
+    private string _titulo => EsAlta ? "Alta de Guardia"
+        : EsModifica ? "Modificar Guardia" : EsBaja ? "Eliminar Guardia" : "Datos de la Guardia";
+    private string _chip => EsAlta ? "Nueva" : EsModifica ? "Edición" : EsBaja ? "Baja física" : "Solo lectura";
+    private string _icono => EsAlta ? Icons.Material.Filled.AddCircle
+        : EsBaja ? Icons.Material.Filled.RemoveCircle : Icons.Material.Filled.Security;
+
+    private string _iniTexto => _fechaIni is DateTime f
+        ? f.ToString("dd/MM/yyyy") + " " + (_horaIni?.ToString(@"hh\:mm") ?? "00:00") : "—";
+    private string _finTexto => _fechaFin is DateTime f
+        ? f.ToString("dd/MM/yyyy") + " " + (_horaFin?.ToString(@"hh\:mm") ?? "00:00") : "—";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (SoloEscritura)
+        {
+            _internos = await Reports.GetInternosParaFiltroAsync();
+            _choferes = await Reports.GetChoferesComboAsync();
+        }
+
+        if (!EsAlta)
+        {
+            if (Fila is null) { _noExiste = true; _cargando = false; return; }
+            _interno = Fila.Interno;
+            _internoTexto = Fila.InternoNT;
+            _dominio = Fila.IdVehiculo;
+            _idChofer = Fila.IdChofer;
+            _nombreChofer = Fila.Nombre;
+            _franco = Fila.Franco;
+            _fpago = Fila.FPago;
+            _pagada = Fila.Pagada;
+            if (Fila.Fecha is DateOnly fr) { _fechaIni = fr.ToDateTime(TimeOnly.MinValue); }
+            if (Fila.HsInicio is DateTime hi) { _fechaIni = hi.Date; _horaIni = hi.TimeOfDay; }
+            if (Fila.HsFin is DateTime hf) { _fechaFin = hf.Date; _horaFin = hf.TimeOfDay; }
+        }
+        _cargando = false;
+    }
+
+    private async Task Grabar()
+    {
+        if (!_abmActivo)
+        {
+            _error = "La escritura de guardias todavía no está habilitada (sigue en FoxPro).";
+            return;
+        }
+        _error = null; _grabando = true;
+
+        if (EsBaja)
+        {
+            Finalizar(await Abm.BajaGuardiaAsync(Id));
+            return;
+        }
+
+        // Resolver el dominio elegido a partir del interno del combo.
+        var op = _internos.FirstOrDefault(i => i.Interno == _interno);
+        var dominio = op?.Dominio ?? _dominio;
+        var nombre = _choferes.FirstOrDefault(c => c.IdChofer == _idChofer)?.Nombre ?? _nombreChofer;
+
+        var iniDate = _fechaIni ?? DateTime.Today;
+        var finDate = _fechaFin ?? DateTime.Today;
+        var hsIni = iniDate.Date + (_horaIni ?? TimeSpan.Zero);
+        var hsFin = finDate.Date + (_horaFin ?? TimeSpan.Zero);
+
+        var input = new GuardiaInput(
+            (int)_interno, dominio, _idChofer, nombre, _franco,
+            DateOnly.FromDateTime(iniDate), hsIni, hsFin);
+
+        Finalizar(EsAlta
+            ? await Abm.AltaGuardiaAsync(input)
+            : await Abm.ModificaGuardiaAsync(Id, input));
+    }
+
+    private void Finalizar(AbmService.AbmResult r)
+    {
+        _grabando = false;
+        if (r.Ok) MudDialog.Close(DialogResult.Ok(true));
+        else { _error = r.Error; StateHasChanged(); }
+    }
+
+    private void Cerrar() => MudDialog.Close(DialogResult.Ok(false));
+    private static string V(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s;
+}

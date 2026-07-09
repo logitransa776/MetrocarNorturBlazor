@@ -42,6 +42,10 @@ builder.Services.AddMemoryCache();
 // pagando el ciclo completo de conexión en frío.
 builder.Services.AddHostedService<DbWarmupService>();
 
+// Barrido periódico que cierra las sesiones que superaron las 8 hs (VENCIDA) y
+// registra su evento en la bitácora usuarios_logs.
+builder.Services.AddHostedService<SesionesVencidasService>();
+
 // Servicios de aplicación
 builder.Services.AddScoped<ReportService>();
 builder.Services.AddScoped<AuthService>();
@@ -101,18 +105,32 @@ app.UseAntiforgery();
 // SignInAsync/SignOutAsync escriben la cookie y SOLO funcionan en contexto de
 // request HTTP (no en un circuito interactivo). Por eso el login es un POST a
 // este endpoint, no un @onclick de Blazor.
-app.MapPost("/auth/login", async (HttpContext http, AuthService auth) =>
+app.MapPost("/auth/login", async (HttpContext http, AuthService auth, AbmService abm) =>
 {
     var form = await http.Request.ReadFormAsync();
     var usuario = form["usuario"].ToString();
     var password = form["password"].ToString();
     var destino = form["destino"].ToString();
 
+    // La IP sale del HttpContext; el hostname se resuelve por DNS inverso (best-effort,
+    // con timeout corto — en web el nombre de la máquina NO llega del navegador como en
+    // la LAN FoxPro). Se calcula antes para poder registrar también los intentos fallidos.
+    var ip = ObtenerIpCliente(http);
+    var hostname = await ResolverHostnameAsync(ip);
+
     var res = await auth.LoginAsync(usuario, password);
     if (!res.Exito)
+    {
+        // Registrar el intento RECHAZADO en la bitácora (usuarios_logs), con el motivo.
+        await abm.RegistrarLoginFallidoAsync(usuario, ip, hostname, res.Error ?? "Rechazado");
         return Results.Redirect($"/login?error={Uri.EscapeDataString(res.Error ?? "Error de acceso")}");
+    }
 
-    var principal = NorturIdentityFactory.Crear(res.Usuario, res.Acceso, res.Nivel, res.Operador);
+    // Registrar el ingreso ANTES de crear la cookie: así obtenemos el session_id (GUID)
+    // y lo guardamos como claim en la cookie, para poder cruzar el logout con su login.
+    var sessionId = await abm.RegistrarLoginAsync(res.Usuario, ip, hostname);
+
+    var principal = NorturIdentityFactory.Crear(res.Usuario, res.Acceso, res.Nivel, res.Operador, sessionId);
     await http.SignInAsync(NorturIdentityFactory.AuthScheme, principal,
         new Microsoft.AspNetCore.Authentication.AuthenticationProperties
         {
@@ -126,8 +144,17 @@ app.MapPost("/auth/login", async (HttpContext http, AuthService auth) =>
     return Results.Redirect(url);
 });
 
-app.MapPost("/auth/logout", async (HttpContext http) =>
+app.MapPost("/auth/logout", async (HttpContext http, AbmService abm) =>
 {
+    // Cerrar la sesión abierta en el historial ANTES de borrar la cookie (después el
+    // claim del usuario ya no está disponible). El session_id (GUID) del claim identifica
+    // exactamente qué sesión cerrar.
+    var usuario = http.User?.Identity?.Name;
+    var sidClaim = http.User?.FindFirst(NorturClaims.Sesion)?.Value;
+    Guid? sessionId = Guid.TryParse(sidClaim, out var g) ? g : null;
+    if (!string.IsNullOrWhiteSpace(usuario))
+        await abm.RegistrarLogoutAsync(usuario, sessionId);
+
     await http.SignOutAsync(NorturIdentityFactory.AuthScheme);
     return Results.Redirect("/login");
 });
@@ -162,3 +189,40 @@ app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
 app.Run();
+
+// ── Helpers de registro de sesión (usados por /auth/login) ──────────────────
+
+// IP del cliente. Respeta X-Forwarded-For si la app corre detrás de un proxy/IIS
+// (toma la primera IP de la cadena); si no, la IP remota de la conexión.
+static string? ObtenerIpCliente(HttpContext http)
+{
+    var fwd = http.Request.Headers["X-Forwarded-For"].ToString();
+    if (!string.IsNullOrWhiteSpace(fwd))
+        return fwd.Split(',')[0].Trim();
+    return http.Connection.RemoteIpAddress?.ToString();
+}
+
+// Nombre de la máquina por DNS inverso (best-effort). En web NO llega del navegador
+// como en la LAN FoxPro, así que se intenta resolver por la IP. Timeout corto para no
+// demorar el login si el DNS no responde; devuelve null si no resuelve.
+static async Task<string?> ResolverHostnameAsync(string? ip)
+{
+    if (string.IsNullOrWhiteSpace(ip)) return null;
+    if (!System.Net.IPAddress.TryParse(ip, out var addr)) return null;
+    // localhost / loopback: no tiene sentido resolver.
+    if (System.Net.IPAddress.IsLoopback(addr)) return "localhost";
+    try
+    {
+        var lookup = System.Net.Dns.GetHostEntryAsync(addr);
+        var done = await Task.WhenAny(lookup, Task.Delay(700));
+        if (done == lookup && lookup.IsCompletedSuccessfully)
+        {
+            var name = lookup.Result.HostName;
+            // Quedarse con el nombre corto de la máquina (sin el dominio DNS).
+            return string.IsNullOrWhiteSpace(name) ? null
+                 : name.Split('.')[0];
+        }
+    }
+    catch { /* DNS no resuelve → hostname queda NULL, no es un error */ }
+    return null;
+}

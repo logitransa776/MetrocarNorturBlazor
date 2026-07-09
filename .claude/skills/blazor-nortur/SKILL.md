@@ -225,8 +225,17 @@ para cualquier informe con filtros + KPIs + gráficos + tabla. Las piezas y por 
 
 1. **Barra de filtros horizontal** (no panel lateral): `<MudPaper Class="rfs-filtros">` con
    `display:flex; flex-wrap:wrap; gap`. Cada control con `Margin.Dense` + `Variant.Outlined`.
-   Datepickers en modo Dialog + su fix de ancho (ver § MudDatePicker). Botón "Aplicar filtros"
-   empujado a la derecha con `<span style="flex:1 1 auto;">`.
+   Datepickers en modo Dialog + su fix de ancho (ver § MudDatePicker).
+   **LAYOUT ESTÁNDAR de la barra (convención fija validada por el usuario, 05/07/2026 — Odómetros):**
+   los **filtros a la IZQUIERDA** y los **botones de acción (Filtro/Aplicar · Actualizar · Excel)
+   TODOS JUNTOS a la DERECHA**. Se logra con un `<span style="flex:1 1 auto;">` como separador
+   ANTES de la botonera, y los botones envueltos en un **mismo `<div>` flex** (gap ~6px) para que
+   no se partan a otra línea al hacer wrap (si van sueltos, el `flex-wrap` manda Excel abajo).
+   Controles relacionados (ej. Interno + Dominio, Desde + Hasta) van agrupados en su propio
+   `<div>` flex con gap chico (~6px) para que se lean como una unidad. Selectores con ancho
+   cómodo (~150px) — que se lea el valor completo con la ✕ de Clearable. Regla del proyecto:
+   **"filtros a la izquierda, acciones a la derecha, la botonera nunca se parte."** Referencia
+   viva del layout: `Odometros.razor` (clase `.odo-filtros` + `.odo-grupo` en app.css).
 2. **Snapshot de filtros al Aplicar.** Guardar los filtros *aplicados* en campos aparte
    (`_fDesdeAp`, `_servAp`, …), NO leer los de edición. Así el drill-down y el Excel
    corresponden a lo que se está viendo, no a lo que el usuario editó a medias sin aplicar.
@@ -253,11 +262,15 @@ para cualquier informe con filtros + KPIs + gráficos + tabla. Las piezas y por 
    gráficos**: LA PLATA=azul en barras Y en donut, AEROPARQUE=naranja en ambos, etc. El color
    sigue a la **entidad, no a la posición** dentro de cada gráfico. Patrón implementado en
    `ReservasFechaServicio.razor` (ver § Colores unificados abajo).
-10. **Cross-filter / foco estilo Power BI** (03/07/2026, opcional pero muy valorado). Clic en
-    una categoría (barra, porción de donut o columna de la tabla) **enfoca todo el tablero** en
-    esa categoría: KPIs, evolución y tabla se **recalculan en memoria** (sin re-query), y los
-    gráficos de esa dimensión **resaltan** la categoría atenuando el resto. Chip "Filtrado por: X
-    ✕" para quitar; clic de nuevo en la misma categoría togglea. Ver § Cross-filter abajo.
+10. **Cross-filter / foco estilo Power BI — ESTÁNDAR para todo informe analítico nuevo**
+    (pedido explícito del usuario, 03/07/2026; validado por él en producción local en los dos
+    informes de Reservas). Clic en una categoría (barra, segmento apilado, porción de donut,
+    leyenda o columna de la tabla) **enfoca todo el tablero** en esa categoría: KPIs, evolución
+    y tabla se **recalculan en memoria** (sin re-query), y los gráficos de esa dimensión
+    **resaltan** la categoría atenuando el resto. Chip "Filtrado por: X ✕" para quitar; clic de
+    nuevo en la misma categoría togglea. Si el informe tiene 2+ dimensiones categóricas, los
+    focos son combinables (AND), uno por dimensión. Ver § Cross-filter abajo (incluye la
+    variante dos dimensiones). No preguntar si se incluye: se incluye.
 
 ### Colores unificados por categoría — patrón (ReservasFechaServicio.razor)
 
@@ -409,6 +422,31 @@ servicios en columnas, así que el detalle completo siempre está disponible ah�
   texto) es más determinístico que el hit-test de una barra SVG de ApexCharts. Botón del chip:
   `getByRole('button', { name: /Quitar filtro/i })` (el texto de MudButton va en un `<span>`).
 
+**Variante con DOS dimensiones combinables (03/07/2026) — `ReservasBandaHoraria.razor`.**
+Segundo informe con cross-filter, con dos focos independientes que se combinan con AND
+(`_bandaFocus` y `_vehiculoFocus`), como los cross-filters de Power BI. Reglas de esa variante:
+- **Semántica por visual:** el foco de una dimensión RESALTA en sus propios visuales (atenúa
+  por color, valores intactos) y FILTRA los visuales de la OTRA dimensión; KPIs, totales de
+  fila y gran total llevan AMBOS focos. En `Recalcular()` se arman 3 subconjuntos: `datosVeh`
+  (para los visuales de banda), `datosBanda` (para el donut de vehículo) y `datos` (ambos).
+- **El foco cambia VALORES de los otros charts, no solo colores** → tras `Recalcular()` va
+  `UpdateOptionsAsync(true, true, false)` **y** `UpdateSeriesAsync(true)` en cada chart
+  (en la variante de una dimensión bastaba UpdateOptions en barras/donut).
+- **Categorías SIEMPRE completas y en orden estable** en cada gráfico (con valor 0 si el foco
+  de la otra dimensión las vacía): si la cantidad/orden de series o porciones cambiara, el
+  update en el lugar reordena o exige remontar (parpadeo). Para el donut de vehículo, ranking
+  y colores salen del dataset COMPLETO (estables), solo los valores llevan el filtro.
+- **Clic en la LEYENDA también enfoca:** `OnLegendClicked` en el `<ApexChart>` + en Options
+  `Legend.OnItemClick = new() { ToggleDataSeries = false }` (apaga el default de ApexCharts de
+  ocultar la serie, que confunde con el foco). En multi-serie la categoría viene en
+  `e.Series?.Name`; en donut, en `e.DataPoint?.Items?.FirstOrDefault()`.
+- **Los drill-downs respetan el foco activo**: el número visible en una celda/fila ya está
+  filtrado → el detalle debe filtrar igual (`PasaFocoVeh`/`PasaFocoBanda`) y el subtítulo del
+  dialog debe decirlo (sufijo " · BUS").
+- **Barras APILADAS multi-serie**: el clic en un segmento llega igual por
+  `OnDataPointSelection`; como cada `ApexPointSeries` ya viene filtrada por categoría, el
+  primer item de `e.DataPoint.Items` trae la categoría de la serie clickeada.
+
 ### Trampa de negocio: no todo `id_servici` es un servicio real
 
 Los informes agrupados por `servicio` pueden estar dominados por filas que NO son servicios de
@@ -555,6 +593,134 @@ Dos themes claros: **NORTUR clásico** (default) y **Compacto gris** (`body.them
 - El AppBar tiene el degradado azul inline → el theme gris lo pisa con
   `body.theme-gris .mud-appbar { background: ... !important; }`.
 - Para que un componente nuevo respete el theme: usar `var(--nt-...)`, no colores fijos.
+
+## Estándar de MODALES — variables `--nt-dlg-*` (06/07/2026)
+
+**Regla del proyecto (pedida y validada por el usuario):** TODO dialog del sistema se ve con
+el MISMO tamaño de fuente, paddings y compactación. El estándar sale de la calibración del
+Zoom del Viaje (que el usuario aprobó) y está centralizado en **variables CSS en `:root`**
+(`app.css`, junto a las `--z-*` de color). **Objetivo de diseño: que un modal entre en una
+terminal de tráfico de 1280×720 sin desbordar** (hay monitores/tablets de 720p en la empresa;
+el desarrollo se hace en pantallas grandes y engaña).
+
+**Por qué funciona con pocos cambios:** casi todos los dialogs comparten la clase base
+`zoom-viaje-dialog` (shell: header azul noche, fondo, `max-width`); los editores y fichas suman
+`cli-dialog nortur-ficha`. `cli-dialog` no tiene reglas propias (es solo un hook). Entonces el
+sistema real de estilos de modal es **`.zoom-*` + la capa `.nortur-ficha`** — tocar las
+variables reajusta los ~33 dialogs a la vez.
+
+Las variables (calibrar acá, se propaga a todo):
+```css
+:root {
+  --nt-dlg-font-label:  0.68rem;   /* etiqueta de campo (MAYÚS) */
+  --nt-dlg-font-value:  0.83rem;   /* valor del campo */
+  --nt-dlg-font-boxlbl: 0.72rem;   /* título de bloque/sección */
+  --nt-dlg-pad-row:     2px 12px;  /* padding de una fila de campos */
+  --nt-dlg-pad-boxlbl:  2px 12px;  /* padding del título de bloque */
+  --nt-dlg-gap-box:     5px;       /* separación vertical entre bloques */
+  --nt-dlg-line:        1.25;      /* interlineado de valores */
+  --nt-dlg-content-pad: 12px 16px 14px;    /* padding del cuerpo */
+  --nt-dlg-max-h:       calc(100vh - 100px);  /* tope de alto del cuerpo */
+}
+/* Terminal chica: más viewport al modal + apretar espaciado. La FUENTE NO baja
+   (legibilidad primero); si no entra, el cuerpo scrollea dentro del modal. */
+@media (max-height: 800px) {
+  :root {
+    --nt-dlg-max-h:       calc(100vh - 72px);
+    --nt-dlg-gap-box:     4px;
+    --nt-dlg-content-pad: 8px 14px 10px;
+  }
+}
+```
+
+Las consumen: `.mud-dialog-content` (padding + `max-height`), `.zoom-field__label/__value`
+(fuente + interlineado), `.zoom-box*` (gap + padding + título), y **la capa `.nortur-ficha`**
+(que ANTES redefinía tamaños propios distintos —0.8/0.76rem, margin 10px— que contradecían la
+compactación; ahora hereda los mismos tamaños del estándar, y solo mantiene lo que es su
+identidad visual: dato liviano `font-weight:500`, franja gris del header, borde/sombra de
+tarjeta).
+
+**Decisiones clave (no cambiar sin motivo):**
+- **Legibilidad primero, scroll interno si hace falta** (elección del usuario): NO se baja la
+  fuente por debajo de lo legible para forzar "todo en una pantalla". Si un dialog gigante
+  (ficha Vehículo con 6 tabs, Siniestro con 5 solapas) no entra, scrollea DENTRO del modal
+  vía `--nt-dlg-max-h` — nunca desborda el viewport.
+- **Un dialog nuevo NO fija tamaños de fuente propios**: usa las clases `zoom-*`/`nortur-ficha`
+  y ya toma el estándar. Si necesita un tamaño distinto, primero preguntarse si el estándar
+  está mal (y cambiar la variable) antes de hacer una excepción local.
+- **Verificado a 1280×720** (capturas Playwright con `test.use({ viewport })`): Zoom del Viaje,
+  ficha Vehículo (la más densa) y editor ABM Usuario entran completos y legibles; 26/26 smoke
+  tests OK. Ver [[testing-nortur]] §D para capturar a una resolución fija.
+
+## Zoom del Viaje — layout de la ficha (ZoomViajeDialog.razor)
+
+Ficha modal de solo lectura de una reserva/viaje — **una de las pantallas más usadas**
+(se abre desde Tráfico, los informes de Reservas, Liquidación, etc.). Estructura: banda de
+estado arriba + grid de dos columnas (izquierda = bloques `zoom-box`; derecha = Adicionales +
+Valores del Servicio). Datos vía `Reports.GetDetalleViajeAsync` (SEEK por `f_reserva` si se
+pasa `FReserva`) + `GetAdicionalesViajeAsync`, en paralelo (`Task.WhenAll`).
+
+### Regla de oro de la ficha: NUNCA recortar un valor con "…" (04/07/2026)
+
+Los campos son datos operativos que el usuario **necesita leer completos** (nombre de cliente,
+recorrido Desde/Hasta, guía, servicio con descripción). El error a evitar: `white-space: nowrap
++ overflow: hidden + text-overflow: ellipsis` en `.zoom-field__value` — recorta el dato y solo
+se ve con hover. **Regla fija validada por el usuario:** el valor hace **wrap** a 2+ líneas y se
+ve completo, con **tooltip nativo (`title=`) como respaldo**. Aplica también a las fichas
+`.nortur-ficha` (Cliente/Chofer/Vehículo), que heredan `.zoom-field__value`.
+
+```css
+.zoom-field__value {
+    font-size: 0.83rem;          /* achicado 2px vs el 0.96rem original: más datos en 1 línea */
+    white-space: normal;         /* NO nowrap */
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.25;
+}
+```
+En el `.razor`, cada helper que pinta un valor agrega `title="valor completo"` (en `F`, `Fv`,
+`FDoc` y la celda de nombre de la tabla de Adicionales). El `title` va solo si el valor no es
+vacío ni `"—"`.
+
+### Anchos de campo: dar espacio a los textos largos, angostar los cortos
+
+Cada fila (`.zoom-row`) es flex y reparte el ancho por *peso* (`flex`). El helper `F(...)`
+controla el peso con `ancho:` (1..3 → `.zoom-field--{n}`) y con `sm: true` (angosto flexible).
+Regla: **más `ancho` a los campos de texto largo, `sm` a los de valor corto** (códigos, números,
+campos casi siempre vacíos) — así los largos entran en 1 línea y no wrapean.
+
+```razor
+@* Servicios: descripciones largas → ancho 3; código/km → sm *@
+@F("1° Servicio",   Serv(...), ancho: 3)
+@F("2° Servicio",   Serv(...), ancho: 3)
+@F("3° Servicio",   Serv(...), ancho: 2)
+@F("Cód. Cabecera", Str(...),  sm: true)
+@F("Kilómetros",    ...,       sm: true)
+
+@* Recorrido: Desde/Hasta largos → ancho 3; Distrito flexible (ancho 2, "CAPITAL FEDERAL"
+   no entra en sm); Rec. Celular casi siempre "—" → sm *@
+@F("Desde",          Str(...), ancho: 3)
+@F("Hasta",          Str(...), ancho: 3)
+@F("Distrito Inicio",Str(...), ancho: 2)
+@F("Rec. Celular",   Str(...), sm: true)
+```
+```css
+.zoom-field    { flex: 1 1 0; min-width: 90px; }
+.zoom-field--2 { flex: 2 1 0; }
+.zoom-field--3 { flex: 3 1 0; }
+/* sm: base chica para ceder ancho, pero PUEDE crecer (flex-grow 1) para no wrapear */
+.zoom-field--sm { flex: 1 1 90px; min-width: 90px; max-width: 150px; }
+```
+**Trampa (04/07/2026):** un `sm` de ancho FIJO (`flex:0 0 auto; width:110px`) fuerza el wrap de
+valores medianos como "CAPITAL FEDERAL" → por eso `sm` es flexible (`flex:1 1 90px`) y "Distrito
+Inicio" NO es `sm`, es `ancho:2`. Objetivo del usuario: "que no queden 2 renglones nunca" — se
+logra con anchos, no con nowrap (el wrap es el fallback para el caso raro de un dato larguísimo).
+
+### Ancho del diálogo
+`.zoom-viaje-dialog { max-width: 1180px; }` (subido de 920px, 04/07/2026) — cómodo en monitores
+≥1366px; con el wrap, casi todo entra en 1 línea. Los índices de secuencia del `RenderTreeBuilder`
+en los helpers `F`/`Fv`/`FDoc` deben quedar **monótonos** al agregar atributos (agregar el `title`
+corre los índices siguientes) o el diff de Blazor rompe.
 
 ## CSS del drawer (wwwroot/app.css)
 

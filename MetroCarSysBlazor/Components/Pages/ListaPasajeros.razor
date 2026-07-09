@@ -1,0 +1,127 @@
+@page "/lista-pasajeros"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@rendermode InteractiveServer
+
+<PageTitle>Lista de pasajeros — NORTUR</PageTitle>
+
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Lista de pasajeros</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Tráfico · Planilla CNRT de pasajeros por viaje — elegí un viaje para ver su lista
+    </MudText>
+</div>
+
+@* ── Buscador de viaje (fecha + texto por interno/servicio/cliente/destino) ── *@
+<MudPaper Class="pa-2 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #003AA0;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudDatePicker @bind-Date="_fecha" Label="Fecha del servicio" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:180px;" />
+        <MudTextField @bind-Value="_texto" Label="Buscar (interno, servicio, cliente, destino)"
+                      Immediate="true" DebounceInterval="250"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:300px;"
+                      OnDebounceIntervalElapsed="CargarAsync" />
+        <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">@_items.Count viajes</MudChip>
+
+        <span style="flex:1 1 auto;"></span>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Search" OnClick="CargarAsync" Disabled="_cargando">Buscar</MudButton>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="_items" Dense="true" Hover="true" Striped="true"
+                  FixedHeader="true" Height="calc(100vh - 340px)"
+                  Bordered="false" Class="cli-grid grid-compacta"
+                  RowClass="cli-grid__row" OnRowClick="@OnRowClick" T="ViajeBuscadorRow">
+            <HeaderContent>
+                <MudTh>Nº Viaje</MudTh>
+                <MudTh>Hora</MudTh>
+                <MudTh>Interno</MudTh>
+                <MudTh>Servicio</MudTh>
+                <MudTh>Cliente</MudTh>
+                <MudTh>Destino</MudTh>
+                <MudTh>Estado</MudTh>
+                <MudTh Style="width:120px;"></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Nº Viaje" Style="font-weight:700; color:#003AA0;">@context.IdViaje</MudTd>
+                <MudTd DataLabel="Hora">@context.Hora</MudTd>
+                <MudTd DataLabel="Interno">@context.InternoNT</MudTd>
+                <MudTd DataLabel="Servicio">@context.Servicio</MudTd>
+                <MudTd DataLabel="Cliente">@context.Cliente</MudTd>
+                <MudTd DataLabel="Destino">@context.Destino</MudTd>
+                <MudTd DataLabel="Estado">@context.Estado</MudTd>
+                <MudTd Style="text-align:right;">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Groups" OnClick="@(() => VerPasajeros(context.IdViaje))">Pasajeros</MudButton>
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">No hay viajes para esa fecha / búsqueda.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudPaper>
+}
+
+@code {
+    private List<ViajeBuscadorRow> _items = new();
+    private DateTime? _fecha = DateTime.Today;
+    private string? _texto;
+    private bool _cargando;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('T'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        _items = await Reports.GetViajesParaBuscadorAsync(
+            DateOnly.FromDateTime(_fecha ?? DateTime.Today), _texto);
+        _cargando = false;
+    }
+
+    private void OnRowClick(TableRowClickEventArgs<ViajeBuscadorRow> args)
+    {
+        if (args.MouseEventArgs.Detail >= 2)
+            _ = VerPasajeros(args.Item.IdViaje);
+    }
+
+    private async Task VerPasajeros(long idViaje)
+    {
+        var parametros = new DialogParameters<ListaPasajerosDialog>
+        {
+            { x => x.IdViaje, (int)idViaje }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = false,
+            CloseOnEscapeKey = true, BackdropClick = true
+        };
+        await DialogService.ShowAsync<ListaPasajerosDialog>("Lista de pasajeros", parametros, opciones);
+    }
+}
