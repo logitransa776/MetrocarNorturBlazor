@@ -112,7 +112,7 @@ else
             <MudText Typo="Typo.subtitle2" Class="mb-2" Style="font-weight:700; color:#112F5B;">
                 Evolución diaria — @_metrica
             </MudText>
-            <ApexChart TItem="SerieDia" Options="_optsArea" Height="230" @ref="_areaChart">
+            <ApexChart TItem="SerieDia" Options="_optsArea" Height="180" @ref="_areaChart">
                 <ApexPointSeries TItem="SerieDia"
                                  Items="_serieDias"
                                  Name="@_metrica"
@@ -163,7 +163,8 @@ else
                                          Name="@_metrica"
                                          SeriesType="SeriesType.Bar"
                                          XValue="@(x => x.Servicio)"
-                                         YValue="@(x => x.Valor)" />
+                                         YValue="@(x => x.Valor)"
+                                         ShowDataLabels="true" />
                     </ApexChart>
                 </MudPaper>
             </MudItem>
@@ -171,12 +172,16 @@ else
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
                     @* Misma cabecera título + chip de foco que el panel de barras (control duplicado). *@
                     @CabeceraFoco("Distribución — top 10 + otros")
-                    <ApexChart TItem="PieItem" Options="_optsPie" Height="360" @ref="_pieChart"
+                    @* Torta LIMPIA + la cantidad y el % al lado de cada servicio en la LEYENDA de abajo
+                       (Legend.Formatter, ej: "LA PLATA 1/2 DIA: 171 (19%)"). @key propio: se remonta en
+                       cada foco para redibujar bien la torta + su leyenda (el update en el lugar dejaba la
+                       leyenda con valores/posiciones del render previo — regla del cross-filter). *@
+                    <ApexChart @key="_pieChartKey" TItem="PieItem" Options="_optsPie" Height="360" @ref="_pieChart"
                                OnDataPointSelection="OnPieSelection">
                         <ApexPointSeries TItem="PieItem"
                                          Items="_pieItems"
                                          Name="@_metrica"
-                                         SeriesType="SeriesType.Donut"
+                                         SeriesType="SeriesType.Pie"
                                          XValue="@(x => x.Servicio)"
                                          YValue="@(x => x.Valor)" />
                     </ApexChart>
@@ -307,6 +312,10 @@ else
     private bool _cargando;
     private bool _cargandoDet;
     private Guid _chartsKey = Guid.NewGuid();
+    // Key propio de la torta "Distribución": cambia con cada foco para forzar su remonte. El update
+    // en el lugar dejaba la leyenda con valores/posiciones del render previo (regla del cross-filter,
+    // skill blazor-nortur § pto 7/8). Los otros charts sí se actualizan en el lugar (ActualizarGraficos).
+    private Guid _pieChartKey = Guid.NewGuid();
 
     // KPIs
     private int _totalRes, _totalPax, _totalCan, _nServicios;
@@ -389,7 +398,7 @@ else
         Colors = new List<string> { "#2058D0" },
         Stroke = new() { Curve = Curve.Smooth, Width = 2 },
         DataLabels = new() { Enabled = false },
-        Xaxis = new() { TickAmount = 16, Labels = new() { Rotate = -45, Style = new() { FontSize = "10px", Colors = "#7A90AD" }, HideOverlappingLabels = true } },
+        Xaxis = new() { TickAmount = 16, Labels = new() { Rotate = -45, Style = new() { FontSize = "10px", FontWeight = "400", Colors = "#7A90AD" }, HideOverlappingLabels = true } },
         Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px", Colors = "#7A90AD" } } } },
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
         Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
@@ -403,10 +412,29 @@ else
         {
             // Distributed: un color por barra (con una sola serie, sin esto todas las barras
             // usarían Colors[0]). Los colores se asignan en Recalcular() desde _colorPorServicio.
-            Bar = new() { Horizontal = true, BorderRadius = 4, BorderRadiusApplication = BorderRadiusApplication.End, Distributed = true }
+            // DataLabels.Position="top": en barra HORIZONTAL, "top" = el extremo/final de la barra.
+            // Es lo que saca el número del centro y lo lleva al final (combinado con OffsetX afuera).
+            Bar = new()
+            {
+                Horizontal = true, BorderRadius = 4, BorderRadiusApplication = BorderRadiusApplication.End, Distributed = true,
+                DataLabels = new() { Position = BarDataLabelPosition.Top }
+            }
         },
         // La leyenda de distributed repetiría el nombre de cada barra (ya está en el eje Y) → off.
         Legend = new() { Show = false },
+        // Número visible al final de cada barra (afuera, sobre el fondo blanco): OffsetX positivo
+        // lo empuja más allá del borde de la barra; color oscuro porque no va sobre el color de la
+        // barra. TextAnchor=start para que arranque justo después del borde. La posición al final
+        // de la barra la fija PlotOptions.Bar.DataLabels.Position="top" (ver arriba).
+        DataLabels = new()
+        {
+            Enabled = true,
+            TextAnchor = TextAnchor.Start,
+            OffsetX = 8,
+            Style = new() { FontSize = "11px", FontWeight = "600", Colors = new List<string> { "#334155" } },
+            // Cantidad · % del total. El total se inyecta en Recalcular (reemplaza __TOTAL__).
+            Formatter = "function(val){ var p = __TOTAL__ > 0 ? Math.round(val * 100 / __TOTAL__) : 0; return val.toLocaleString('es-AR') + ' · ' + p + '%'; }",
+        },
         Colors = new List<string> { "#2058D0" },   // reemplazado por barra en Recalcular()
         Xaxis = new() { Labels = new() { Style = new() { FontSize = "11px" } } },
         Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px" }, MaxWidth = 160 } } },
@@ -422,15 +450,29 @@ else
         },
     };
 
+    // Panel derecho: TORTA (pie) top 10 + "Otros". Torta LIMPIA (sin etiquetas sobre las porciones,
+    // que se encimarían — ApexCharts no tiene leader lines) + la cantidad y el % al lado de cada
+    // servicio en la LEYENDA de abajo (Legend.Formatter, ej: "LA PLATA 1/2 DIA: 171 (19%)"). El % del
+    // legend se calcula con el total inyectado en Recalcular (placeholder __TOTALSERV__). Mismo patrón
+    // validado en "Distribución por tipo de vehículo" (ReservasBandaHoraria) — skill blazor-nortur § pto 8.
     private ApexChartOptions<PieItem> _optsPie = new()
     {
         Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
         Colors = _palette,
-        Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px" },
+        Legend = new()
+        {
+            Show = true, Position = LegendPosition.Bottom, FontSize = "12px",
+            // Click en la leyenda = foco (no ocultar la serie, que es el default de ApexCharts).
+            OnItemClick = new() { ToggleDataSeries = false },
+            // Cantidad + % al lado de cada ícono. globals.series trae los valores; el total se inyecta
+            // en Recalcular (reemplaza __TOTALSERV__). seriesIndex mapea al orden de _pieItems.
+            Formatter = "function(name, opts){ var v = opts.w.globals.series[opts.seriesIndex]; var p = __TOTALSERV__ > 0 ? Math.round(v * 100 / __TOTALSERV__) : 0; return name + ': ' + v.toLocaleString('es-AR') + ' (' + p + '%)'; }",
+        },
+        DataLabels = new() { Enabled = false },   // sin etiquetas sobre la torta (van en la leyenda)
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
-        // Desactivar el realce INTERNO de ApexCharts (selección/hover): el highlight del foco lo
-        // manejamos nosotros por color. Sin esto, ApexCharts marca además la porción clickeada
-        // (se veían DOS resaltadas). Filter.Type = None → solo manda nuestro color.
+        Theme = new() { Mode = Mode.Light },
+        // Sin realce interno de ApexCharts (selección/hover): el highlight del foco lo manejamos
+        // por color. Sin esto, ApexCharts marcaría además la porción clickeada.
         States = new()
         {
             Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
@@ -450,9 +492,10 @@ else
     private string _ordenColumnas = "PorTotal";
 
     // Cuántos servicios muestra el gráfico de BARRAS (selector "Mostrar"): 10/15/20 o 999=Todos.
-    // Default Top 15: la paleta tiene 15 hues, así el default muestra todas las barras con color
-    // propio. El donut siempre queda en top 10 + Otros (24 tajadas serían ilegibles). Sin re-query.
-    private int _topN = 15;
+    // Default Top 10 (pedido por el usuario, 13/07/2026): las 10 primeras barras tienen su hue propio
+    // de la paleta y coinciden con la torta (top 10 + Otros). El usuario puede subir a 15/20/Todos.
+    // Sin re-query.
+    private int _topN = 10;
     // Título dinámico del panel de barras según cuántos muestra.
     private string TituloTopN => _topN >= 999
         ? $"todos ({_barItems.Count})"
@@ -544,6 +587,13 @@ else
             .OrderByDescending(x => x.Valor)
             .ToList();
 
+        // Total del ranking (todos los servicios) → base del % que muestran los datalabels de
+        // ambos gráficos de barras. Y el máximo (barra más larga) → margen del eje para que el
+        // label no se corte. Ambos se inyectan en las opciones (ver AplicarTotalEnDataLabels).
+        var totalRanking = ranking.Sum(x => x.Valor);
+        var maxRanking = ranking.Count > 0 ? ranking.Max(x => x.Valor) : 0;
+        AplicarTotalEnDataLabels(totalRanking, maxRanking);
+
         // Mapa único servicio → color por ranking: top 8 reciben los 8 hues de la paleta;
         // del 9º en adelante (los que el donut pliega en "Otros") usan gris. Así cada
         // servicio conserva su color en AMBOS gráficos.
@@ -560,9 +610,9 @@ else
         // (más barras) el gráfico crece y no se apelotonan.
         _altoBarras = Math.Max(360, _barItems.Count * 30);
 
-        // Donut: top 10 con hue fijo + el resto plegado en "Otros" (gris neutro). Top 10 (no 8)
-        // para que los mismos servicios de las barras top 10 tengan color propio también acá →
-        // coherencia total de color entre ambos gráficos.
+        // Panel derecho (barras top 10 + "Otros"): top 10 con hue fijo + el resto plegado en
+        // "Otros" (gris neutro). Top 10 para que los mismos servicios del panel izquierdo tengan
+        // color propio también acá → coherencia total de color entre ambos gráficos.
         _pieItems = ranking.Take(10)
             .Select(x => new PieItem(x.Servicio, (decimal)x.Valor))
             .ToList();
@@ -576,6 +626,13 @@ else
         _pieColors = _pieItems.Select(p => ColorFoco(p.Servicio)).ToList();
         _optsBar.Colors = _barColors;
         _optsPie.Colors = _pieColors;
+
+        // La torta "Distribución" lleva la cantidad y el % en la LEYENDA: inyectar el total (todos los
+        // servicios, incl. "Otros") en el Legend.Formatter (reemplaza __TOTALSERV__) para calcular el %.
+        var totalPie = _pieItems.Sum(p => (int)p.Valor);
+        if (_optsPie.Legend is not null)
+            _optsPie.Legend.Formatter =
+                $"function(name, opts){{ var v = opts.w.globals.series[opts.seriesIndex]; var p = {totalPie} > 0 ? Math.round(v * 100 / {totalPie}) : 0; return name + ': ' + v.toLocaleString('es-AR') + ' (' + p + '%)'; }}";
         // La evolución diaria toma el color del servicio enfocado (refuerza que la serie ES ese
         // servicio); sin foco vuelve al azul de serie estándar.
         _optsArea.Colors = new List<string> { _servicioFocus is null ? "#2058D0" : ColorDe(_servicioFocus) };
@@ -606,6 +663,31 @@ else
         _granTotal = datos.Sum(val);
 
         OrdenarPivServicios();   // orden de columnas según el selector (usa _pivTotCol)
+    }
+
+    // Template del formatter de datalabel de barra: muestra "cantidad · %". El % se calcula
+    // dividiendo el valor de la barra por el total del ranking, que NO llega en el contexto del
+    // datalabel de barra → se inyecta reemplazando __TOTAL__ en Recalcular (AplicarTotalEnDataLabels).
+    // Formato "cantidad (%)" — el % entre paréntesis se lee como dato secundario, la cantidad
+    // manda (ApexCharts escapa el HTML del formatter → no se puede colorear solo el % con tspan;
+    // el paréntesis crea la jerarquía visual sin trucos frágiles).
+    private const string _dlFormatterTemplate =
+        "function(val){ var p = __TOTAL__ > 0 ? Math.round(val * 100 / __TOTAL__) : 0; return val.toLocaleString('es-AR') + ' (' + p + '%)'; }";
+
+    // Inyecta en el gráfico de BARRAS izquierdo: (1) el total en el Formatter del datalabel (para el
+    // %), y (2) el MÁXIMO del eje X extendido un 25% sobre la barra más larga. El margen del eje
+    // garantiza que la barra más larga NO llegue al borde → el label "cantidad (%)" SIEMPRE entra
+    // afuera (sin este margen, ApexCharts pega la barra al borde y el label se corta). Se llama en
+    // cada Recalcular porque total y máximo cambian con métrica/filtros/topN. (El panel DERECHO ya
+    // no es barras — es torta con los números en la leyenda; su total se inyecta aparte en Recalcular.)
+    private void AplicarTotalEnDataLabels(int total, int maxValor)
+    {
+        var fmt = _dlFormatterTemplate.Replace("__TOTAL__", total.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        // Aire a la derecha para que el label "cantidad (%)" de la barra más larga quede HOLGADO
+        // afuera, sin raspar el borde. Fijar Min=0 es clave: sin él, al setear solo Max ApexCharts
+        // recalcula ticks feos (arrancaba en negativo).
+        if (_optsBar.DataLabels is not null) _optsBar.DataLabels.Formatter = fmt;
+        if (_optsBar.Xaxis is not null) { _optsBar.Xaxis.Min = 0; _optsBar.Xaxis.Max = maxValor > 0 ? maxValor * 1.25 : 1; }
     }
 
     // Ordena las columnas de servicio de la tabla según el modo elegido en el selector.
@@ -644,13 +726,14 @@ else
     private async Task ActualizarGraficos()
     {
         if (_barChart is not null) await _barChart.UpdateOptionsAsync(true, true, false);
-        if (_pieChart is not null) await _pieChart.UpdateOptionsAsync(true, true, false);
         if (_areaChart is not null)
         {
             // UpdateOptions además de UpdateSeries: con el foco también cambia el COLOR del área.
             await _areaChart.UpdateOptionsAsync(true, true, false);
             await _areaChart.UpdateSeriesAsync(true);
         }
+        // La torta "Distribución" NO se actualiza acá: se remonta vía _pieChartKey (el update en el
+        // lugar le dejaba la leyenda con valores/posiciones del render previo). El remonte la redibuja bien.
     }
 
     // Color de un servicio ATENUADO si hay foco y no es el enfocado (para barras/donut).
@@ -663,8 +746,9 @@ else
     {
         // Toggle: clic en el mismo servicio enfocado lo quita. "Otros" no es enfocable.
         _servicioFocus = (_servicioFocus == servicio || servicio == "Otros") ? null : servicio;
-        Recalcular();                 // recalcula KPIs/tabla/colores (en memoria, sin re-query)
-        await ActualizarGraficos();   // repinta los charts EN SU LUGAR (sin remontar → sin parpadeo)
+        Recalcular();                    // recalcula KPIs/tabla/colores (en memoria, sin re-query)
+        _pieChartKey = Guid.NewGuid();   // remonta la torta (el update en el lugar le rompe la leyenda)
+        await ActualizarGraficos();      // repinta los OTROS charts EN SU LUGAR (sin remontar → sin parpadeo)
     }
 
     private Task LimpiarFoco() => ToggleFoco(_servicioFocus ?? "");

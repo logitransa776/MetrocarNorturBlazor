@@ -101,7 +101,7 @@ else
         @* ── Gráfico barras apiladas por fecha × banda ── *@
         <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
             @CabeceraFoco($"{(_metrica == "Pax" ? "Pax" : "Viajes")} por día y banda horaria")
-            <ApexChart TItem="ChartItem" Options="_optsBar" Height="320" @ref="_barChart"
+            <ApexChart TItem="ChartItem" Options="_optsBar" Height="240" @ref="_barChart"
                        OnDataPointSelection="OnBarSelection" OnLegendClicked="OnBarLegendClicked">
                 @foreach (var banda in _bandasPresentes)
                 {
@@ -121,26 +121,33 @@ else
             <MudItem xs="12" md="6" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
                     @CabeceraFoco("Distribución por banda horaria")
-                    <ApexChart TItem="DonutItem" Options="_optsPieBanda" Height="320" @ref="_pieBandaChart"
+                    @* @key propio que cambia con cada foco: fuerza el REMONTE de este chart de barras
+                       al enfocar. Es necesario porque el update en el lugar (UpdateOptions+UpdateSeries)
+                       reposiciona MAL los datalabels de barra (quedan con y del render anterior, fuera
+                       de la caja). El remonte los redibuja bien. Solo remonta este panel, no los otros. *@
+                    <ApexChart @key="_bandaChartKey" TItem="DonutItem" Options="_optsPieBanda" Height="320" @ref="_pieBandaChart"
                                OnDataPointSelection="OnPieBandaSelection" OnLegendClicked="OnPieBandaLegendClicked">
                         <ApexPointSeries TItem="DonutItem"
                                          Items="_donutBanda"
                                          Name="@UnidadMetrica"
-                                         SeriesType="SeriesType.Donut"
+                                         SeriesType="SeriesType.Bar"
                                          XValue="@(x => x.Label)"
-                                         YValue="@(x => x.Valor)" />
+                                         YValue="@(x => x.Valor)"
+                                         ShowDataLabels="true" />
                     </ApexChart>
                 </MudPaper>
             </MudItem>
             <MudItem xs="12" md="6" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
                     @CabeceraFoco("Distribución por tipo de vehículo")
-                    <ApexChart TItem="DonutItem" Options="_optsPieVeh" Height="320" @ref="_pieVehChart"
+                    @* @key propio: se remonta en cada foco para redibujar bien la torta + su leyenda
+                       (el update en el lugar dejaba la leyenda con valores/posiciones del render previo). *@
+                    <ApexChart @key="_vehChartKey" TItem="DonutItem" Options="_optsPieVeh" Height="320" @ref="_pieVehChart"
                                OnDataPointSelection="OnPieVehSelection" OnLegendClicked="OnPieVehLegendClicked">
                         <ApexPointSeries TItem="DonutItem"
                                          Items="_donutVehiculo"
                                          Name="@UnidadMetrica"
-                                         SeriesType="SeriesType.Donut"
+                                         SeriesType="SeriesType.Pie"
                                          XValue="@(x => x.Label)"
                                          YValue="@(x => x.Valor)" />
                     </ApexChart>
@@ -269,6 +276,11 @@ else
     private bool _cargandoDet;
     private bool _yaConsultado;
     private Guid _chartsKey = Guid.NewGuid();
+    // Key propio del chart de barras "Distribución por banda": cambia con cada foco para forzar su
+    // remonte (el update en el lugar reposiciona mal sus datalabels — ver nota en el markup).
+    private Guid _bandaChartKey = Guid.NewGuid();
+    // Ídem para el pie "Distribución por tipo de vehículo" (mismo bug de posición de datalabels).
+    private Guid _vehChartKey = Guid.NewGuid();
 
     // Las 6 bandas en orden fijo (desde el service).
     private static readonly IReadOnlyList<string> _bandas = ReportService.BandasHorarias;
@@ -388,12 +400,38 @@ else
         },
     };
 
+    // "Distribución por banda horaria": barras horizontales con "cantidad (%)" afuera (patrón
+    // blazor-nortur § Datalabels). Antes era donut; se pasó a barras para el número + % legible.
+    // El % se inyecta con el total en Recalcular (placeholder __TOTAL__). Se conserva la leyenda
+    // (clic en leyenda = foco, igual que cuando era donut).
     private readonly ApexChartOptions<DonutItem> _optsPieBanda = new()
     {
         Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        PlotOptions = new()
+        {
+            Bar = new()
+            {
+                Horizontal = true, BorderRadius = 4, BorderRadiusApplication = BorderRadiusApplication.End, Distributed = true,
+                DataLabels = new() { Position = BarDataLabelPosition.Top }
+            }
+        },
         Colors = _paletteBanda,
-        Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px", OnItemClick = new() { ToggleDataSeries = false } },
+        // Leyenda conservada (clic = foco, no ocultar serie). Con barras distribuidas ApexCharts la
+        // arma desde las categorías; si el clic no dispara OnLegendClicked, el foco por clic en la
+        // barra sigue funcionando.
+        Legend = new() { Show = true, Position = LegendPosition.Bottom, FontSize = "11px", OnItemClick = new() { ToggleDataSeries = false } },
+        DataLabels = new()
+        {
+            Enabled = true,
+            TextAnchor = TextAnchor.Start,
+            OffsetX = 8,
+            Style = new() { FontSize = "11px", FontWeight = "600", Colors = new List<string> { "#334155" } },
+            Formatter = "function(val){ var p = __TOTAL__ > 0 ? Math.round(val * 100 / __TOTAL__) : 0; return val.toLocaleString('es-AR') + ' (' + p + '%)'; }",
+        },
+        Xaxis = new() { Labels = new() { Style = new() { FontSize = "11px", Colors = "#7A90AD" } } },
+        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px", Colors = "#7A90AD" }, MaxWidth = 120 } } },
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
         States = new()
         {
             Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
@@ -401,11 +439,23 @@ else
         },
     };
 
+    // "Distribución por tipo de vehículo": torta LLENA (pie) limpia + la cantidad y el % al lado de
+    // cada ícono en la LEYENDA de abajo (Legend.Formatter, ej: "BUS: 162 (74%)"). Así se evita el
+    // problema de las etiquetas encimadas sobre la torta y las leader lines (que ApexCharts no tiene).
+    // El % del legend se calcula con el total inyectado en Recalcular (placeholder __TOTALVEH__).
     private readonly ApexChartOptions<DonutItem> _optsPieVeh = new()
     {
         Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
         Colors = _paletteVeh,
-        Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px", OnItemClick = new() { ToggleDataSeries = false } },
+        Legend = new()
+        {
+            Show = true, Position = LegendPosition.Bottom, FontSize = "12px",
+            OnItemClick = new() { ToggleDataSeries = false },
+            // Cantidad + % al lado de cada ícono. globals.series trae los valores; el total se inyecta
+            // en Recalcular (reemplaza __TOTALVEH__). seriesIndex mapea al orden de _donutVehiculo.
+            Formatter = "function(name, opts){ var v = opts.w.globals.series[opts.seriesIndex]; var p = __TOTALVEH__ > 0 ? Math.round(v * 100 / __TOTALVEH__) : 0; return name + ': ' + v.toLocaleString('es-AR') + ' (' + p + '%)'; }",
+        },
+        DataLabels = new() { Enabled = false },   // sin etiquetas sobre la torta (van en la leyenda)
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
         States = new()
         {
@@ -530,11 +580,22 @@ else
                 new ChartItem(fecha.ToString("dd/MM"), banda, PivVal(fecha, banda))))
             .ToList();
 
-        // ── Donuts: categorías SIEMPRE completas y en orden estable (con 0 si el foco de la
-        //    otra dimensión las vacía) — así el update en el lugar no reordena las porciones ──
+        // ── Distribución por banda (barras) + por vehículo (donut): categorías SIEMPRE completas
+        //    y en orden estable (con 0 si el foco de la otra dimensión las vacía) — así el update
+        //    en el lugar no reordena ──
         _donutBanda = _bandasPresentes
             .Select(b => new DonutItem(b, PivTotCol(b)))
             .ToList();
+
+        // Datalabels "cantidad (%)" de las barras de banda: inyectar el total (base del %) y el
+        // margen del eje X para que el label de la barra más larga no se corte (patrón blazor-nortur).
+        // Panel a 6/12 → factor +30% (entre el ancho 7/12 y el angosto 5/12).
+        var totalBanda = _donutBanda.Sum(d => (int)d.Valor);
+        var maxBanda = _donutBanda.Count > 0 ? _donutBanda.Max(d => (int)d.Valor) : 0;
+        if (_optsPieBanda.DataLabels is not null)
+            _optsPieBanda.DataLabels.Formatter =
+                $"function(val){{ var p = {totalBanda} > 0 ? Math.round(val * 100 / {totalBanda}) : 0; return val.toLocaleString('es-AR') + ' (' + p + '%)'; }}";
+        if (_optsPieBanda.Xaxis is not null) { _optsPieBanda.Xaxis.Min = 0; _optsPieBanda.Xaxis.Max = maxBanda > 0 ? maxBanda * 1.30 : 1; }
 
         // Vehículos: ranking por volumen del dataset COMPLETO (color y orden estables) con
         // valores del foco de banda.
@@ -548,6 +609,13 @@ else
         _donutVehiculo = rankingVeh
             .Select(x => new DonutItem(x.Veh, vehValores.TryGetValue(x.Veh, out var v) ? v : 0))
             .ToList();
+
+        // "Distribución por tipo de vehículo" es torta con la cantidad y el % en la LEYENDA: inyectar
+        // el total en el Legend.Formatter (reemplaza __TOTALVEH__) para calcular el % de cada ítem.
+        var totalVeh = _donutVehiculo.Sum(d => (int)d.Valor);
+        if (_optsPieVeh.Legend is not null)
+            _optsPieVeh.Legend.Formatter =
+                $"function(name, opts){{ var v = opts.w.globals.series[opts.seriesIndex]; var p = {totalVeh} > 0 ? Math.round(v * 100 / {totalVeh}) : 0; return name + ': ' + v.toLocaleString('es-AR') + ' (' + p + '%)'; }}";
 
         // Colores de cada gráfico, atenuando lo no enfocado (efecto highlight de Power BI).
         _optsBar.Colors = _bandasPresentes.Select(ColorFocoBanda).ToList();
@@ -566,13 +634,17 @@ else
         // Toggle: clic en la misma banda enfocada la quita.
         _bandaFocus = _bandaFocus == banda ? null : banda;
         Recalcular();                 // recalcula KPIs/tabla/valores/colores (en memoria, sin re-query)
-        await ActualizarGraficos();   // repinta los charts EN SU LUGAR (sin remontar → sin parpadeo)
+        _bandaChartKey = Guid.NewGuid(); // remonta el chart de barras de banda (sus datalabels se reposicionan bien)
+        _vehChartKey = Guid.NewGuid();   // ídem el pie de vehículo (sus valores cambian con el foco de banda)
+        await ActualizarGraficos();   // repinta los OTROS charts EN SU LUGAR (sin remontar → sin parpadeo)
     }
 
     private async Task ToggleFocoVehiculo(string veh)
     {
         _vehiculoFocus = _vehiculoFocus == veh ? null : veh;
         Recalcular();
+        _bandaChartKey = Guid.NewGuid(); // el foco de vehículo también cambia los valores de banda → remonte
+        _vehChartKey = Guid.NewGuid();   // y el propio pie de vehículo (highlight + reposición de datalabels)
         await ActualizarGraficos();
     }
 
@@ -589,16 +661,9 @@ else
             await _barChart.UpdateOptionsAsync(true, true, false);
             await _barChart.UpdateSeriesAsync(true);
         }
-        if (_pieBandaChart is not null)
-        {
-            await _pieBandaChart.UpdateOptionsAsync(true, true, false);
-            await _pieBandaChart.UpdateSeriesAsync(true);
-        }
-        if (_pieVehChart is not null)
-        {
-            await _pieVehChart.UpdateOptionsAsync(true, true, false);
-            await _pieVehChart.UpdateSeriesAsync(true);
-        }
+        // _pieBandaChart y _pieVehChart NO se actualizan acá: se remontan vía _bandaChartKey /
+        // _vehChartKey (el update en el lugar les rompía la posición de los datalabels). El remonte
+        // los redibuja completos y bien.
     }
 
     // ApexCharts entrega el punto clickeado en e.DataPoint; sus Items son los TItem agrupados

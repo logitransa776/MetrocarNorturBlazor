@@ -337,8 +337,9 @@ else
     private string ColorFocoTipo(string tipo) =>
         (_tipoFocus is null || tipo == _tipoFocus) ? ColorTipo(tipo) : "#D9E1EC";
 
-    // Cuántos clientes muestra el gráfico de barras (selector "Mostrar").
-    private int _topN = 15;
+    // Cuántos clientes muestra el gráfico de barras (selector "Mostrar"). Default Top 10
+    // (pedido por el usuario, 13/07/2026); el usuario puede subir a 15/20/Todos.
+    private int _topN = 10;
     private List<(string Id, string Nombre, int Total)> _rankingClientes = new();
     private string TituloTopN => _topN >= 999
         ? $"todos ({_barItems.Count})"

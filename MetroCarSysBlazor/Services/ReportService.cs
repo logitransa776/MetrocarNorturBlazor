@@ -79,7 +79,7 @@ public partial class ReportService
         var where = new List<string>
         {
             "v._deleted = 0",
-            $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'"
+            $"v.f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'"
         };
         if (serviciosSel.Count > 0)
         {
@@ -393,7 +393,7 @@ public partial class ReportService
             var sql = $"""
                 {TraficoProjection}
                 WHERE v._deleted = 0
-                  AND v.f_reserva = '{dia:yyyy-MM-dd}'
+                  AND v.f_reserva = '{dia:yyyyMMdd}'
                   AND v.estado_via <> 'CANCELADO'
                 ORDER BY v.hs_inicio, v.hs_present
                 """;
@@ -425,7 +425,7 @@ public partial class ReportService
         if (hasta < desde) (desde, hasta) = (hasta, desde);
 
         // Rango de fechas común a casi todos los filtros (réplica de Between(str_f_reserva, x1, x2)).
-        var rango = $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'";
+        var rango = $"v.f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'";
 
         // WHERE por tipo de filtro (un Case de arma_grid_viaje por rama). El post-proceso del
         // FoxPro descarta los CANCELADO en la vista normal → se filtra acá en el WHERE.
@@ -647,7 +647,7 @@ public partial class ReportService
             SELECT DISTINCT LTRIM(RTRIM(vuelo)) AS Vuelo
             FROM viaje
             WHERE _deleted = 0
-              AND f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'
+              AND f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'
               AND LTRIM(RTRIM(ISNULL(vuelo, ''))) NOT IN ('', 'SIN VUELO', 'A CONFIRMAR')
             ORDER BY Vuelo
             """;
@@ -676,8 +676,8 @@ public partial class ReportService
 
         var sql = $"""
             SELECT
-                (SELECT COUNT(*)           FROM viaje    WHERE f_reserva = '{dia:yyyy-MM-dd}') AS CantViajes,
-                (SELECT MAX(_updated_at)   FROM viaje    WHERE f_reserva = '{dia:yyyy-MM-dd}') AS UltViaje,
+                (SELECT COUNT(*)           FROM viaje    WHERE f_reserva = '{dia:yyyyMMdd}') AS CantViajes,
+                (SELECT MAX(_updated_at)   FROM viaje    WHERE f_reserva = '{dia:yyyyMMdd}') AS UltViaje,
                 (SELECT MAX(_updated_at)   FROM vehiculo)                                       AS UltVehiculo
             """;
 
@@ -966,7 +966,7 @@ public partial class ReportService
                    RTRIM(ISNULL(ip, '')), RTRIM(ISNULL(hostname, '')), RTRIM(ISNULL(motivo, ''))
             FROM usuarios_logs
             WHERE _deleted = 0
-              AND f_evento >= '{desde:yyyy-MM-dd}' AND f_evento < DATEADD(day, 1, '{hasta:yyyy-MM-dd}')
+              AND f_evento >= '{desde:yyyyMMdd}' AND f_evento < DATEADD(day, 1, '{hasta:yyyyMMdd}')
               {usuClause}{evClause}
             ORDER BY f_evento DESC, id DESC
             """;
@@ -1121,7 +1121,7 @@ public partial class ReportService
                     SELECT TOP 1 c.codigo
                     FROM chofer_franco c
                     WHERE c.id_chofer = v.id_chofer
-                      AND c.fecha = '{hoy:yyyy-MM-dd}'
+                      AND c.fecha = '{hoy:yyyyMMdd}'
                       AND c._deleted = 0
                 ) cf
                 WHERE v.activo = 1
@@ -1215,7 +1215,7 @@ public partial class ReportService
                 LEFT JOIN viaje_motivo_cancela m
                        ON v.id_motivo = m.id AND m._deleted = 0
                 WHERE v._deleted = 0
-                  AND v.f_reserva = '{dia:yyyy-MM-dd}'
+                  AND v.f_reserva = '{dia:yyyyMMdd}'
                   AND v.estado_via = 'CANCELADO'
                 ORDER BY v.hs_inicio
                 """;
@@ -1290,7 +1290,7 @@ public partial class ReportService
             // que sumar f_reserva no cambia el resultado: solo evita el scan.
             var fResFiltro = fReserva is null
                 ? ""
-                : $"AND v.f_reserva = '{fReserva.Value:yyyy-MM-dd}'";
+                : $"AND v.f_reserva = '{fReserva.Value:yyyyMMdd}'";
             var sql = $"""
                 SELECT
                     v.id_viaje                                  AS IdViaje,
@@ -1573,7 +1573,7 @@ public partial class ReportService
         await using var conn = db.Database.GetDbConnection();
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
-        var fResFiltro = fReserva is null ? "" : $"AND f_reserva = '{fReserva.Value:yyyy-MM-dd}'";
+        var fResFiltro = fReserva is null ? "" : $"AND f_reserva = '{fReserva.Value:yyyyMMdd}'";
         cmd.CommandText = $"""
             SELECT TOP 1 [file]
             FROM viaje
@@ -1660,7 +1660,7 @@ public partial class ReportService
         var where = new List<string>
         {
             "v._deleted = 0",
-            $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'",
+            $"v.f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'",
             "v.origen = 'T'",
             "v.id_cliente <> (SELECT TOP 1 RTRIM(ISNULL(id_cliente, '')) FROM parametro)",
             "v.hs_inicio IS NOT NULL"
@@ -1870,7 +1870,7 @@ public partial class ReportService
         var where = new List<string>
         {
             "v._deleted = 0",
-            $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'",
+            $"v.f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'",
             "v.origen = 'T'"
         };
         if (!incluirInterno)
@@ -2045,7 +2045,7 @@ public partial class ReportService
         var where = new List<string>
         {
             "v._deleted = 0",
-            $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'",
+            $"v.f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'",
             "v.estado_via <> 'CANCELADO'",
             "ISNULL(v.interno, 0) > 0",
             "ISNULL(v.id_motivo, 0) = 0",
@@ -2206,7 +2206,7 @@ public partial class ReportService
         var where = new List<string>
         {
             "v._deleted = 0",
-            $"v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'",
+            $"v.f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'",
             "v.estado_via <> 'CANCELADO'",
             "ISNULL(v.interno, 0) > 0",
             "NULLIF(LTRIM(RTRIM(v.id_vehicu2)), '') IS NOT NULL"
@@ -3099,7 +3099,7 @@ public partial class ReportService
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
 
-            var where = $"_deleted = 0 AND f_carga BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'";
+            var where = $"_deleted = 0 AND f_carga BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'";
             if (!string.IsNullOrWhiteSpace(dom))
                 where += $" AND dominio = '{dom.Replace("'", "''")}'";
 
@@ -3361,7 +3361,7 @@ public partial class ReportService
         }
         else
         {
-            where = $"l.tipo = '{t}' AND l.fecha BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'";
+            where = $"l.tipo = '{t}' AND l.fecha BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'";
             if (!string.IsNullOrWhiteSpace(idCliente))
                 where += $" AND l.id_cliente = '{idCliente.Replace("'", "''")}'";
         }
@@ -3546,7 +3546,7 @@ public partial class ReportService
         // Candado temporal del grupo. POR ESTADO: vencido (f_grupo_fi < HOY).
         // POR FECHA: el fin del grupo cae en el rango pedido.
         var candado = porFecha
-            ? $"v.f_grupo_fi BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'"
+            ? $"v.f_grupo_fi BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'"
             : "v.f_grupo_fi < CAST(GETDATE() AS date)";
 
         using var cmd = conn.CreateCommand();
@@ -3624,7 +3624,7 @@ public partial class ReportService
         await conn.OpenAsync();
 
         var candado = porFecha
-            ? $"v.f_grupo_fi BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'"
+            ? $"v.f_grupo_fi BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'"
             : "v.f_grupo_fi < CAST(GETDATE() AS date)";
         var cli = idCliente.Replace("'", "''");
         // El nodo "SIN GRUPO" del árbol = viajes con grupo vacío.
@@ -3754,7 +3754,7 @@ public partial class ReportService
         await conn.OpenAsync();
 
         var candado = porFecha
-            ? $"v.f_grupo_fi BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'"
+            ? $"v.f_grupo_fi BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'"
             : "v.f_grupo_fi < CAST(GETDATE() AS date)";
         var cli = idCliente.Replace("'", "''");
         var grpFiltro = grupo == "SIN GRUPO"
@@ -4009,7 +4009,7 @@ public partial class ReportService
             FROM liquidacion l
                 INNER JOIN liquidacion_detalle d ON d.idliquidac = l.idliquidac AND d._deleted = 0
             WHERE l._deleted = 0 AND l.tipo = 'CLIENTE'
-                  AND l.fecha BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'
+                  AND l.fecha BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'
             GROUP BY CONVERT(char(7), l.fecha, 120)
             ORDER BY Mes
             """;
@@ -4040,7 +4040,7 @@ public partial class ReportService
                 INNER JOIN liquidacion_detalle d ON d.idliquidac = l.idliquidac AND d._deleted = 0
                 LEFT JOIN cliente c ON l.id_cliente = c.id_cliente AND c._deleted = 0
             WHERE l._deleted = 0 AND l.tipo = 'CLIENTE'
-                  AND l.fecha BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'
+                  AND l.fecha BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'
             GROUP BY l.id_cliente
             ORDER BY TotalEstimado DESC
             """;
@@ -4081,7 +4081,7 @@ public partial class ReportService
         // ── 1) Cabecera de auditoría (tabla viaje) ──
         var fResFiltro = fReserva is null
             ? ""
-            : $"AND f_reserva = '{fReserva.Value:yyyy-MM-dd}'";
+            : $"AND f_reserva = '{fReserva.Value:yyyyMMdd}'";
         using (var cmdCab = conn.CreateCommand())
         {
             cmdCab.CommandText = $"""
@@ -5686,7 +5686,7 @@ public partial class ReportService
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
 
-            var where = $"a._deleted = 0 AND a.fecha BETWEEN '{d:yyyy-MM-dd}' AND '{h:yyyy-MM-dd}'";
+            var where = $"a._deleted = 0 AND a.fecha BETWEEN '{d:yyyyMMdd}' AND '{h:yyyyMMdd}'";
             if (!string.IsNullOrWhiteSpace(cod))
                 where += $" AND a.codigo = '{cod.Replace("'", "''")}'";
 
@@ -5885,7 +5885,7 @@ public partial class ReportService
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
 
-            var where = $"v._deleted = 0 AND v.fecha BETWEEN '{d:yyyy-MM-dd}' AND '{h:yyyy-MM-dd}'";
+            var where = $"v._deleted = 0 AND v.fecha BETWEEN '{d:yyyyMMdd}' AND '{h:yyyyMMdd}'";
             if (!string.IsNullOrWhiteSpace(cho))
                 where += $" AND v.id_chofer = '{cho.Replace("'", "''")}'";
 
@@ -6021,7 +6021,7 @@ public partial class ReportService
                 RTRIM(ISNULL(v.comentario, ''))                AS Comentario
             FROM viaje v
             WHERE v._deleted = 0
-              AND v.f_reserva BETWEEN '{FechaMinValida:yyyy-MM-dd}' AND '{FechaMaxValida:yyyy-MM-dd}'
+              AND v.f_reserva BETWEEN '{FechaMinValida:yyyyMMdd}' AND '{FechaMaxValida:yyyyMMdd}'
               AND ({filtro})
             ORDER BY v.id_viaje
             """;
@@ -6881,7 +6881,7 @@ public partial class ReportService
                 LEFT JOIN servicio s ON v.id_servici = s.id_servici
                 WHERE v._deleted = 0
                   AND v.origen = 'T'
-                  AND v.f_reserva BETWEEN '{desde:yyyy-MM-dd}' AND '{hasta:yyyy-MM-dd}'
+                  AND v.f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'
                   {estWhere}
                   {busWhere}
                 ORDER BY v.f_reserva DESC, v.hs_inicio, v.id_viaje

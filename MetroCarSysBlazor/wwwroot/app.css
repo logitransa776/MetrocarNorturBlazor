@@ -606,6 +606,9 @@ html, body {
     --nt-grid-header-border: #0C2347;
     --nt-grid-header-hover: #1A4178;
     --nt-grid-row-border: #E5EAF1;
+    /* Línea horizontal entre filas (variante C): un punto más definida que el borde
+       tenue de la grilla, para separar renglón de renglón sin líneas verticales. */
+    --nt-grid-row-line: #CBD5E6;
     --nt-grid-fg: #1A2433;
     --nt-grid-zebra: #F8FAFC;
     --nt-grid-sel: #003AA0;
@@ -619,6 +622,7 @@ body.theme-gris {
     --nt-grid-header-border: #1F2937;
     --nt-grid-header-hover: #4B5563;
     --nt-grid-row-border: #E5E7EB;
+    --nt-grid-row-line: #CBD2DB;
     --nt-grid-fg: #111827;
     --nt-grid-zebra: #F9FAFB;
     --nt-grid-sel: #374151;
@@ -873,7 +877,13 @@ body.planilla-fixed .trafico-panel {
 
 .trafico-grid tbody td {
     padding: 1px 6px;
-    border: 1px solid var(--nt-grid-row-border);
+    /* Solo línea horizontal entre filas (13/07/2026): sin verticales, la grilla densa
+       se despeja y el ojo recorre el renglón (= un servicio) de un tirón. El borde
+       inferior un punto más definido (--nt-grid-row-line) separa fila de fila con
+       claridad. El alto de fila fijo (22px, atado al ItemSize del <Virtualize>) no
+       cambia: con border-collapse la dirección vertical sigue aportando 1px. */
+    border: none;
+    border-bottom: 1px solid var(--nt-grid-row-line);
     color: var(--nt-grid-fg);
     /* ancho fijo: lo que no entra se corta con … (table-layout:fixed lo exige).
        Las columnas largas (Recorrido/Chofer/Comentario) muestran el texto completo
@@ -973,14 +983,19 @@ body.planilla-fixed .trafico-panel {
 }
 
 /* ═══════════════════════════════════════════
-   FILAS POR ESTADO — paleta original del FoxPro
+   FILAS POR ESTADO — paleta pastel suave (13/07/2026)
+   Mismo matiz por estado que el FoxPro original (amarillo/rosa/gris/
+   verde-agua/celeste), con saturación baja para que la letra negra
+   se lea sin esfuerzo. Original FoxPro (por referencia): asignado
+   #FFFF80, curso #FF80FF, finalizado #C0C0C0, facturado #98C5BF,
+   chequeo #52CEFE.
    ═══════════════════════════════════════════ */
 
-.trafico-grid tbody tr.fila-estado--asignado   { background: #FFFF80; }
-.trafico-grid tbody tr.fila-estado--curso       { background: #FF80FF; }
-.trafico-grid tbody tr.fila-estado--finalizado  { background: #C0C0C0; }
-.trafico-grid tbody tr.fila-estado--facturado   { background: #98C5BF; }
-.trafico-grid tbody tr.fila-estado--chequeo     { background: #52CEFE; }
+.trafico-grid tbody tr.fila-estado--asignado   { background: #FBF3C7; }
+.trafico-grid tbody tr.fila-estado--curso       { background: #F3D9F0; }
+.trafico-grid tbody tr.fila-estado--finalizado  { background: #E4E6EA; }
+.trafico-grid tbody tr.fila-estado--facturado   { background: #D4E8E3; }
+.trafico-grid tbody tr.fila-estado--chequeo     { background: #CFE9F7; }
 
 /* ═══════════════════════════════════════════
    FLASH DE CAMBIOS — auto-refresh (filas nuevas o modificadas)
@@ -1238,19 +1253,19 @@ body.planilla-fixed .buses-panel__wrap {
     border-color: #F0D070;
 }
 .estado-chip--asignado {
-    background: #FFFF80;
+    background: #FFF7B0;
     color: #5C5000;
-    border-color: #C8C800;
+    border-color: #D8D000;
 }
 .estado-chip--curso {
-    background: #FF80FF;
+    background: #F6CEF3;
     color: #5C005C;
-    border-color: #C800C8;
+    border-color: #D67ED0;
 }
 .estado-chip--chequeo {
-    background: #52CEFE;
-    color: #003D5C;
-    border-color: #009ED4;
+    background: #BFE6F8;
+    color: #00445C;
+    border-color: #6FC0E4;
 }
 .estado-chip--finalizado {
     background: #C0C0C0;

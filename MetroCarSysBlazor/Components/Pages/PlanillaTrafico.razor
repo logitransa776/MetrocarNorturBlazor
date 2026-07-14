@@ -500,11 +500,11 @@ else
            barra queda fija al pie del panel, siempre visible. *@
         <div class="trafico-pie d-flex align-center flex-wrap" style="gap:14px; font-size:0.78rem; color:#5B6B82;">
             <span style="font-weight:600;">Estados:</span>
-            <span class="leyenda" style="background:#FFFF80;">ASIGNADO</span>
-            <span class="leyenda" style="background:#FF80FF;">CURSO</span>
-            <span class="leyenda" style="background:#C0C0C0;">FINALIZADO</span>
-            <span class="leyenda" style="background:#98C5BF;">FACTURADO</span>
-            <span class="leyenda" style="background:#52CEFE;">CHEQUEO</span>
+            <span class="leyenda" style="background:#FBF3C7;">ASIGNADO</span>
+            <span class="leyenda" style="background:#F3D9F0;">CURSO</span>
+            <span class="leyenda" style="background:#E4E6EA;">FINALIZADO</span>
+            <span class="leyenda" style="background:#D4E8E3;">FACTURADO</span>
+            <span class="leyenda" style="background:#CFE9F7;">CHEQUEO</span>
             <span style="margin-left:auto;">
                 @visibles.Count de @_filas.Count servicios
                 @if (_filtroActivo is null && _fecha is not null && EsFechaViva(DateOnly.FromDateTime(_fecha.Value)))
@@ -618,8 +618,10 @@ else
            metrocar.nortur.ar) en una pestaña nueva, igual que el Shell.Open del método
            ubicar_gps. "Recorrido en Grilla" se eliminó (el endpoint Inf_Hist.aspx del sitio
            nuevo da 404). Se deshabilitan si la fila no tiene una unidad válida para ubicar. *@
+        @* Ambos ítems GPS se habilitan SOLO para unidades de la flota propia NORTUR
+           (código NT####): son las únicas con GPS propio. *@
         <MudMenuItem Icon="@Icons.Material.Filled.MyLocation"
-                     Disabled="@(_filaCtx is null || UnidadGps(_filaCtx) is null)"
+                     Disabled="@(_filaCtx is null || !EsUnidadNortur(_filaCtx))"
                      OnClick="UbicarUnidadGps">Ubicar unidad</MudMenuItem>
         @* "Recorrido en WEB" — solo habilitado para viajes de los últimos 45 días Y con unidad
            de la flota NORTUR (código NT####), que son las que tienen GPS propio con histórico
@@ -1453,6 +1455,7 @@ else
     private async Task UbicarUnidadGps()
     {
         if (_filaCtx is null) return;
+        if (!EsUnidadNortur(_filaCtx)) return;   // guarda: el menú ya lo deshabilita
         var unidad = UnidadGps(_filaCtx);
         if (unidad is null) { await AvisarSinGps(); return; }
         var url = $"{GpsBaseUrl}/movil.aspx?cod={GpsCod}&int={Uri.EscapeDataString(unidad)}";
@@ -1462,14 +1465,20 @@ else
     // Ventana de días hacia atrás en que el GPS conserva el histórico de recorrido de la unidad.
     private const int RecorridoWebDiasAtras = 45;
 
-    // "Recorrido en WEB" se habilita solo si la fila cumple las dos condiciones:
-    //   1) la fecha del viaje está dentro de los últimos 45 días (el GPS no guarda más histórico);
-    //   2) la unidad es de la flota NORTUR (código NT####) — las únicas con GPS propio.
-    private static bool RecorridoWebHabilitado(PlanillaTraficoRow f)
+    // La fila tiene una unidad de la flota NORTUR (código NT####) — las únicas con GPS propio.
+    // Es la condición para habilitar los dos ítems de GPS del menú contextual.
+    private static bool EsUnidadNortur(PlanillaTraficoRow f)
     {
         var unidad = UnidadGps(f);
-        if (unidad is null) return false;
-        if (!unidad.StartsWith("NT", StringComparison.OrdinalIgnoreCase)) return false;
+        return unidad is not null && unidad.StartsWith("NT", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // "Recorrido en WEB" se habilita solo si la fila cumple las dos condiciones:
+    //   1) la unidad es de la flota NORTUR (código NT####) — las únicas con GPS propio;
+    //   2) la fecha del viaje está dentro de los últimos 45 días (el GPS no guarda más histórico).
+    private static bool RecorridoWebHabilitado(PlanillaTraficoRow f)
+    {
+        if (!EsUnidadNortur(f)) return false;
         var hoy = DateOnly.FromDateTime(DateTime.Today);
         return f.Fecha >= hoy.AddDays(-RecorridoWebDiasAtras) && f.Fecha <= hoy;
     }

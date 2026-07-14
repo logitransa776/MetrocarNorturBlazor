@@ -18,6 +18,7 @@
     ".claude/skills/modulo-combustible",
     ".claude/skills/modulo-vehiculos-choferes",
     ".claude/skills/blazor-performance",
-    ".claude/skills/testing-nortur"
+    ".claude/skills/testing-nortur",
+    ".claude/skills/fable-mode"
   ]
 }

@@ -533,6 +533,98 @@ private async Task DescargarExcel()
 }
 ```
 
+### Datalabels en gráficos de barras — número + % afuera (13/07/2026)
+
+Patrón validado en `ReservasFechaServicio.razor` para mostrar sobre cada barra el valor y su
+% del total (formato **"171 (19%)"**), afuera al final, sin que se corte. **Patrón disponible**
+(no obligatorio) — usarlo cuando un informe quiera datalabels legibles en barras/donut.
+
+**1. Los datalabels NO se activan con `DataLabels.Enabled=true` global.** Con `<ApexPointSeries>`,
+el `Enabled` global se pierde en la serialización → hay que poner **`ShowDataLabels="true"` en la
+serie**. Vale para barras Y donut.
+
+**2. Número AFUERA al final de la barra horizontal** (no centrado adentro, que es el default):
+- `PlotOptions.Bar.DataLabels.Position = BarDataLabelPosition.Top` (en horizontal, Top = extremo).
+- En el `DataLabels` global: `TextAnchor.Start`, color oscuro `#334155`, y un `OffsetX`:
+  - **Datos parejos** (ranking gradual, ej. Reservas por servicio): `OffsetX = 8` alcanza.
+  - **Datos MUY dispares** (una barra domina, otra ~0 — ej. tipo de vehículo BUS 74% vs HIACE 3%):
+    las barras cortas se renderizan de pocos px y ApexCharts descoloca el label hacia el eje
+    (queda ANTES del fin de barra, pisándolo). Hay un **umbral interno**: con `OffsetX ≤ 20` el
+    label de la barra más corta queda pegado/adentro; con **`≥ 21` salta afuera**. Usar
+    **`OffsetX = 22`** (mínimo con aire) → todos afuera, lo más cerca posible. Verificado midiendo
+    `label.x − barra.right` (gap) por barra: con 8 daba gap −32/−12/−1 en las cortas; con 22, +22 parejo.
+
+**3. Que el label NO se corte contra el borde derecho.** Sin `Max` de eje, ApexCharts pega la
+barra más larga al ~100% del ancho → el label no entra. Fijar el eje X en `Recalcular` (cambia
+con métrica/filtro/topN):
+- `Xaxis.Min = 0` (sin esto, al fijar solo Max el eje muestra ticks negativos feos).
+- `Xaxis.Max = maxValor × factor`: **+25% panel ancho (7/12)**, **+40% panel angosto (5/12)** — el
+  panel angosto necesita más margen porque el label ocupa proporcionalmente más ancho.
+
+**4. El "(%)" en barras se inyecta con el total** (el datalabel de barra recibe solo el valor, no
+el total): `Formatter` con placeholder `__TOTAL__` reemplazado en cada `Recalcular` (método
+`AplicarTotalEnDataLabels`). Formato acordado **"cantidad (%)"** (ej: `171 (19%)`). En **donut** el
+% sí viene solo: `Formatter = "function(val,opts){ var v = opts.w.config.series[opts.seriesIndex];
+return v + ' (' + Math.round(val) + '%)'; }"`.
+
+**5. NO se puede colorear solo el % dentro del label** (verificado con POC, 13/07/2026): ApexCharts
+**escapa el HTML del formatter** → devolver `171 <tspan style="fill:#F99410">…</tspan>` sale como
+texto literal `171 &lt;tspan…&gt;`, no como markup. `Style.Colors` pinta el label COMPLETO, no una
+parte. Post-procesar el SVG por DOM es frágil (se rompe en cada re-render/foco). Por eso la
+jerarquía cantidad↔% se logra con el **paréntesis** (`171 (19%)`), no con color parcial.
+
+**6. El donut/pie NO puede poner labels afuera del anillo** (ApexCharts no tiene leader lines
+estilo Power BI — verificado con POC 13/07/2026, `offset` alto no las genera). Dos salidas:
+- **Barras horizontales** con "cantidad (%)" afuera (como "Distribución por banda horaria").
+- **Torta llena + números en la LEYENDA** (ver punto 8) — mejor cuando el usuario quiere la torta.
+
+**7. 🔴 CROSS-FILTER + datalabels = remontar con `@key`, NO update en el lugar** (bug real,
+13/07/2026). Si un gráfico con datalabels tiene cross-filter (clic para enfocar), el
+`UpdateOptionsAsync`+`UpdateSeriesAsync` (update en el lugar) **reposiciona MAL los datalabels**:
+quedan con la `y` del render anterior, **fuera de la caja del gráfico** (medí y≈160, arriba de la
+página) → los números "desaparecen" tras el primer clic. Fix: darle a ESE chart un `@key` propio
+(un `Guid` que se regenera en cada toggle de foco) para **remontarlo** en vez de actualizarlo en el
+lugar; sacarlo de `ActualizarGraficos`. El remonte redibuja los datalabels en su posición correcta.
+Verificado con secuencia foco A→B→quitar: sin `@key` los labels se despositionan; con `@key` aguantan.
+
+**8. Torta ("distribución") con números en la LEYENDA — patrón ganador para pie/donut** (13/07/2026,
+validado por el usuario en "Distribución por tipo de vehículo"). En vez de pelear con etiquetas sobre
+las porciones, dejar la torta LIMPIA (`DataLabels.Enabled=false`) y poner cantidad + % al lado de
+cada ícono con `Legend.Formatter` (ej: "BUS: 162 (74%)"). El formatter recibe `(name, opts)`:
+`opts.w.globals.series[opts.seriesIndex]` = valor; el total se inyecta en `Recalcular` (placeholder
+`__TOTALVEH__`). Es nativo, robusto, sin leader lines ni labels encimados. Igual que las barras,
+si tiene cross-filter necesita `@key` (punto 7) para que la leyenda recalcule bien al enfocar.
+
+```csharp
+// Torta con números en la leyenda (patrón 8):
+Legend = new() { Show = true, Position = LegendPosition.Bottom,
+    Formatter = "function(name, opts){ var v = opts.w.globals.series[opts.seriesIndex]; var p = __TOTAL__>0?Math.round(v*100/__TOTAL__):0; return name+': '+v.toLocaleString('es-AR')+' ('+p+'%)'; }" },
+DataLabels = new() { Enabled = false },   // torta limpia; los números van en la leyenda
+// SeriesType.Pie (o Donut) en el markup, con @key propio si hay cross-filter.
+```
+
+```razor
+<ApexPointSeries TItem="BarItem" Items="_barItems" Name="@_metrica"
+                 SeriesType="SeriesType.Bar" XValue="@(x=>x.Servicio)" YValue="@(x=>x.Valor)"
+                 ShowDataLabels="true" />   @* ← activa datalabels; el global NO alcanza *@
+```
+```csharp
+PlotOptions = new() { Bar = new() {
+    Horizontal = true, Distributed = true,
+    DataLabels = new() { Position = BarDataLabelPosition.Top } } },
+DataLabels = new() {
+    Enabled = true, TextAnchor = TextAnchor.Start, OffsetX = 8,  // 22 si los datos son muy dispares (punto 2)
+    Style = new() { Colors = new List<string> { "#334155" } },
+    Formatter = "function(val){ var p = __TOTAL__>0?Math.round(val*100/__TOTAL__):0; return val.toLocaleString('es-AR')+' ('+p+'%)'; }" },
+// en Recalcular: reemplazar __TOTAL__ por el total y fijar Xaxis.Min=0 / Xaxis.Max=max×factor.
+// Si el gráfico tiene cross-filter (clic para enfocar), remontarlo con @key propio (punto 7),
+// NO actualizarlo con UpdateOptions/UpdateSeries (despositiona los datalabels).
+```
+
+**Verificación (Playwright):** medir `label.right ≤ grid.right` para confirmar que no se corta
+(probar en la métrica de números más largos, ej. Pax); leer `.apexcharts-datalabels text` para
+confirmar el contenido. Diagnóstico en runtime: `window.Apex._chartInstances[i].chart.w.config`.
+
 ---
 
 ## Patrones MudBlazor 9.5 — notas importantes
