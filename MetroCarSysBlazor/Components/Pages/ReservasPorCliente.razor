@@ -11,7 +11,7 @@
 @inject IDialogService DialogService
 @rendermode InteractiveServer
 
-<PageTitle>Reservas por cliente</PageTitle>
+<PageTitle>BusLink</PageTitle>
 
 @* ── Encabezado de página ── *@
 <div class="page-header mb-3">
@@ -70,6 +70,30 @@
             <MudRadio T="string" Value="@("Pax")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Pax</MudRadio>
         </MudRadioGroup>
     </div>
+
+    @* Comparación mes contra mes: contra qué mes comparar cada mes (recálculo en memoria).
+       "Interanual" solo tiene números si el período abarca también el año anterior. *@
+    <MudSelect T="string" Label="Comparar" @bind-Value="_comparar" Dense="true"
+               Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:170px;">
+        <MudSelectItem T="string" Value="@("M1")">vs mes anterior</MudSelectItem>
+        <MudSelectItem T="string" Value="@("N")">vs N meses atrás</MudSelectItem>
+        <MudSelectItem T="string" Value="@("YoY")">vs año pasado</MudSelectItem>
+    </MudSelect>
+
+    @if (_comparar == "N")
+    {
+        <MudSelect T="int" Label="Salto" @bind-Value="_saltoN" Dense="true"
+                   Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:120px;">
+            <MudSelectItem T="int" Value="2">2 meses</MudSelectItem>
+            <MudSelectItem T="int" Value="3">3 meses</MudSelectItem>
+            <MudSelectItem T="int" Value="4">4 meses</MudSelectItem>
+            <MudSelectItem T="int" Value="6">6 meses</MudSelectItem>
+        </MudSelect>
+    }
+
+    @* Variación: cambia toda la grilla a modo Δ (cada celda vs su mes base). En memoria. *@
+    <MudSwitch T="bool" @bind-Value="_verVariacion" Color="MudColor.Primary" Size="MudSize.Small"
+               Label="Variación" LabelPlacement="Placement.End" Style="flex-shrink:0;" />
 
     <span style="flex:1 1 auto;"></span>
 
@@ -172,9 +196,20 @@ else
             <div>
                 <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
                     Detalle: @(_metrica == "Pax" ? "pax" : "viajes") por cliente y mes
+                    @if (_verVariacion)
+                    {
+                        <span style="color:#8FA3BC; font-weight:600;">· variación vs @BaseLbl</span>
+                    }
                 </MudText>
                 <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
-                    Click en una celda para ver los viajes uno por uno · click en el nombre de un cliente para enfocar el tablero
+                    @if (_verVariacion)
+                    {
+                        @:Cada celda muestra el Δ vs @BaseLbl (verde sube · rojo baja) · la columna Tendencia resume el último mes
+                    }
+                    else
+                    {
+                        @:Click en una celda para ver los viajes uno por uno · click en el nombre de un cliente para enfocar el tablero
+                    }
                 </MudText>
             </div>
             <MudButton Variant="Variant.Filled" Color="MudColor.Success"
@@ -198,6 +233,7 @@ else
                             <th class="rfs-th-serv">@FmtMes(m)</th>
                         }
                         <th class="rfs-th-total">TOTAL</th>
+                        <th class="rfs-th-tend" title="@($"Δ del último mes ({FmtMes(UltimoMes)}) vs {BaseLbl} + evolución")">TENDENCIA</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -213,18 +249,58 @@ else
                             {
                                 var mes = m;
                                 var v = PivVal(cli, mes);
-                                if (v > 0)
+                                if (!_verVariacion)
                                 {
-                                    <td class="rfs-num rfs-click @atenua" title="Ver viajes de @NombreDe(cli) en @FmtMes(mes)"
-                                        @onclick="() => AbrirDetalleCelda(cli, mes)">@Fmt(v)</td>
+                                    @* Modo cantidad (default) *@
+                                    if (v > 0)
+                                    {
+                                        <td class="rfs-num rfs-click @atenua" title="Ver viajes de @NombreDe(cli) en @FmtMes(mes)"
+                                            @onclick="() => AbrirDetalleCelda(cli, mes)">@Fmt(v)</td>
+                                    }
+                                    else
+                                    {
+                                        <td class="rfs-num rfs-cero @atenua">·</td>
+                                    }
                                 }
                                 else
                                 {
-                                    <td class="rfs-num rfs-cero @atenua">·</td>
+                                    @* Modo variación: Δ vs mes base, con color. Sin base → "·" *@
+                                    var d = PivVar(cli, mes);
+                                    if (d is null)
+                                    {
+                                        <td class="rfs-num rfs-cero @atenua">·</td>
+                                    }
+                                    else if (v > 0 || d.Value != 0)
+                                    {
+                                        <td class="rfs-num rfs-var rfs-click @ClaseVar(d) @atenua"
+                                            title="@($"{NombreDe(cli)} · {FmtMes(mes)}: {Fmt(v)} (vs {BaseLbl})")"
+                                            @onclick="() => AbrirDetalleCelda(cli, mes)">@FmtVar(d)</td>
+                                    }
+                                    else
+                                    {
+                                        <td class="rfs-num rfs-cero @atenua">·</td>
+                                    }
                                 }
                             }
                             <td class="rfs-num rfs-tot rfs-click @atenua" title="Ver todos los viajes de @NombreDe(cli)"
                                 @onclick="() => AbrirDetalleCliente(cli)">@Fmt(PivTotFila(cli))</td>
+                            @{ var (td, tp) = TendenciaCliente(cli); }
+                            <td class="rfs-tend @atenua">
+                                <div class="rfs-tend-wrap">
+                                    <span class="rfs-tend-delta @ClaseVar(td)" title="@($"{FmtMes(UltimoMes)} vs {BaseLbl}")">
+                                        @if (td is not null && td.Value != 0)
+                                        {
+                                            <span class="rfs-tend-arrow">@(td.Value > 0 ? "▲" : "▼")</span>
+                                        }
+                                        <span>@FmtVar(td)</span>
+                                        @if (tp is not null)
+                                        {
+                                            <span class="rfs-tend-pct">@FmtPct(tp)</span>
+                                        }
+                                    </span>
+                                    @Sparkline(mes => PivVal(cli, mes))
+                                </div>
+                            </td>
                         </tr>
                     </Virtualize>
                 </tbody>
@@ -234,10 +310,33 @@ else
                         @foreach (var m in _pivMeses)
                         {
                             var mes = m;
-                            <td class="rfs-num rfs-tot rfs-click" title="Ver todos los viajes de @FmtMes(mes)"
-                                @onclick="() => AbrirDetalleMes(mes)">@Fmt(PivTotCol(mes))</td>
+                            if (!_verVariacion)
+                            {
+                                <td class="rfs-num rfs-tot rfs-click" title="Ver todos los viajes de @FmtMes(mes)"
+                                    @onclick="() => AbrirDetalleMes(mes)">@Fmt(PivTotCol(mes))</td>
+                            }
+                            else
+                            {
+                                var d = PivVarTotCol(mes);
+                                <td class="rfs-num rfs-tot rfs-var rfs-click @ClaseVar(d)"
+                                    title="@($"Total {FmtMes(mes)}: {Fmt(PivTotCol(mes))} (vs {BaseLbl})")"
+                                    @onclick="() => AbrirDetalleMes(mes)">@FmtVar(d)</td>
+                            }
                         }
                         <td class="rfs-num rfs-tot rfs-grantot">@Fmt(_granTotal)</td>
+                        @{ var dTot = PivVarTotCol(UltimoMes); }
+                        <td class="rfs-tend rfs-tot">
+                            <div class="rfs-tend-wrap">
+                                <span class="rfs-tend-delta @ClaseVar(dTot)" title="@($"Total {FmtMes(UltimoMes)} vs {BaseLbl}")">
+                                    @if (dTot is not null && dTot.Value != 0)
+                                    {
+                                        <span class="rfs-tend-arrow">@(dTot.Value > 0 ? "▲" : "▼")</span>
+                                    }
+                                    <span>@FmtVar(dTot)</span>
+                                </span>
+                                @Sparkline(mes => PivTotCol(mes))
+                            </div>
+                        </td>
                     </tr>
                 </tfoot>
             </table>
@@ -258,6 +357,14 @@ else
     private IReadOnlyCollection<int> _motivosSel = new HashSet<int>();
     private bool _internos;                             // default: cliente interno NORTUR excluido
     private string _metrica = "Reservas";               // "Reservas" (viajes) | "Pax"
+
+    // ── Comparación mes contra mes (en memoria, sin re-query) ──
+    // El usuario elige contra qué mes comparar cada mes: el anterior, N meses atrás, o el
+    // mismo mes del año pasado. Con "Variación" tildado la tabla muestra el Δ en cada celda
+    // en vez de la cantidad; la columna "Tendencia" (siempre visible) resume el último mes.
+    private string _comparar = "M1";     // "M1" (mes anterior) | "N" (N meses atrás) | "YoY" (interanual)
+    private int _saltoN = 2;             // salto en meses cuando _comparar == "N"
+    private bool _verVariacion;          // false = cantidades (default), true = Δ en cada celda
 
     // ── Foco / cross-filter (estilo Power BI) — DOS dimensiones combinables ──
     // Cliente AND tipo de unidad, como banda × vehículo en el informe de banda horaria.
@@ -620,6 +727,111 @@ else
     private int PivVal(string cli, string mes) => _pivMap.TryGetValue((cli, mes), out var v) ? v : 0;
     private int PivTotFila(string cli) => _pivTotFila.TryGetValue(cli, out var v) ? v : 0;
     private int PivTotCol(string mes) => _pivTotCol.TryGetValue(mes, out var v) ? v : 0;
+
+    // ── Comparación mes contra mes ──────────────────────────────────────────────────────
+    // El "mes base" de un mes dado es contra quién se compara, según el modo elegido:
+    //  · M1  → el mes inmediatamente anterior en la grilla (M-1)
+    //  · N   → N meses calendario atrás (busca ese mes en la grilla)
+    //  · YoY → el mismo mes del año anterior
+    // Devuelve null si no hay mes base (primer mes / fuera del rango cargado).
+
+    private string? MesBaseDe(string mes)
+    {
+        if (_comparar == "M1")
+        {
+            var i = _pivMeses.IndexOf(mes);
+            return i > 0 ? _pivMeses[i - 1] : null;
+        }
+        if (_comparar == "N")
+        {
+            var objetivo = SumarMeses(mes, -_saltoN);
+            return _pivMeses.Contains(objetivo) ? objetivo : null;
+        }
+        // YoY: mismo mes del año anterior — solo si ese mes está en el rango cargado.
+        var yoy = SumarMeses(mes, -12);
+        return _pivMeses.Contains(yoy) ? yoy : null;
+    }
+
+    // "2026-03" + (-2) → "2026-01"; "2026-01" + (-2) → "2025-11"
+    private static string SumarMeses(string mes, int delta)
+    {
+        var y = int.Parse(mes[..4]);
+        var m = int.Parse(mes[5..7]);
+        var idx = y * 12 + (m - 1) + delta;
+        return $"{idx / 12:0000}-{idx % 12 + 1:00}";
+    }
+
+    // Δ de una celda (valor del mes menos valor del mes base). null si no hay base.
+    private int? PivVar(string cli, string mes)
+    {
+        var baseMes = MesBaseDe(mes);
+        return baseMes is null ? null : PivVal(cli, mes) - PivVal(cli, baseMes);
+    }
+
+    // Δ del total de columna (todos los clientes) del mes vs su base. null si no hay base.
+    private int? PivVarTotCol(string mes)
+    {
+        var baseMes = MesBaseDe(mes);
+        return baseMes is null ? null : PivTotCol(mes) - PivTotCol(baseMes);
+    }
+
+    // ── Columna "Tendencia": Δ del ÚLTIMO mes de la grilla vs su base, por cliente ──
+    private string UltimoMes => _pivMeses.Count > 0 ? _pivMeses[^1] : "";
+
+    // (delta, porcentaje o null si la base es 0/no existe) del último mes para un cliente.
+    private (int? Delta, double? Pct) TendenciaCliente(string cli)
+    {
+        var baseMes = MesBaseDe(UltimoMes);
+        if (baseMes is null) return (null, null);
+        var actual = PivVal(cli, UltimoMes);
+        var previo = PivVal(cli, baseMes);
+        var delta = actual - previo;
+        double? pct = previo > 0 ? 100.0 * delta / previo : null;
+        return (delta, pct);
+    }
+
+    // Etiqueta legible de la base ("mes anterior", "2 meses atrás", "año pasado") para tooltips/subtítulos.
+    private string BaseLbl => _comparar switch
+    {
+        "M1" => "mes anterior",
+        "N" => $"{_saltoN} meses atrás",
+        _ => "año pasado",
+    };
+
+    // Clase CSS del signo de una variación (verde sube / rojo baja / neutro cero).
+    private static string ClaseVar(int? d) =>
+        d is null ? "rfs-var-na" : d.Value > 0 ? "rfs-var-up" : d.Value < 0 ? "rfs-var-down" : "rfs-var-flat";
+
+    // "+19" / "−53" / "0" / "—" (base inexistente). Usa el guión largo real para negativos.
+    private static string FmtVar(int? d) =>
+        d is null ? "—" : d.Value > 0 ? $"+{Fmt(d.Value)}" : d.Value < 0 ? $"−{Fmt(-d.Value)}" : "0";
+
+    // "+18%" / "−35%" (o "" si no hay base con volumen).
+    private static string FmtPct(double? p) =>
+        p is null ? "" : (p.Value >= 0 ? "+" : "−") + $"{Math.Abs(p.Value):0}%";
+
+    // ── Sparkline SVG inline de la serie mensual de un cliente (o del total) ──
+    // 5-6 puntos, ancho fijo; sin librerías. Color según la tendencia del último tramo.
+    private MarkupString Sparkline(Func<string, int> serie)
+    {
+        var vals = _pivMeses.Select(serie).ToList();
+        if (vals.Count < 2) return (MarkupString)"";
+        const int w = 64, h = 20, pad = 2;
+        int max = vals.Max(), min = vals.Min();
+        double span = max - min;
+        double dx = (w - 2.0 * pad) / (vals.Count - 1);
+        double Y(int v) => span <= 0 ? h / 2.0 : h - pad - (v - min) / span * (h - 2.0 * pad);
+        var pts = string.Join(" ", vals.Select((v, i) => $"{pad + i * dx:0.#},{Y(v):0.#}"));
+        var (delta, _) = (vals[^1] - vals[^2], 0);
+        var color = delta > 0 ? "#16A34A" : delta < 0 ? "#DC2626" : "#94A3B8";
+        var cx = pad + (vals.Count - 1) * dx;
+        var cy = Y(vals[^1]);
+        return (MarkupString)(
+            $"<svg class=\"rfs-spark\" viewBox=\"0 0 {w} {h}\" width=\"{w}\" height=\"{h}\" preserveAspectRatio=\"none\">" +
+            $"<polyline points=\"{pts}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"1.5\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>" +
+            $"<circle cx=\"{cx:0.#}\" cy=\"{cy:0.#}\" r=\"2\" fill=\"{color}\"/>" +
+            "</svg>");
+    }
 
     // ── Cross-filter: toggles y actualización de los charts ──
 

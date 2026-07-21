@@ -1,3 +1,44 @@
+/* IBM Plex Sans, auto-hospedada (18/07/2026) — solo la grilla de Tráfico la usa.
+   Se auto-hospeda a propósito: la fuente NO viene instalada en Windows (ni en esta PC ni,
+   con altísima probabilidad, en las de los operadores de tráfico). Si se declarara solo por
+   nombre en font-family, el navegador caería en silencio al fallback (Segoe UI) sin avisar —
+   se vería "como si nada hubiera cambiado" aunque el CSS diga otra cosa. Con @font-face y el
+   .woff2 servido desde wwwroot/fonts/, se ve igual en CUALQUIER máquina.
+   Subset "latin" (U+0000-00FF) nada más: cubre Ñ/Á/É/Í/Ó/Ú y cubre todo el español de la
+   grilla — no hace falta bajar cyrillic/greek/vietnamese. Bajado de Google Fonts (licencia
+   SIL Open Font, libre para redistribuir). Tres pesos: 400 (texto normal), 600 (celdas
+   destacadas .td-bold — ver nota del 20/07/2026 más abajo) y 700 (headers de columna). */
+@font-face {
+    font-family: 'IBM Plex Sans';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/IBMPlexSans-Regular.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+2000-206F, U+20AC, U+2122;
+}
+/* Peso 600 (SemiBold), agregado el 20/07/2026 para .td-bold — ver ese selector más abajo:
+   con IBM Plex Sans auto-hospedada de verdad (antes caía en silencio a Segoe UI), el 700
+   se sentía más pesado de lo esperado para resaltar celdas. 600 da la misma jerarquía con
+   menos densidad de tinta; el 700 se dejó solo para los headers de columna, que sí necesitan
+   el contraste más fuerte contra el azul de fondo. Elegido por el usuario comparando las 4
+   intensidades reales en un artefacto. */
+@font-face {
+    font-family: 'IBM Plex Sans';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('fonts/IBMPlexSans-600.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+2000-206F, U+20AC, U+2122;
+}
+@font-face {
+    font-family: 'IBM Plex Sans';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('fonts/IBMPlexSans-Bold.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+2000-206F, U+20AC, U+2122;
+}
+
 html, body {
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     background: #F2F5F9;
@@ -347,10 +388,46 @@ html, body {
     line-height: 1.2;
 }
 
+/* Badge "Buslink" en el AppBar — marca del software junto al subtítulo,
+   mismo truco visual que el footer del drawer y el logo del Login. */
+.appbar-buslink-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 14px;
+    padding-left: 14px;
+    border-left: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.appbar-buslink-badge img {
+    height: 21px;
+    width: auto;
+    opacity: 1;
+    mix-blend-mode: screen;
+    /* mismo punch que el footer del drawer: brillo/saturación + doble glow */
+    filter: brightness(1.25) saturate(1.35)
+            drop-shadow(0 0 4px rgba(0, 204, 255, 0.6))
+            drop-shadow(0 0 9px rgba(0, 204, 255, 0.35));
+}
+
+.appbar-buslink-badge span {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    /* Opción D (16/07/2026): BUS LINK al nivel del logotipo NORTUR */
+    font-size: 1.05rem;
+    letter-spacing: 2px;
+    color: transparent;
+    background: linear-gradient(90deg, #00ccff, #F99410);
+    -webkit-background-clip: text;
+    background-clip: text;
+    white-space: nowrap;
+}
+
 /* Área de navegación */
 .nav-drawer__nav {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;   /* sin scroll horizontal: los ítems largos hacen wrap */
     padding: 8px 0;
 }
 
@@ -414,9 +491,11 @@ html, body {
     padding: 2px 0 4px 0;
 }
 
-/* Submenú nivel 3 — botón colapsable anidado */
+/* Submenú nivel 3 — botón colapsable anidado.
+   width compensa los márgenes laterales (8px c/lado): con 100% a secas el
+   botón medía 270px + 8px de margen izq = 278px y desbordaba el drawer. */
 .nav-section__title--sub {
-    width: 100%;
+    width: calc(100% - 16px);
     display: flex;
     align-items: center;
     gap: 10px;
@@ -504,6 +583,46 @@ html, body {
     height: 1px;
     background: #D8E3EE;
     margin: 6px 16px;
+}
+
+/* Footer del drawer — marca del software (Buslink), distinta de NORTUR
+   (el cliente/empresa) que ya está en el header del mismo drawer. Mismo
+   degradado azul que el header (vía las variables --nt-panel-grad-*, así
+   respeta también el theme gris). El fondo oscuro además es necesario:
+   el truco "screen" del logo quema el blanco del PNG solo sobre oscuro.
+   Filete superior degradado celeste→naranja (colores BusLink) como detalle. */
+.nav-drawer__footer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 11px 16px;
+    flex-shrink: 0;
+    background: linear-gradient(90deg, var(--nt-panel-grad-a) 0%, var(--nt-panel-grad-b) 100%);
+    border-top: 4px solid transparent;
+    border-image: linear-gradient(90deg, #00ccff, #F99410) 1;
+}
+
+.nav-drawer__footer-img {
+    height: 22px;
+    width: auto;
+    opacity: 1;
+    mix-blend-mode: screen;
+    /* punch: más brillo/saturación + doble glow celeste para que el trazo no se lave */
+    filter: brightness(1.25) saturate(1.35)
+            drop-shadow(0 0 4px rgba(0, 204, 255, 0.6))
+            drop-shadow(0 0 9px rgba(0, 204, 255, 0.35));
+}
+
+.nav-drawer__footer-text {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    font-size: 0.8rem;
+    letter-spacing: 1.5px;
+    color: transparent;
+    background: linear-gradient(90deg, #00ccff, #F99410);
+    -webkit-background-clip: text;
+    background-clip: text;
 }
 
 @keyframes fadeIn {
@@ -818,9 +937,18 @@ body.planilla-fixed .trafico-panel {
        evita huecos a la derecha si las columnas suman menos que el panel. */
     width: auto;
     min-width: 100%;
-    /* fuente 2px más chica que antes (0.78rem ≈ 12.5px → 0.66rem ≈ 10.6px) */
-    font-size: 0.66rem;
-    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    /* Tipografía elegida por el usuario (18/07/2026, revisada a IBM Plex Sans el 20/07/2026):
+       auto-hospedada vía @font-face (ver el bloque al inicio de este archivo) — NO viene
+       instalada en Windows, así que si se declarara solo por nombre el navegador caería en
+       silencio a Segoe UI sin avisar. Pensada para interfaces técnicas densas: dígitos con
+       mucha personalidad y buena separación (el 6 no se confunde con el 8), un punto más de
+       carácter que Inter sin perder claridad a tamaño chico.
+       Antes: Helvetica Neue a 0.66rem (10.6px) → en Windows caía a Arial y a ese tamaño
+       cerraba los dígitos (horarios borrosos); después Inter (18/07/2026), que tampoco venía
+       instalada y caía a Segoe UI Variable en silencio — el mismo problema que se corrige acá
+       auto-hospedando el archivo real. */
+    font-size: 0.769rem;   /* 12.3px */
+    font-family: 'IBM Plex Sans', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
     white-space: nowrap;
 }
 
@@ -835,7 +963,7 @@ body.planilla-fixed .trafico-panel {
     padding: 5px 4px;   /* padding horizontal reducido: más aire para que el título entre */
     border: 1px solid var(--nt-grid-header-border);
     white-space: nowrap;
-    font-size: 0.70rem;   /* 2px más chico que antes (0.82rem) */
+    font-size: 0.806rem;   /* 12.9px — medio punto por encima de la celda (12.3px) */
     letter-spacing: 0.02em;
     color: #FFFFFF;
     outline: 2px solid rgba(255, 255, 255, 0.45);
@@ -880,7 +1008,7 @@ body.planilla-fixed .trafico-panel {
     /* Solo línea horizontal entre filas (13/07/2026): sin verticales, la grilla densa
        se despeja y el ojo recorre el renglón (= un servicio) de un tirón. El borde
        inferior un punto más definido (--nt-grid-row-line) separa fila de fila con
-       claridad. El alto de fila fijo (22px, atado al ItemSize del <Virtualize>) no
+       claridad. El alto de fila fijo (20px, atado al ItemSize del <Virtualize>) no
        cambia: con border-collapse la dirección vertical sigue aportando 1px. */
     border: none;
     border-bottom: 1px solid var(--nt-grid-row-line);
@@ -892,37 +1020,80 @@ body.planilla-fixed .trafico-panel {
     text-overflow: ellipsis;
     white-space: nowrap;
     /* line-height determinístico: el alto de la celda no depende de la fuente del SO.
-       Junto al alto de fila fijo de abajo, da un alto de fila constante (22px) que
+       Junto al alto de fila fijo de abajo, da un alto de fila constante (20px) que
        coincide con el 'contain-intrinsic-size' del content-visibility → la barra de
        scroll no "salta" cuando el browser pinta/despinta filas al scrollear. */
-    line-height: 18px;
+    line-height: 16px;
     box-sizing: border-box;
 }
 
-/* ALTO DE FILA FIJO (22px) — la fila mide EXACTAMENTE 18 de line-height + 2 de padding
-   vertical + ~2 de bordes collapse. Debe coincidir con el ItemSize="22" del <Virtualize>
-   en PlanillaTrafico.razor, para que la posición de los spacers sea correcta y el scroll
-   quede estable (sin saltos). Si cambia uno, cambiar el otro.
+/* ALTO DE FILA FIJO (20px) — la fila mide EXACTAMENTE 16 de line-height + 2 de padding
+   vertical + ~2 de bordes collapse. Debe coincidir con la constante AltoFila = 20 de
+   PlanillaTrafico.razor (que alimenta el ItemSize del <Virtualize> y el scroll por teclado),
+   para que la posición de los spacers sea correcta y el scroll quede estable (sin saltos).
+   Si cambia uno, cambiar el otro.
 
    IMPORTANTE: se aplica solo a las filas de DATOS (clase .tg-row), NO a los <tr> spacer
    que inyecta <Virtualize> (SpacerElement="tr"). Esos spacers necesitan su altura dinámica
-   propia (el offset de scroll); forzarles 22px rompería el cálculo. Por eso targeteamos
+   propia (el offset de scroll); forzarles 20px rompería el cálculo. Por eso targeteamos
    .tg-row y no "tbody tr" a secas. */
-.trafico-grid--virtual tbody tr.tg-row {
-    height: 22px;
+.trafico-grid--filas-fijas tbody tr.tg-row {
+    height: 20px;
 }
-.trafico-grid--virtual tbody tr.tg-row td {
-    height: 22px;
+.trafico-grid--filas-fijas tbody tr.tg-row td {
+    height: 20px;
+}
+
+/* ── FILAS FANTASMA bajo el hueco de <Virtualize> (18/07/2026) ────────────────
+   MITIGA (no cura) el blanqueo al scrollear rápido. El hueco existe igual — es el
+   round-trip de SignalR que <Virtualize> necesita para pintar las filas nuevas —
+   pero deja de leerse como "la app se rompió" y pasa a leerse como "están cargando".
+
+   Cómo funciona: el <tbody> lleva un patrón de renglones vacíos al MISMO paso que la
+   fila real (20px). Donde hay fila pintada, la fila la tapa (por eso .tg-row debe ser
+   OPACA — ver regla de abajo). Donde <Virtualize> todavía no pintó, el patrón queda a
+   la vista y se ven renglones grises en vez de un vacío blanco.
+
+   Por qué es seguro: es 100% pintado del navegador. Cero render de Blazor, cero
+   SignalR, cero componentes nuevos. NO puede afectar la velocidad del Zoom ni del
+   menú contextual (que fue lo que obligó a revertir el intento anterior).
+   Si el paso de 20px cambia, cambiar también AltoFila y el height de .tg-row. */
+.trafico-grid--filas-fijas tbody {
+    background-image: repeating-linear-gradient(
+        to bottom,
+        transparent 0 19px,
+        var(--nt-grid-row-line) 19px 20px
+    );
+}
+
+/* Las filas de datos DEBEN ser opacas para tapar el patrón fantasma. Las de estado
+   (asignado/curso/finalizado/facturado/chequeo) ya traen su color; las SIN ASIGNAR
+   caen al `_ => ""` de EstadoCss() y quedarían transparentes → se les vería el patrón
+   por debajo de forma permanente. Este blanco es su fondo base.
+   Va ANTES de las reglas .fila-estado--* a propósito: misma especificidad (0,2,2), así
+   que el color de estado gana por orden de aparición. No mover debajo de ellas. */
+.trafico-grid--filas-fijas tbody tr.tg-row {
+    background-color: #FFFFFF;
 }
 
 .trafico-grid tbody td.c { text-align: center; }
 .trafico-grid tbody td.r { text-align: right; font-variant-numeric: tabular-nums; }
 .trafico-grid tbody td.nowrap { white-space: nowrap; }
 
-/* Valores destacados en negrita (NO el encabezado) — réplica de los campos que el
-   MetroCar viejo muestra en negrita: H.Pre, H.Ini, H.Fin, Cliente, Pax, Agua,
-   Comentario. Son los datos clave que el despachante lee de un vistazo. */
-.trafico-grid tbody td.td-bold { font-weight: 700; }
+/* Valores destacados (NO el encabezado) — réplica de los campos que el MetroCar viejo
+   muestra en negrita: H.Pre, H.Ini, H.Fin, Recorrido, Cliente, Pax, Agua, Comentario. Son
+   los datos clave que el despachante lee de un vistazo.
+   Peso 600, no 700 (20/07/2026): con IBM Plex Sans auto-hospedada de verdad, el 700 se
+   sentía más pesado de lo esperado en celdas de dato — 600 (SemiBold) da la misma
+   jerarquía con menos densidad de tinta. El 700 se reservó para los headers de columna
+   (.trafico-grid thead th), que sí necesitan el contraste fuerte contra el azul de fondo.
+   Elegido por el usuario comparando las 4 intensidades reales en un artefacto. */
+.trafico-grid tbody td.td-bold { font-weight: 600; }
+
+/* Separador origen ➜ destino del Recorrido, en naranja NORTUR: el ojo parte el
+   tramo de un vistazo en la grilla densa (elegido por el usuario, 16/07/2026).
+   Solo presentación — el dato/tooltip/búsqueda/Excel siguen con ' a '. */
+.trafico-grid .rec-flecha { color: #F99410; }
 
 /* PERFORMANCE — render virtual (dos capas, complementarias).
 
@@ -935,12 +1106,22 @@ body.planilla-fixed .trafico-panel {
       dentro del viewport del scroll. Se usa en las grillas SECUNDARIAS (cancelados, panel
       Buses), que renderizan todas sus filas con foreach normal.
 
-   La grilla principal queda EXCLUIDA de content-visibility (selector :not(...--virtual)):
-   choca con los spacers de altura que inserta <Virtualize> (doble cálculo de alto →
-   scroll inestable). Su alto de fila fijo (22px = ItemSize) ya hace el scroll estable. */
-.trafico-grid:not(.trafico-grid--virtual) tbody tr {
+   La grilla PRINCIPAL queda EXCLUIDA (selector :not(...--filas-fijas)): usa <Virtualize>,
+   y content-visibility choca con sus spacers de altura (doble cálculo → scroll inestable).
+   Su alto de fila fijo (20px = ItemSize) ya hace el scroll estable.
+
+   ⚠ NO volver a poner content-visibility acá "para arreglar el blanqueo". Se probó dos
+   veces (render completo + content-visibility en la grilla principal) y se revirtió las dos.
+   La 2ª (18/07/2026) fue con mediciones: elimina el blanco (6/6 → 0/6) pero degrada la
+   interacción — click→selección 146→689 ms, ráfaga de flechas 335→2004 ms. Con 331 filas,
+   Blazor visita el árbol entero en cada render del padre y eso no lo evita ningún gate.
+   Detalle: docs/performance/PENDIENTE_GRILLA_TRAFICO_BLANQUEO.md */
+.trafico-grid:not(.trafico-grid--filas-fijas) tbody tr {
     content-visibility: auto;
-    contain-intrinsic-size: auto 22px;
+    /* 20px = el mismo alto de fila que la grilla principal (heredan .trafico-grid, así que
+       comparten line-height y padding). Debe seguir al alto real: si no, el browser reserva
+       mal el espacio de las filas despintadas y la barra de scroll salta. */
+    contain-intrinsic-size: auto 20px;
 }
 
 /* Hover sutil sin tapar el color de estado */
@@ -1140,6 +1321,64 @@ body.planilla-fixed .buses-panel__wrap {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%23003AA0' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
 }
 
+/* ── ✕ para limpiar el combo (equivale al Clearable de MudSelect, ver Vehículos) ──
+   El <select> nativo no puede tener hijos que no sean <option>, así que la ✕ va como
+   hermano dentro de este wrapper, posicionada encima y a la IZQUIERDA del chevron
+   (mismo orden que MudBlazor: ✕ ▾). Sin selección el combo queda idéntico a antes. */
+.filtro-combo-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* Con valor elegido reservamos lugar para la ✕ sin pisar el chevron */
+.filtro-combo--clearable {
+    padding-right: 38px;
+    min-width: 136px;
+    max-width: 176px;
+}
+
+/* Botón azul sólido: la ✕ no es un ícono decorativo, es un botón — se lee como tal
+   de un vistazo, que era el punto. Va chica para no competir con el propio combo. */
+.filtro-combo__clear {
+    position: absolute;
+    right: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: #003AA0;
+    color: #FFFFFF;
+    cursor: pointer;
+    transition: background-color 0.15s ease, transform 0.12s ease;
+}
+
+/* ✕ dibujada con dos líneas: así el grosor del trazo es una propiedad
+   (el ícono Close de MudBlazor es relleno y no admite "negrita"). */
+.filtro-combo__clear svg {
+    display: block;
+    width: 10px;
+    height: 10px;
+    stroke-width: 3.4;
+}
+
+.filtro-combo__clear:hover {
+    background-color: #00256B;
+    transform: translateY(-50%) scale(1.12);
+}
+
+.filtro-combo__clear:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(0, 58, 160, 0.4);
+}
+
 .filtro-btn {
     display: inline-flex;
     align-items: center;
@@ -1232,12 +1471,164 @@ body.planilla-fixed .buses-panel__wrap {
 }
 
 /* ═══════════════════════════════════════════
+   LEYENDA DE ESTADOS COMO FILTRO (20/07/2026)
+   La barra del pie de la grilla de Tráfico dejó de ser una referencia de colores
+   pasiva: cada estado es un BOTÓN que enfoca la grilla en ese estado (clic = solo
+   ese, Ctrl+clic = sumar). El fondo de cada botón es el color REAL de la fila, así
+   que la leyenda se sigue leyendo como leyenda.
+   ═══════════════════════════════════════════ */
+.leyenda--btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: inherit;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: box-shadow .12s ease, opacity .12s ease, transform .06s ease;
+}
+
+.leyenda--btn:hover {
+    border-color: #003AA0;
+    box-shadow: 0 0 0 2px rgba(0,58,160,0.18);
+}
+
+.leyenda--btn:active { transform: translateY(1px); }
+
+/* Estado sin servicios en el día: sigue leyéndose como leyenda, pero no se clickea. */
+.leyenda--btn:disabled {
+    cursor: default;
+    opacity: 0.5;
+    filter: grayscale(0.4);
+}
+
+.leyenda--btn:disabled:hover {
+    border-color: rgba(0,0,0,0.15);
+    box-shadow: none;
+}
+
+.leyenda--btn:focus-visible {
+    outline: 2px solid #003AA0;
+    outline-offset: 1px;
+}
+
+/* Estado enfocado: borde azul marcado (el fondo NO cambia — es el color del estado). */
+.leyenda--on {
+    border-color: #003AA0;
+    box-shadow: 0 0 0 2px rgba(0,58,160,0.35);
+    color: #002F88;
+}
+
+/* Con un foco activo, los estados que quedaron afuera se atenúan (no se ocultan:
+   siguen clickeables para cambiar de foco, como el highlight de Power BI). */
+.leyenda--off { opacity: 0.42; }
+.leyenda--off:hover { opacity: 1; }
+
+/* Contador de servicios de ese estado, dentro del botón. */
+.leyenda__count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 9px;
+    background: rgba(0,0,0,0.13);
+    font-size: 0.66rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+/* "Ver todos" — aparece al lado de los botones cuando hay un foco activo. */
+.leyenda-todos {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid #003AA0;
+    background: #EEF3FB;
+    color: #003AA0;
+    font-family: inherit;
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.leyenda-todos:hover { background: #003AA0; color: #fff; }
+
+/* Hint de uso: los botones se acumulan, y eso no se descubre solo. */
+.leyenda-hint {
+    font-size: 0.72rem;
+    font-style: italic;
+    color: #93A3B8;
+}
+
+/* Chip de foco arriba, al lado de los KPIs: el filtro del pie tiene que verse desde
+   arriba para que nadie mire una grilla filtrada creyendo que es el día completo. */
+.estado-foco {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 5px 10px;
+    border: 1px solid #003AA0;
+    border-radius: 8px;
+    background: #EEF3FB;
+    color: #003AA0;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.estado-foco__pill {
+    padding: 1px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(0,0,0,0.18);
+    color: #1A2433;
+    font-weight: 700;
+}
+
+.estado-foco__cuenta { color: #4B6799; font-weight: 500; }
+
+.estado-foco__quitar {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: auto;
+    padding: 2px 10px;
+    border-radius: 6px;
+    border: 1px solid #003AA0;
+    background: #003AA0;
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.estado-foco__quitar:hover { background: #002F88; }
+
+/* El chip de la columna Estado de cada fila también filtra (clic = ver solo ese estado). */
+.estado-chip--filtra { cursor: pointer; }
+.estado-chip--filtra:hover {
+    box-shadow: 0 0 0 2px rgba(0,58,160,0.35);
+}
+
+/* ═══════════════════════════════════════════
    CHIPS DE ESTADO — columna Estado en grilla de tráfico
    ═══════════════════════════════════════════ */
 
 .estado-chip {
     display: inline-block;
     padding: 1px 7px;
+    /* Ancho FIJO idéntico para TODOS los estados (SIN ASIGNAR, ASIGNADO, EN CURSO,
+       CHEQUEO, FINALIZADO, FACTURADO): todos los chips quedan del mismo tamaño y
+       perfectamente alineados uno debajo del otro, sin importar el largo del texto.
+       96px cubre el más largo ("SIN ASIGNAR" ≈ 91px) con margen. La columna Estado
+       (col width:106px) le da lugar. */
+    width: 96px;
+    box-sizing: border-box;
+    text-align: center;
     border-radius: 999px;
     font-size: 0.68rem;
     font-weight: 700;
@@ -3060,9 +3451,10 @@ h1:focus {
     font-size: 0.85rem;
 }
 
-/* ── Columna TOTAL fija a la derecha (espejo de la columna Fecha) ──
-   Con muchas columnas de servicio (24), el total de fila quedaba invisible sin
-   scrollear hasta el final. Sticky right en la última celda de cada fila. */
+/* ── Columnas TOTAL + TENDENCIA fijas a la derecha (espejo de la columna Fecha) ──
+   Con muchas columnas de mes, el total de fila y la tendencia quedaban invisibles sin
+   scrollear hasta el final. Sticky right en las dos últimas celdas de cada fila:
+   TENDENCIA (última, right:0) y TOTAL (anteúltima, corrida por el ancho de Tendencia). */
 .rfs-tabla th:last-child,
 .rfs-tabla td:last-child {
     position: sticky;
@@ -3070,23 +3462,111 @@ h1:focus {
     border-left: 1px solid #E2E9F4;
 }
 
-.rfs-tabla tbody td:last-child {
+/* Ancho fijo de la columna Tendencia (delta + sparkline) → offset de la columna TOTAL. */
+.rfs-tabla th.rfs-th-tend,
+.rfs-tabla td.rfs-tend {
+    width: 132px;
+    min-width: 132px;
+}
+
+.rfs-tabla th:nth-last-child(2),
+.rfs-tabla td:nth-last-child(2) {
+    position: sticky;
+    right: 132px;
+    border-left: 1px solid #E2E9F4;
+}
+
+.rfs-tabla tbody td:last-child,
+.rfs-tabla tbody td:nth-last-child(2) {
     background: #F8FAFD;
     z-index: 1;
 }
 
-.rfs-tabla thead th:last-child {
+.rfs-tabla thead th:last-child,
+.rfs-tabla thead th:nth-last-child(2) {
     z-index: 3;
     background: #F4F7FB;
 }
 
-.rfs-tabla tfoot td:last-child {
+.rfs-tabla tfoot td:last-child,
+.rfs-tabla tfoot td:nth-last-child(2) {
     z-index: 3;
     background: #EEF3FA;
 }
 
-.rfs-tabla tbody tr:hover td:last-child {
+.rfs-tabla tbody tr:hover td:last-child,
+.rfs-tabla tbody tr:hover td:nth-last-child(2) {
     background: #F0F5FC;
+}
+
+/* ── Columna Tendencia: Δ del último mes + sparkline ── */
+.rfs-th-tend {
+    text-align: center !important;
+}
+
+.rfs-tend {
+    padding: 3px 8px !important;
+}
+
+.rfs-tend-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.rfs-tend-delta {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 3px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.rfs-tend-arrow {
+    font-size: 0.62rem;
+    line-height: 1;
+}
+
+.rfs-tend-pct {
+    font-size: 0.66rem;
+    font-weight: 600;
+    opacity: 0.7;
+    margin-left: 3px;
+    padding-left: 4px;
+    border-left: 1px solid currentColor;
+}
+
+.rfs-spark {
+    flex: 0 0 auto;
+    display: block;
+}
+
+/* ── Modo Variación: Δ por celda, coloreado por signo ── */
+.rfs-var {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.rfs-var-up,
+.rfs-tend-delta.rfs-var-up {
+    color: #16A34A;
+}
+
+.rfs-var-down,
+.rfs-tend-delta.rfs-var-down {
+    color: #DC2626;
+}
+
+.rfs-var-flat,
+.rfs-tend-delta.rfs-var-flat {
+    color: #94A3B8;
+}
+
+.rfs-var-na,
+.rfs-tend-delta.rfs-var-na {
+    color: #C6D2E2;
 }
 
 /* ── Pill de estado (drill-down) ── */

@@ -38,12 +38,52 @@ SIN ASIGNAR ──asignar──► ASIGNADO ──fin──► FINALIZADO ──
   FINALIZADO `#C0C0C0`, FACTURADO `#98C5BF`, CHEQUEO `#52CEFE`. Mismos colores en Blazor.
 - La vista normal **nunca muestra CANCELADO** (vista propia con botón Cxl).
 
+### Filtro por estado (leyenda del pie clickeable, 20/07/2026)
+
+La barra "Estados:" del pie de la grilla dejó de ser una referencia de colores pasiva:
+**cada estado es un botón que filtra la grilla** (pedido del usuario, mismo espíritu que los
+botones Empresa/Turismo/Nortur de arriba). Reglas ya decididas — no re-litigarlas:
+
+- **Se filtra por `EstadoDisplay`, NUNCA por `estado_via` crudo.** Es la regla de oro acá: el
+  botón tiene que filtrar lo que el COLOR está diciendo. Con el estado crudo, apretar ASIGNADO
+  traería también las EN CURSO (que en la base son ASIGNADO) y SIN ASIGNAR traería las CHEQUEO.
+- **Semántica: el clic SUMA/QUITA — los estados se ACUMULAN, sin Ctrl.** Desde "sin filtro",
+  el 1er clic deja solo ese estado; el 2º clic en otro botón suma el segundo (FACTURADO +
+  FINALIZADO juntos); reclic en uno activo lo saca; sacar el último = ver todo. Hay un botón
+  **"Ver todos"** para limpiar de un golpe y un hint *"clic para sumar o quitar estados"* al
+  lado de los botones cuando no hay filtro.
+  > Se probó primero con **foco exclusivo + Ctrl+clic para sumar** y se descartó el mismo día
+  > (20/07/2026): el usuario no descubrió el Ctrl y pidió explícitamente poder elegir dos
+  > estados. Lección: en esta pantalla, **nada que dependa de una tecla modificadora se
+  > descubre**. El costo aceptado es que saltar de un estado a otro son 2 clics.
+- **6 botones**, no 5: se agregó **SIN ASIGNAR** (fila blanca). Como leyenda de colores no
+  hacía falta; como filtro es el estado más operativo del día.
+- **Contadores** calculados sobre el conjunto filtrado por TODO menos el estado
+  (`baseSinEstado` en `RecalcularVisibles`) → **sin filtro de estado puesto**, la suma de los 6
+  botones da exacto el total de la grilla; con estados elegidos, la grilla muestra la suma de
+  los elegidos (los contadores NO cambian: siguen siendo "cuántos hay de cada uno"). Hay un
+  smoke test que verifica la invariante. Verificado con el buscador "EZEIZA" en 06/05/2026:
+  contadores 0+0+0+1+135+2 = 138 servicios que matchean; con FACTURADO+FINALIZADO = 136.
+- El **KPI "Sin asignar"** también usa `EstadoDisplay` para que coincida con su botón (las
+  chequeadas se cuentan en el botón CHEQUEO, que es como se ven en la grilla).
+- Un estado con **0 servicios se deshabilita** (filtrarlo solo daría grilla vacía), salvo que
+  esté enfocado (para poder sacarle el foco).
+- El **chip de la columna Estado de cada fila también filtra** (clic = ver solo ese estado),
+  con `stopPropagation` en click y dblclick para no disparar además la selección de fila ni el
+  Zoom. El resto de la fila conserva intacto doble clic → Zoom y clic derecho → menú.
+- El foco **persiste** al cambiar de día y al auto-refresh de 60s (como Emp/Tur/Nortur). Por
+  eso hay un chip "Filtrado por estado: X ✕" arriba, al lado de los KPIs: si no, se puede
+  mirar una grilla filtrada creyendo que es el día completo.
+- Todo **en memoria** sobre el día ya cargado: cero SQL, cero re-query. Convive sin conflicto
+  con el filtro server-side de "Aplicar Filtros" (ese trae el rango; este refina lo cargado).
+
 ## Qué ya está migrado (NO rehacer)
 
 | Pieza | Dónde |
 | --- | --- |
 | Planilla del día (grilla 25 col, colores, doble-click zoom) | `Components/Pages/PlanillaTrafico.razor` |
 | Combos U/Pr / U/Cb + S/C + Emp/Tur/Nortur + buscador | ídem (filtros en memoria) |
+| **Filtro por ESTADO desde la leyenda del pie** (clic = solo ese estado, Ctrl+clic = sumar) | ídem (`_estadosFoco`, en memoria) — ver § Filtro por estado |
 | Vista cancelados (Cxl) con motivo | ídem + `GetTraficoCanceladosAsync` |
 | **Panel Buses** (grid2: flota viva, franco, colores) | ídem + `GetPanelBusesAsync` |
 | Zoom del Viaje (solo lectura) | `Components/Shared/ZoomViajeDialog.razor` |

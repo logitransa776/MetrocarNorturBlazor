@@ -20,7 +20,10 @@
     <HeadOutlet @rendermode="InteractiveServer" />
 </head>
 
-<body>
+@* translate="no" + class="notranslate" en el body: refuerza el "no traducir" sobre el
+   contenido real (el mini-menú de traducción al seleccionar texto mira los nodos del
+   contenido, no solo el <html>). *@
+<body translate="no" class="notranslate">
     <Routes @rendermode="InteractiveServer" />
     <script src="_framework/blazor.web.js"></script>
     <script src="_content/MudBlazor/MudBlazor.min.js"></script>

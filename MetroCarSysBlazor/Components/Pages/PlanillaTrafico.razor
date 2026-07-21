@@ -9,7 +9,7 @@
 @implements IDisposable
 @rendermode InteractiveServer
 
-<PageTitle>Planilla de servicios — Tráfico</PageTitle>
+<PageTitle>BusLink</PageTitle>
 
 @* Columna a pantalla completa: toolbar + KPIs fijos arriba, grilla flexible abajo.
    La ventana no scrollea (body.planilla-fixed); solo scrollea la grilla. *@
@@ -44,31 +44,57 @@
 
         @* Unidades (réplica de los combos cronogramaCbio/cronograma + botones S/C y Cxl del FoxPro) *@
         <div class="d-flex align-center" style="gap:6px;">
-            @* Combo 1 — Unidad Programada (interno por empresa) → filtra U/Pr *@
-            <select class="filtro-combo @(!string.IsNullOrEmpty(_selUPr) ? "filtro-combo--activo" : "")"
-                    disabled="@_verCancelados"
-                    value="@_selUPr"
-                    @onchange="@(e => OnUPrChanged(e.Value?.ToString() ?? ""))"
-                    title="Unidad Programada — interno por empresa (columna U/Pr)">
-                <option value="">U/Programada</option>
-                @foreach (var u in _combos.Programadas)
+            @* Combo 1 — Unidad Programada (interno por empresa) → filtra U/Pr.
+               La ✕ va como hermano del <select> (un select nativo no admite hijos que no sean
+               <option>): superpuesta con z-index, se come el click y no despliega la lista. *@
+            <span class="filtro-combo-wrap">
+                <select class="filtro-combo @(!string.IsNullOrEmpty(_selUPr) ? "filtro-combo--activo filtro-combo--clearable" : "")"
+                        disabled="@_verCancelados"
+                        value="@_selUPr"
+                        @onchange="@(e => OnUPrChanged(e.Value?.ToString() ?? ""))"
+                        title="Empresa">
+                    <option value="">Todas/Empresas</option>
+                    @foreach (var u in _combos.Programadas)
+                    {
+                        <option value="@u">@u</option>
+                    }
+                </select>
+                @if (!string.IsNullOrEmpty(_selUPr) && !_verCancelados)
                 {
-                    <option value="@u">@u</option>
+                    <button type="button" class="filtro-combo__clear"
+                            @onclick="@(() => OnUPrChanged(""))"
+                            title="Quitar el filtro de empresa"
+                            aria-label="Quitar el filtro de empresa">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                    </button>
                 }
-            </select>
+            </span>
 
-            @* Combo 2 — Unidad Asignada (todos los internos) → filtra U/Cb *@
-            <select class="filtro-combo @(!string.IsNullOrEmpty(_selUCb) ? "filtro-combo--activo" : "")"
-                    disabled="@_verCancelados"
-                    value="@_selUCb"
-                    @onchange="@(e => OnUCbChanged(e.Value?.ToString() ?? ""))"
-                    title="Unidad Asignada — todos los internos (columna U/Cb)">
-                <option value="">U/Asignada</option>
-                @foreach (var u in _combos.Asignadas)
+            @* Combo 2 — Unidad Asignada (internos) → filtra U/Cb. En cascada con el combo 1:
+               con una empresa elegida solo se listan SUS internos. Su ✕ quita solo el interno:
+               la empresa se conserva (volvés un paso atrás en la cascada, no al principio). *@
+            <span class="filtro-combo-wrap">
+                <select class="filtro-combo @(!string.IsNullOrEmpty(_selUCb) ? "filtro-combo--activo filtro-combo--clearable" : "")"
+                        disabled="@_verCancelados"
+                        value="@_selUCb"
+                        @onchange="@(e => OnUCbChanged(e.Value?.ToString() ?? ""))"
+                        title="Interno">
+                    <option value="">Todos/Internos</option>
+                    @foreach (var u in InternosDelCombo())
+                    {
+                        <option value="@u">@u</option>
+                    }
+                </select>
+                @if (!string.IsNullOrEmpty(_selUCb) && !_verCancelados)
                 {
-                    <option value="@u">@u</option>
+                    <button type="button" class="filtro-combo__clear"
+                            @onclick="@(() => OnUCbChanged(""))"
+                            title="Quitar el filtro de interno"
+                            aria-label="Quitar el filtro de interno">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                    </button>
                 }
-            </select>
+            </span>
 
             @* S/C — servicios sin unidad asignada (cronograma = 'S/C') *@
             <button class="filtro-btn @(_soloSinCronograma ? "filtro-btn--on" : "")"
@@ -203,6 +229,28 @@
 }
 else
 {
+    @* ════════════ Chip de foco por estado ════════════
+       La botonera vive al pie del panel (siempre visible), pero el filtro tiene que ser
+       imposible de pasar por alto desde arriba: este chip lo canta al lado de los KPIs
+       y lo saca de un clic. Solo aparece cuando hay estados enfocados. *@
+    @if (_estadosFoco.Count > 0)
+    {
+        <div class="estado-foco mb-2">
+            <MudIcon Icon="@Icons.Material.Filled.Flag" Style="font-size:1rem;" />
+            <span>Filtrado por estado:</span>
+            @foreach (var est in EstadosLeyenda.Where(_estadosFoco.Contains))
+            {
+                <span class="estado-foco__pill" style="@EstadoLeyendaFondo(est)">@TraficoFilaRow.EstadoLabel(est)</span>
+            }
+            <span class="estado-foco__cuenta">@visibles.Count de @_totalSinEstado servicios</span>
+            <button type="button" class="estado-foco__quitar" @onclick="LimpiarEstados"
+                    title="Quitar el filtro de estado">
+                <MudIcon Icon="@Icons.Material.Filled.Close" Style="font-size:0.9rem;" />
+                <span>Quitar</span>
+            </button>
+        </div>
+    }
+
     @* ════════════ KPIs del día ════════════ *@
     <div class="d-flex mb-2 planilla-page__kpis" style="gap:10px;">
         <div style="flex:1;">
@@ -218,7 +266,10 @@ else
                      Sub="distintos asignados" Color="@NorturColors.Naranja" />
         </div>
         <div style="flex:1;">
-            <KpiCard Label="Sin asignar" Value="@visibles.Count(f => f.Estado == "SIN ASIGNAR").ToString()"
+            @* EstadoDisplay (no el estado crudo): así este número coincide SIEMPRE con el
+               contador del botón SIN ASIGNAR de la leyenda. Las chequeadas se cuentan aparte,
+               en el botón CHEQUEO — que es como se ven en la grilla (fila celeste). *@
+            <KpiCard Label="Sin asignar" Value="@visibles.Count(f => f.EstadoDisplay == "SIN ASIGNAR").ToString()"
                      Sub="servicios pendientes" Color="@NorturColors.Rojo" />
         </div>
     </div>
@@ -307,7 +358,8 @@ else if (_verCancelados)
                                 <td class="r" style="color:#9AA7BC; font-size:0.72rem;">@_nroCxl</td>
                                 <td class="c">@f.Ob</td>
                                 <td class="c">@f.Ad</td>
-                                <td>@f.Fecha.ToString("dd/MM/yyyy")</td>
+                                @* title propio: pisa el del <tr> para mostrar el nº de reserva (en cancelados no hay chip Estado) *@
+                                <td title="Reserva Nº @f.IdViaje">@f.Fecha.ToString("dd/MM/yyyy")</td>
                                 <td>@f.HIni</td>
                                 <td>@f.HFin</td>
                                 <td>@f.HAvi</td>
@@ -316,7 +368,17 @@ else if (_verCancelados)
                                 <td>@f.UCb</td>
                                 <td>@f.UAs</td>
                                 <td class="c">@f.Chq</td>
-                                <td title="@f.Recorrido">@f.Recorrido</td>
+                                @* Recorrido "DESDE ➜ HASTA" — mismo tratamiento que la vista normal. *@
+                                <td class="td-bold" title="@f.Recorrido">
+                                    @if (TraficoFilaRow.PartirRecorrido(f.Recorrido, f.RecorridoDesdeLen) is { } rec)
+                                    {
+                                        @rec.Desde<span class="rec-flecha"> ➜ </span>@rec.Hasta
+                                    }
+                                    else
+                                    {
+                                        @f.Recorrido
+                                    }
+                                </td>
                                 <td style="color:#DC2626; font-weight:600;" title="@f.Motivo">@f.Motivo</td>
                                 <td>@f.Veh</td>
                                 <td>@f.Cliente</td>
@@ -361,13 +423,13 @@ else
              @ref="_gridWrap"
              @onkeydown="OnGridKeyDown"
              @onkeydown:preventDefault="_preventDefaultTecla">
-            <table class="trafico-grid trafico-grid--virtual">
+            <table class="trafico-grid trafico-grid--filas-fijas">
                 @* Anchos FIJOS por columna (table-layout:fixed en app.css los respeta).
                    Calibrados al contenido típico: las largas (Recorrido/Chofer/Comentario)
                    truncan con … y muestran el texto completo en el tooltip (title). *@
                 <colgroup>
                     <col style="width:30px;" />   @* # *@
-                    <col style="width:92px;" />   @* Estado (chip) *@
+                    <col style="width:106px;" />  @* Estado (chip — ancho fijo uniforme) *@
                     <col style="width:78px;" />   @* Reserva dd/MM/yyyy *@
                     <col style="width:48px;" />   @* H.Pre *@
                     <col style="width:48px;" />   @* H.Ini *@
@@ -422,74 +484,53 @@ else
                     </tr>
                 </thead>
                 <tbody>
-                    @* <Virtualize> de Blazor: renderiza SOLO las filas visibles en el viewport
-                       (~25), no las ~400 del día. Esto resuelve los DOS costos a la vez:
-                         · el navegador pinta ~25 <tr>, no 400 → scroll fluido;
-                         · Blazor diffea ~25 <tr> en cada interacción (click de fila, tecla del
-                           buscador, tick del auto-refresh) → el patch SignalR es chico → sin lag.
+                    @* <Virtualize>: mantiene en el DOM solo las filas del viewport + OverscanCount
+                       (medido: 82 en un día de 331), no las ~400 del día. Blazor diffea ese puñado
+                       en cada interacción → el patch SignalR es chico y la UI responde.
 
-                       ItemSize=22 DEBE ser el alto REAL de fila en px. La fila mide 22px, fijado
-                       en app.css (.trafico-grid--virtual tbody tr/td { height:22px } + line-height
-                       18px). Al coincidir EXACTO, Virtualize no acumula error de posición de los
-                       spacers → la grilla no "salta" ni deja blancos. Si cambia el alto de fila en
-                       el CSS, cambiar este número.
+                       ItemSize=AltoFila (20) DEBE ser el alto REAL de fila en px — está fijado en
+                       app.css (.trafico-grid--filas-fijas tbody tr.tg-row {height:20px} +
+                       line-height 16px). Al coincidir EXACTO, Virtualize no acumula error en la
+                       posición de los spacers → el scroll no salta. Si cambia uno, cambian los dos.
 
-                       OverscanCount=20: pre-renderiza 20 filas extra arriba y abajo del viewport.
-                       Con scroll normal el colchón ya está pintado antes de entrar a la vista, así
-                       que no se ve el "blanco" mientras el servidor responde el round-trip.
+                       SpacerElement="tr": CRÍTICO porque <Virtualize> está dentro de un <tbody>.
+                       Por defecto inserta sus spacers como <div>, y un <div> hijo directo de
+                       <tbody> es HTML inválido → el navegador lo reubica y el cálculo de scroll se
+                       rompe. (Doc oficial .NET 10, "Control the spacer element tag name".)
 
-                       NOTA: la grilla principal NO debe llevar content-visibility (choca con los
-                       spacers de altura que inserta Virtualize → doble cálculo de alto → scroll
-                       inestable). Por eso la regla content-visibility en app.css excluye
-                       .trafico-grid--virtual. *@
-                    @* SpacerElement="tr": CRÍTICO porque <Virtualize> está dentro de un <tbody>.
-                       Por defecto Virtualize inserta sus spacers de altura como <div>, pero un
-                       <div> hijo directo de <tbody> es HTML inválido → el navegador lo reubica
-                       o lo ignora → el cálculo de posición del scroll se rompe (saltos/blancos).
-                       Con SpacerElement="tr" los spacers son <tr> válidos dentro de la tabla y el
-                       Intersection Observer de Virtualize mide bien. (Doc oficial .NET 10, sección
-                       "Control the spacer element tag name".) *@
+                       ⚠ LIMITACIÓN CONOCIDA, MEDIDA Y ACEPTADA (18/07/2026): con scroll RÁPIDO la
+                       grilla queda un instante en blanco (6 de 6 saltos en la medición) — el
+                       scroll le gana al round-trip de SignalR. Es arquitectural de <Virtualize>
+                       en Blazor Server.
+
+                       Se probó DOS VECES el camino contrario (render completo + content-visibility)
+                       y las dos veces se revirtió. La 2ª vez (18/07/2026) fue CON el gate de fila
+                       ya puesto y con mediciones: elimina el blanco (0/6) pero degrada la
+                       interacción — click→selección 146→689 ms, ráfaga de flechas 335→2004 ms,
+                       menú contextual 109→271 ms. Con 331 componentes, el costo no es el diff de
+                       cada fila (el gate lo evita) sino que Blazor VISITA el árbol entero en cada
+                       render del padre. Conclusión: 689 ms en el click es peor que el parpadeo.
+
+                       Mitigación vigente: filas fantasma bajo el hueco (app.css) — el blanco se
+                       lee como "cargando" en vez de "se rompió".
+
+                       Mediciones completas y qué NO volver a intentar:
+                       docs/performance/PENDIENTE_GRILLA_TRAFICO_BLANQUEO.md — leerlo ANTES de
+                       tocar esto de nuevo. *@
                     <Virtualize Items="visibles" Context="f" ItemSize="AltoFila" OverscanCount="20"
                                 SpacerElement="tr">
-                        @{
-                            var esActiva = _filaActiva == f.IdViaje;
-                        }
-                        @* class tg-row marca esto como fila de DATOS (alto fijo 22px en CSS);
-                           distingue del <tr> spacer de Virtualize, que NO la lleva. *@
-                        <tr @key="f.IdViaje"
-                            class="tg-row @EstadoCss(f.Estado) @(esActiva ? "fila-activa" : "") @(_filasCambiadas.Contains(f.IdViaje) ? "fila-flash" : "")"
-                            style="cursor:pointer;"
-                            title="Doble click: detalle del viaje · Click derecho: menú de acciones"
-                            @onclick="() => SeleccionarFilaClick(f.IdViaje)"
-                            @ondblclick="() => AbrirZoom(f.IdViaje, f.Fecha)"
-                            @oncontextmenu:preventDefault="true"
-                            @oncontextmenu="(e) => AbrirMenuContexto(e, f)">
-                            <td class="r" style="color:#9AA7BC; font-size:0.72rem;">@(_indices.GetValueOrDefault(f.IdViaje))</td>
-                            <td><span class="estado-chip estado-chip--@f.Estado.ToLowerInvariant().Replace(" ", "-")">@f.Estado</span></td>
-                            <td>@f.Fecha.ToString("dd/MM/yyyy")</td>
-                            <td class="td-bold">@f.HPre</td>
-                            <td class="td-bold">@f.HIni</td>
-                            <td class="td-bold">@f.HFin</td>
-                            <td>@f.HAvi</td>
-                            <td>@f.HCie</td>
-                            <td>@f.UPr</td>
-                            <td>@f.UCb</td>
-                            <td>@f.UAs</td>
-                            <td class="c">@f.Chq</td>
-                            <td class="c">@f.Ag</td>
-                            <td title="@f.Recorrido">@f.Recorrido</td>
-                            <td>@f.Fletero</td>
-                            <td title="@f.Chofer">@f.Chofer</td>
-                            <td>@f.Veh</td>
-                            <td class="td-bold">@f.Cliente</td>
-                            <td class="r td-bold">@f.Pax</td>
-                            <td class="c td-bold">@f.Agua</td>
-                            <td class="c">@f.Adj</td>
-                            <td class="td-bold" title="@f.Comentario">@f.Comentario</td>
-                            <td>@(string.IsNullOrWhiteSpace(f.Grupo) ? "SIN GRUPO" : f.Grupo)</td>
-                            <td>@(string.IsNullOrWhiteSpace(f.Vuelo) ? "SIN VUELO" : f.Vuelo)</td>
-                            <td>@(string.IsNullOrWhiteSpace(f.Guia) ? "SIN GUIA" : f.Guia)</td>
-                        </tr>
+                        @* Al agregar una dependencia nueva a la fila: sumarla como [Parameter] Y
+                           compararla en el ShouldRender de TraficoFilaRow — ver el aviso ahí.
+                           Si no, la celda queda desactualizada (el gate se come el render). *@
+                        <TraficoFilaRow @key="f.IdViaje"
+                                        Fila="f"
+                                        Nro="_indices.GetValueOrDefault(f.IdViaje)"
+                                        EsActiva="_filaActiva == f.IdViaje"
+                                        EsFlash="_filasCambiadas.Contains(f.IdViaje)"
+                                        OnClick="fila => SeleccionarFilaClick(fila.IdViaje)"
+                                        OnDobleClick="fila => AbrirZoom(fila.IdViaje, fila.Fecha)"
+                                        OnMenuContexto="arg => AbrirMenuContexto(arg.E, arg.Fila)"
+                                        OnEstadoClick="ToggleEstado" />
                     </Virtualize>
                 </tbody>
             </table>
@@ -499,13 +540,56 @@ else
            Va DENTRO del panel, debajo de .trafico-wrap: la tabla scrollea y esta
            barra queda fija al pie del panel, siempre visible. *@
         <div class="trafico-pie d-flex align-center flex-wrap" style="gap:14px; font-size:0.78rem; color:#5B6B82;">
+            @* La leyenda de colores es TAMBIÉN la botonera de filtro por estado (20/07/2026).
+               Semántica (decidida con el usuario): el clic SUMA/QUITA estados — se acumulan,
+               sin Ctrl. Reclic en un estado activo lo saca; sacar el último = ver todo.
+               Filtra por EstadoDisplay (el estado PINTADO, con CURSO y CHEQUEO derivados como
+               el FoxPro), NO por viaje.estado_via crudo: el botón filtra lo que el color dice. *@
             <span style="font-weight:600;">Estados:</span>
-            <span class="leyenda" style="background:#FBF3C7;">ASIGNADO</span>
-            <span class="leyenda" style="background:#F3D9F0;">CURSO</span>
-            <span class="leyenda" style="background:#E4E6EA;">FINALIZADO</span>
-            <span class="leyenda" style="background:#D4E8E3;">FACTURADO</span>
-            <span class="leyenda" style="background:#CFE9F7;">CHEQUEO</span>
-            <span style="margin-left:auto;">
+            @foreach (var est in EstadosLeyenda)
+            {
+                var on = _estadosFoco.Contains(est);
+                var cuenta = _conteoEstados.GetValueOrDefault(est);
+                var etiqueta = TraficoFilaRow.EstadoLabel(est);
+                @* Un estado sin servicios se deshabilita: filtrarlo solo llevaría a una grilla
+                   vacía. Si está enfocado NO se deshabilita, para poder sacarle el foco. *@
+                <button type="button"
+                        class="leyenda leyenda--btn @(on ? "leyenda--on" : "") @(_estadosFoco.Count > 0 && !on ? "leyenda--off" : "")"
+                        style="@EstadoLeyendaFondo(est)"
+                        disabled="@(cuenta == 0 && !on)"
+                        title="@(cuenta == 0 && !on
+                                 ? $"No hay servicios en {etiqueta}"
+                                 : on
+                                 ? $"Quitar {etiqueta} del filtro"
+                                 : _estadosFoco.Count == 0
+                                 ? $"Ver solo los servicios en {etiqueta}"
+                                 : $"Sumar {etiqueta} al filtro")"
+                        @onclick="() => ToggleEstado(est)">
+                    <span>@etiqueta</span>
+                    <span class="leyenda__count">@cuenta</span>
+                    @if (on)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Style="font-size:0.8rem;" />
+                    }
+                </button>
+            }
+            @if (_estadosFoco.Count > 0)
+            {
+                <button type="button" class="leyenda-todos" @onclick="LimpiarEstados"
+                        title="Quitar el filtro de estado y ver todos los servicios">
+                    <MudIcon Icon="@Icons.Material.Filled.Close" Style="font-size:0.85rem;" />
+                    <span>Ver todos</span>
+                </button>
+            }
+            else
+            {
+                @* Hint: sin él, que los botones se acumulen no se descubre hasta probarlo.
+                   Solo cuando NO hay filtro (ya con uno puesto, "Ver todos" ocupa el lugar). *@
+                <span class="leyenda-hint">clic para sumar o quitar estados</span>
+            }
+            @* Clase propia (no solo el margin-left): los tests leen de acá el "N de M servicios"
+               sin que el regex se coma el contador del botón de estado anterior. *@
+            <span class="trafico-pie__cuenta" style="margin-left:auto;">
                 @visibles.Count de @_filas.Count servicios
                 @if (_filtroActivo is null && _fecha is not null && EsFechaViva(DateOnly.FromDateTime(_fecha.Value)))
                 {
@@ -568,7 +652,7 @@ else
                     <tbody>
                         @foreach (var b in BusesVisibles())
                         {
-                            <tr class="@EstadoCss(b.Estado)">
+                            <tr class="@TraficoFilaRow.EstadoCss(b.Estado)">
                                 <td>@b.Fletero</td>
                                 <td class="r">@b.Interno</td>
                                 <td>@b.Chofer</td>
@@ -721,8 +805,8 @@ else
 
     // ── Navegación por teclado (↑/↓ mueven la selección; Enter abre el Zoom) ──
     // Alto de fila en px. DEBE coincidir con ItemSize de <Virtualize> y con el alto real
-    // de .tg-row en app.css (22px). Lo usa el scroll programático para ubicar la fila activa.
-    private const int AltoFila = 22;
+    // de .tg-row en app.css (20px). Lo usa el scroll programático para ubicar la fila activa.
+    private const int AltoFila = 20;
     // Contenedor scrolleable de la grilla principal; se enfoca para recibir el teclado y se
     // le calcula el scroll para mantener visible la fila activa.
     private ElementReference _gridWrap;
@@ -761,6 +845,38 @@ else
     private bool _verEmpresa = true;   // origen 'P'
     private bool _verTurismo = true;   // origen 'T'
     private bool _verNortur = true;    // mostrar servicios internos de NORTUR
+
+    // ── Filtro por ESTADO — botonera de la leyenda al pie (20/07/2026) ──────────
+    // Vacío = sin foco (se ven todos los estados). Los valores son EstadoDisplay (el estado
+    // PINTADO, con CURSO y CHEQUEO derivados en memoria como el FoxPro), NO viaje.estado_via
+    // crudo: el botón filtra exactamente lo que el color de fila está diciendo. Filtrar por el
+    // estado crudo traería las EN CURSO al apretar ASIGNADO (son ASIGNADO en la base).
+    // El foco PERSISTE al cambiar de día y al auto-refresh, igual que Emp/Tur/Nortur.
+    private readonly HashSet<string> _estadosFoco = new(StringComparer.Ordinal);
+
+    // Orden de los botones al pie. SIN ASIGNAR se agregó al migrar la leyenda a filtro: como
+    // leyenda de colores no hacía falta (fila blanca = sin color), como filtro es el estado
+    // más operativo del día.
+    private static readonly string[] EstadosLeyenda =
+        { "SIN ASIGNAR", "ASIGNADO", "CURSO", "FINALIZADO", "FACTURADO", "CHEQUEO" };
+
+    // Contador de cada botón. Se calcula sobre el conjunto filtrado por TODO menos el propio
+    // estado (Emp/Tur/Nortur + unidad + buscador) → los números siempre suman lo que se ve.
+    private Dictionary<string, int> _conteoEstados = new();
+    private int _totalSinEstado;   // filas que pasan todos los filtros MENOS el de estado
+
+    // Fondo de cada botón de la leyenda = color REAL de la fila en la grilla
+    // (.fila-estado--* en app.css). SIN ASIGNAR no tiene clase: la fila queda blanca.
+    private static string EstadoLeyendaFondo(string estado) => estado switch
+    {
+        "SIN ASIGNAR" => "background:#FFFFFF;",
+        "ASIGNADO"    => "background:#FBF3C7;",
+        "CURSO"       => "background:#F3D9F0;",
+        "FINALIZADO"  => "background:#E4E6EA;",
+        "FACTURADO"   => "background:#D4E8E3;",
+        "CHEQUEO"     => "background:#CFE9F7;",
+        _             => ""
+    };
 
     // Filtros de unidad (réplica de los combos cronogramaCbio/cronograma + botón S/C).
     // Son mutuamente excluyentes, igual que en el FoxPro (GotFocus limpia el otro combo).
@@ -822,6 +938,14 @@ else
     {
         if (firstRender)
             await JS.InvokeVoidAsync("bloquearScrollVentana", true);
+
+        // Suavizado del scroll de rueda (ver traficoSuavizarScroll en descarga.js): la rueda
+        // avanza ~30% más lento y con easing, para que el render de <Virtualize> alcance a
+        // llegar y no se vea el hueco en blanco. Se engancha en CADA render, no solo en el
+        // primero, porque la grilla vive dentro de un @if: al cargar/filtrar el contenedor se
+        // destruye y se vuelve a crear, y el listener se iría con el nodo viejo. La función
+        // JS es idempotente (si ya está enganchado, no hace nada), así que repetir no cuesta.
+        await JS.InvokeVoidAsync("traficoSuavizarScroll", ".trafico-wrap--nav", true);
     }
 
     private async Task Cargar()
@@ -936,6 +1060,8 @@ else
         // Devolver el scroll normal a la ventana al salir de la planilla. Fire-and-forget:
         // si el circuito ya se cerró, la interop falla silenciosamente (no pasa nada).
         try { _ = JS.InvokeVoidAsync("bloquearScrollVentana", false); } catch { }
+        // Soltar el listener de rueda y cortar cualquier animación de scroll en curso.
+        try { _ = JS.InvokeVoidAsync("traficoSuavizarScroll", ".trafico-wrap--nav", false); } catch { }
     }
 
     private async Task OnFechaChanged(DateTime? nueva)
@@ -962,16 +1088,24 @@ else
         await Cargar();
     }
 
-    // ── Combos de unidad: mutuamente excluyentes (réplica del GotFocus del FoxPro) ──
+    // ── Combos de unidad en CASCADA (16/07/2026): combo 1 = empresa, combo 2 = interno ──
+    // La empresa elegida achica la lista del combo 2 a SUS internos (en memoria, sin re-query)
+    // y filtra la grilla por empresa; si además se elige un interno, la grilla filtra por ese
+    // interno (más específico). Cambiar de empresa limpia el interno elegido (estándar de
+    // combos en cascada). Reemplaza la exclusión mutua del FoxPro (GotFocus).
+
+    // Internos que muestra el combo 2: los de la empresa elegida, o todos si no hay empresa.
+    private IEnumerable<string> InternosDelCombo() =>
+        string.IsNullOrEmpty(_selUPr)
+            ? _combos.Asignadas.Select(u => u.Interno)
+            : _combos.Asignadas.Where(u => u.Empresa == _selUPr).Select(u => u.Interno);
 
     private void OnUPrChanged(string? valor)
     {
         _selUPr = valor;
+        _selUCb = null;   // cambiar (o quitar) la empresa resetea el interno elegido
         if (!string.IsNullOrEmpty(valor))
-        {
-            _selUCb = null;
             _soloSinCronograma = false;
-        }
         RecalcularVisibles();
     }
 
@@ -979,10 +1113,7 @@ else
     {
         _selUCb = valor;
         if (!string.IsNullOrEmpty(valor))
-        {
-            _selUPr = null;
-            _soloSinCronograma = false;
-        }
+            _soloSinCronograma = false;   // la empresa (_selUPr) se CONSERVA: sigue guiando la lista
         RecalcularVisibles();
     }
 
@@ -1058,25 +1189,36 @@ else
         return (_busesOrdenAsc ? _buses.OrderBy(clave) : _buses.OrderByDescending(clave)).ToList();
     }
 
-    // Clase CSS de fila según estado — mismo código de color que grid_color_viaje /
-    // grid_color_vehiculo (funcion.prg), pero con la paleta desaturada "Ops Densa"
-    // (tinte de fondo + barra de acento a la izquierda, definidos en app.css).
-    private static string EstadoCss(string estado) => estado switch
-    {
-        "ASIGNADO"   => "fila-estado--asignado",
-        "CURSO"      => "fila-estado--curso",
-        "FINALIZADO" => "fila-estado--finalizado",
-        "FACTURADO"  => "fila-estado--facturado",
-        "CHEQUEO"    => "fila-estado--chequeo",
-        _            => ""    // SIN ASIGNAR y otros: fila blanca
-    };
+    // Los helpers de presentación de fila (EstadoCss / EstadoLabel / PartirRecorrido) viven
+    // como public static en Components/Shared/TraficoFilaRow.razor — ahí es donde se usan en
+    // el caso principal. La grilla de cancelados y el panel Buses los reusan desde acá.
+
 
     // Recalcula los conjuntos filtrados y los guarda en los campos memoizados.
     // Llamar SOLO cuando cambian los datos (_filas/_cancelados) o un filtro
     // (Emp/Tur/Nortur, combos de unidad, S/C, buscador, vista cancelados).
     private void RecalcularVisibles()
     {
-        _visibles = FilasVisibles();
+        // 1) Conjunto base: TODOS los filtros menos el de estado. Alimenta los contadores de
+        //    la botonera del pie (así "SIN ASIG 2 + ... + FACT 41" suma lo que muestra la grilla).
+        var baseSinEstado = FilasVisibles();
+        _totalSinEstado = baseSinEstado.Count;
+
+        _conteoEstados = new Dictionary<string, int>(EstadosLeyenda.Length, StringComparer.Ordinal);
+        foreach (var e in EstadosLeyenda) _conteoEstados[e] = 0;
+        foreach (var f in baseSinEstado)
+        {
+            // Un estado fuera de la leyenda (p. ej. CANCELADO, que vive en la vista Cxl) no
+            // rompe nada: simplemente no tiene botón y no se cuenta.
+            if (_conteoEstados.TryGetValue(f.EstadoDisplay, out var n))
+                _conteoEstados[f.EstadoDisplay] = n + 1;
+        }
+
+        // 2) Foco por estado (en memoria, sin re-query).
+        _visibles = _estadosFoco.Count == 0
+            ? baseSinEstado
+            : baseSinEstado.Where(f => _estadosFoco.Contains(f.EstadoDisplay)).ToList();
+
         _canceladosVisibles = CanceladosVisibles();
 
         // Nº de orden 1-based por IdViaje (la grilla lo lee O(1) dentro de <Virtualize>).
@@ -1085,6 +1227,28 @@ else
             _indices[_visibles[i].IdViaje] = i + 1;
     }
 
+    // ── Botonera de estados de la leyenda (pie del panel) y chip de estado de cada fila ──
+    // Semántica acordada con el usuario (20/07/2026, ajustada el mismo día):
+    // el clic simple SUMA/QUITA — los estados se acumulan sin necesidad de Ctrl. Empezando de
+    // "sin filtro", el 1er clic deja solo ese estado; el 2º clic en otro botón suma el segundo.
+    // Volver a clickear un estado activo lo saca; si era el último, se ve todo de nuevo.
+    // (La versión anterior era foco exclusivo con Ctrl+clic para sumar: el Ctrl no se descubría.)
+    private void ToggleEstado(string estado)
+    {
+        // Remove devuelve false si no estaba → en ese caso se agrega.
+        if (!_estadosFoco.Remove(estado)) _estadosFoco.Add(estado);
+        RecalcularVisibles();
+    }
+
+    private void LimpiarEstados()
+    {
+        if (_estadosFoco.Count == 0) return;
+        _estadosFoco.Clear();
+        RecalcularVisibles();
+    }
+
+    // Filas que pasan todos los filtros MENOS el de estado (ese se aplica en
+    // RecalcularVisibles, después de contar cuántas hay de cada estado).
     private List<PlanillaTraficoRow> FilasVisibles()
     {
         IEnumerable<PlanillaTraficoRow> q = _filas;
@@ -1106,12 +1270,18 @@ else
         if (!_verNortur)
             q = q.Where(f => !f.EsNortur);
 
-        // ── Filtro de unidad (réplica de los filtros CRONOGRAMA / _CRONOGRAMACBIO) ──
-        // S/C y los dos combos son excluyentes entre sí, igual que en el FoxPro.
+        // ── Filtro de unidad (cascada empresa → interno, 16/07/2026) ──
+        // S/C excluye a los combos (como en el FoxPro). Entre los combos: el INTERNO (combo 2)
+        // manda cuando está elegido — ya es un subconjunto de la empresa por la cascada del
+        // combo —; si no, filtra la EMPRESA (combo 1).
         if (_soloSinCronograma)
             q = q.Where(f => f.UCb == "S/C");
         else if (!string.IsNullOrEmpty(_selUCb))
             q = q.Where(f => f.UCb == _selUCb);
+        else if (_selUPr == "NORTUR")
+            // "NORTUR" = la empresa propia = todas sus unidades NT#### juntas (el combo muestra
+            // un único ítem NORTUR en vez de las 60+ unidades; ver GetCombosUnidadesTraficoAsync).
+            q = q.Where(f => f.UPr != null && f.UPr.StartsWith("NT", StringComparison.OrdinalIgnoreCase));
         else if (!string.IsNullOrEmpty(_selUPr))
             q = q.Where(f => f.UPr == _selUPr);
 

@@ -289,6 +289,12 @@ Las 6 bandas: `00:00-00:01`, `00:02-06:29`, `06:30-08:29`, `08:30-14:00`, `14:01
    string SIEMPRE con `Pooling=True`. El síntoma "lento solo con muchos registros" es render
    de Blazor, no SQL. Patrón completo y trampas: `docs/performance/PERFORMANCE_GRILLAS_Y_CONEXION.md`.
    Referencia viva ya optimizada: `PlanillaTrafico.razor`.
+   ⚠ **Pendiente abierto (18/07/2026):** con `<Virtualize>` la grilla de Tráfico **queda en
+   blanco un instante al scrollear rápido**. Se investigó a fondo y se probó el fix (render
+   completo + `content-visibility`): elimina el blanco, pero hacía sentir lentos el Zoom del
+   Viaje y el menú contextual, así que **se revirtió y sigue vigente `<Virtualize>`**. Causa,
+   mediciones e hipótesis para retomarlo: `docs/performance/PENDIENTE_GRILLA_TRAFICO_BLANQUEO.md`
+   — leerlo ANTES de volver a tocar la virtualización de esa grilla.
 7. **Todo informe analítico nuevo lleva el patrón dashboard completo (regla, 03/07/2026,
    pedida y validada por el usuario):** barra de filtros compacta, KPIs flex, gráficos
    ApexCharts con colores unificados por entidad, tabla pivote con drill-down, Excel
@@ -397,6 +403,14 @@ cliente×mes con drill-down, Excel 4 hojas (incl. Viajes con motivo de cancelaci
 **cross-filter 2D cliente AND tipo**. Trampas de réplica: `id_motivo` e `interno` vienen
 NULL donde el DBF tenía 0 → `ISNULL(...,0)`. Validado al dígito contra SQL (4.632/98/65 +
 celda GATE1×03/2026=335); smoke test en la suite.
+
+**+ Control de tendencia mes-a-mes (15/07/2026, pedido y validado por el usuario):** en el
+pivote cliente×mes se agregó (1) selector **"Comparar"** (vs mes anterior / vs N meses atrás
++ combo Salto / vs año pasado), (2) switch **"Variación"** que pone toda la grilla en modo Δ
+(verde sube / rojo baja) y (3) columna **"Tendencia"** fija (Δ del último mes + %+ sparkline
+SVG). Todo **en memoria** sobre `_pivMap`, sin re-query ni cambios en el service. El interanual
+solo tiene números si el rango abarca el año previo (el usuario amplía el "Desde"). Patrón
+reutilizable para cualquier pivote entidad×mes: skill `blazor-nortur` § Comparación mes-a-mes.
 
 ### ✅ Informes 4 y 5: "Viajes por chofer" y "Km Unidades vs Servicios" — HECHO (04/07/2026)
 

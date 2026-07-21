@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { login, irA } from './helpers';
+import { login, irA, irAInteractivo } from './helpers';
 
 /**
  * Smoke tests de las pantallas clave migradas.
@@ -32,7 +32,10 @@ test('Planilla de Tráfico — carga grilla, KPIs y scroll', async ({ page }) =>
 
   // La grilla virtualizada renderiza filas de datos (clase .tg-row que pusimos
   // junto al SpacerElement="tr"). Esto verifica que <Virtualize> pintó algo.
-  const filas = page.locator('table.trafico-grid--virtual tbody tr.tg-row');
+  // Se ubica por el wrapper .trafico-wrap--nav (y no por la clase --virtual de la
+  // <table>) para que el selector siga sirviendo si la grilla cambia de estrategia
+  // de virtualización — ver docs/performance/PENDIENTE_GRILLA_TRAFICO_BLANQUEO.md.
+  const filas = page.locator('.trafico-wrap--nav tbody tr.tg-row');
   await expect(filas.first()).toBeVisible({ timeout: 15_000 });
 
   // Smoke del scroll: el contenedor scrollea sin tirar error JS (el pageerror
@@ -41,6 +44,60 @@ test('Planilla de Tráfico — carga grilla, KPIs y scroll', async ({ page }) =>
   await wrap.evaluate(el => el.scrollBy(0, 600));
   await page.waitForTimeout(300);
   await expect(filas.first()).toBeVisible();
+});
+
+test('Planilla de Tráfico — la leyenda de estados filtra la grilla', async ({ page }) => {
+  await irAInteractivo(page, '/planilla-trafico');
+
+  const botones = page.locator('.leyenda--btn');
+  const pie = page.locator('.trafico-pie__cuenta');
+  await expect(botones).toHaveCount(6);   // SIN ASIGNAR · ASIGNADO · EN CURSO · FINALIZADO · FACTURADO · CHEQUEO
+
+  // INVARIANTE: los contadores de la botonera suman EXACTO lo que muestra la grilla.
+  // Se calculan sobre el conjunto filtrado por todo menos el estado (ver RecalcularVisibles),
+  // así que si alguien rompe esa cuenta, este test lo caza en cualquier día.
+  const textos = await botones.allTextContents();
+  const suma = textos.reduce((acc, t) => acc + Number(t.match(/(\d+)\s*$/)?.[1] ?? 0), 0);
+  const total = Number((await pie.textContent())?.match(/de (\d+) servicios/)?.[1] ?? -1);
+  expect(suma).toBe(total);
+
+  // Estados con servicios, de mayor a menor.
+  const conCarga = textos
+    .map((t, i) => ({ i, n: Number(t.match(/(\d+)\s*$/)?.[1] ?? 0), nombre: t.replace(/\s*\d+\s*$/, '').trim() }))
+    .filter(x => x.n > 0)
+    .sort((a, b) => b.n - a.n);
+  test.skip(conCarga.length === 0, 'El día cargado no tiene servicios: nada que filtrar.');
+
+  // 1er clic → la grilla queda SOLO con ese estado.
+  const [uno, dos] = conCarga;
+  await botones.nth(uno.i).click();
+  await page.waitForTimeout(600);
+  await expect(page.locator('.estado-foco')).toBeVisible();
+  const estados = await page.locator('.trafico-grid tbody .estado-chip').evaluateAll(
+    els => Array.from(new Set(els.map(e => e.textContent?.trim() ?? ''))));
+  expect(estados).toEqual([uno.nombre]);
+  expect(Number((await pie.textContent())?.match(/^(\d+) de/)?.[1] ?? -1)).toBe(uno.n);
+
+  // 2º clic en OTRO estado → se SUMA (sin Ctrl). Es la multi-selección que pidió el usuario.
+  if (dos) {
+    await botones.nth(dos.i).click();
+    await page.waitForTimeout(600);
+    expect(Number((await pie.textContent())?.match(/^(\d+) de/)?.[1] ?? -1)).toBe(uno.n + dos.n);
+    const estados2 = await page.locator('.trafico-grid tbody .estado-chip').evaluateAll(
+      els => Array.from(new Set(els.map(e => e.textContent?.trim() ?? ''))));
+    expect(estados2.sort()).toEqual([uno.nombre, dos.nombre].sort());
+
+    // Reclic en el primero → lo SACA, queda solo el segundo.
+    await botones.nth(uno.i).click();
+    await page.waitForTimeout(600);
+    expect(Number((await pie.textContent())?.match(/^(\d+) de/)?.[1] ?? -1)).toBe(dos.n);
+  }
+
+  // Quitar el filtro desde el chip → vuelve el total del día.
+  await page.locator('.estado-foco__quitar').click();
+  await page.waitForTimeout(600);
+  await expect(page.locator('.estado-foco')).toHaveCount(0);
+  expect(Number((await pie.textContent())?.match(/^(\d+) de/)?.[1] ?? -1)).toBe(total);
 });
 
 test('Reservas por fecha y servicio — levanta', async ({ page }) => {

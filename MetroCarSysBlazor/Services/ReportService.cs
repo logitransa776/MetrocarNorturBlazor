@@ -293,6 +293,10 @@ public partial class ReportService
             v.chequeo                                            AS Chq,
             v.chequeo_ag                                         AS Ag,
             LTRIM(RTRIM(v.d_destino)) + ' a ' + LTRIM(RTRIM(v.h_destino)) AS Recorrido,
+            -- Largo del tramo origen (para que la UI parta "DESDE a HASTA" sin ambigüedad:
+            -- hay tramos con ' a ' adentro). OJO: LEN() ignora espacios finales → RTRIM extra
+            -- no hace falta, pero el LTRIM sí (LEN cuenta los del inicio).
+            LEN(LTRIM(v.d_destino))                              AS RecorridoDesdeLen,
             v.fletero                                            AS Fletero,
             v.nombre_cho                                         AS Chofer,
             LEFT(LTRIM(RTRIM(v.id_vehicu2)), 4)                  AS Veh,
@@ -354,6 +358,7 @@ public partial class ReportService
             Chq: N("Chq"),
             Ag: N("Ag"),
             Recorrido: S("Recorrido"),
+            RecorridoDesdeLen: N("RecorridoDesdeLen") ?? 0,
             Fletero: S("Fletero"),
             Chofer: S("Chofer"),
             Veh: S("Veh"),
@@ -1031,8 +1036,12 @@ public partial class ReportService
             await conn.OpenAsync();
 
             // FoxPro: Empty(a.f_delete) → en la réplica el date vacío llega NULL o muy antiguo.
+            // Se trae también la EMPRESA de cada interno (fletero.id_contrat — coincide con la
+            // etiqueta del combo U/Programada, incluso para NORTUR cuyo id_contrat es 'NORTUR')
+            // para la cascada empresa → internos entre los dos combos (pedido 16/07/2026).
             const string sqlAsignadas = """
-                SELECT LTRIM(RTRIM(a.cronograma)) AS cron
+                SELECT LTRIM(RTRIM(a.cronograma)) AS cron,
+                       LTRIM(RTRIM(b.id_contrat)) AS empresa
                 FROM vehiculo a
                 INNER JOIN fletero b ON a.fletero = b.id_contrat
                 WHERE (a.f_delete IS NULL OR a.f_delete < '1901-01-01')
@@ -1053,7 +1062,7 @@ public partial class ReportService
                 ORDER BY b.orden, cron
                 """;
 
-            var asignadas = new List<string>();
+            var asignadas = new List<UnidadAsignadaCombo>();
             var programadas = new List<string>();
 
             using (var cmd = conn.CreateCommand())
@@ -1061,7 +1070,10 @@ public partial class ReportService
                 cmd.CommandText = sqlAsignadas;
                 using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
-                    if (!reader.IsDBNull(0)) asignadas.Add(reader.GetString(0));
+                    if (!reader.IsDBNull(0))
+                        asignadas.Add(new UnidadAsignadaCombo(
+                            reader.GetString(0),
+                            reader.IsDBNull(1) ? "" : reader.GetString(1)));
             }
             using (var cmd = conn.CreateCommand())
             {
@@ -1072,9 +1084,23 @@ public partial class ReportService
             }
 
             // El combo no admite vacíos ni repetidos (el FoxPro los mostraba tal cual).
+            // U/Programada (pedido del usuario, 15/07/2026): se ocultan las unidades de la flota
+            // NORTUR (prefijo "NT") y TODO el combo va ordenado alfabéticamente ascendente (no por
+            // b.orden). Como NORTUR tiene diagrama=1, la query lo expande en sus unidades NT####
+            // (que acabamos de ocultar); por eso se re-agrega la empresa como un ÚNICO ítem
+            // "NORTUR", que queda en su lugar alfabético (entre MVTRAVEL y NUEVOS RUMBOS).
+            // U/Asignada se deja como estaba.
+            var programadasCombo = programadas
+                .Where(c => c.Length > 0)
+                .Where(c => !c.StartsWith("NT", StringComparison.OrdinalIgnoreCase))
+                .Append("NORTUR")
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
             return new CombosUnidadesTrafico(
-                programadas.Where(c => c.Length > 0).Distinct().ToList(),
-                asignadas.Where(c => c.Length > 0).Distinct().ToList());
+                programadasCombo,
+                asignadas.Where(c => c.Interno.Length > 0).Distinct().ToList());
         }) ?? new CombosUnidadesTrafico(new(), new());
     }
 
@@ -1203,6 +1229,10 @@ public partial class ReportService
                     v.interno                                            AS UAs,
                     v.chequeo                                            AS Chq,
                     LTRIM(RTRIM(v.d_destino)) + ' a ' + LTRIM(RTRIM(v.h_destino)) AS Recorrido,
+                    -- Largo del tramo origen — mismo criterio que TraficoProjection: la UI
+                    -- parte "DESDE a HASTA" por índice, no buscando ' a ' (hay tramos con
+                    -- ' a ' adentro). LEN ignora espacios finales; el LTRIM sí hace falta.
+                    LEN(LTRIM(v.d_destino))                              AS RecorridoDesdeLen,
                     COALESCE(m.motivo, '')                               AS Motivo,
                     LEFT(LTRIM(RTRIM(v.id_vehicu2)), 4)                  AS Veh,
                     v.id_cliente                                         AS Cliente,
@@ -1244,6 +1274,7 @@ public partial class ReportService
                     UAs: N(reader, "UAs"),
                     Chq: N(reader, "Chq"),
                     Recorrido: S(reader, "Recorrido"),
+                    RecorridoDesdeLen: N(reader, "RecorridoDesdeLen") ?? 0,
                     Motivo: S(reader, "Motivo"),
                     Veh: S(reader, "Veh"),
                     Cliente: S(reader, "Cliente"),
@@ -1297,6 +1328,7 @@ public partial class ReportService
                     v.f_pedido                                  AS FPedido,
                     v.f_reserva                                 AS FReserva,
                     v.estado_via                                AS Estado,
+                    v.chequeo                                   AS Chequeo,
                     v.origen                                    AS Origen,
                     v.hs_present                                AS HsPresent,
                     v.hs_inicio                                 AS HsInicio,
@@ -1386,6 +1418,7 @@ public partial class ReportService
                 FPedido = DO("FPedido"),
                 FReserva = DO("FReserva"),
                 Estado = S("Estado"),
+                Chequeo = N("Chequeo"),
                 // origen='P' → "Transporte Personal"; cualquier otro → "Servicio Especial" (lógica Init() del Fox)
                 TipoServicio = S("Origen") == "P" ? "Transporte Personal" : "Servicio Especial",
                 HsInicio = hsInicio,
@@ -4669,6 +4702,12 @@ public record PlanillaTraficoRow(
     int? Chq,
     int? Ag,
     string Recorrido,
+    // Largo del tramo ORIGEN dentro de Recorrido ("DESDE a HASTA"). Permite a la UI
+    // partir el recorrido en el ' a ' correcto para pintarlo como "DESDE ➜ HASTA":
+    // los datos reales tienen ' a ' adentro de los tramos ("VER A CIRUJANO",
+    // "...A LAS 10 HS"), así que parsear el string en la UI sería ambiguo. 0 = sin
+    // tramo HASTA (Recorrido se muestra tal cual, sin flecha).
+    int RecorridoDesdeLen,
     string Fletero,
     string Chofer,
     string Veh,
@@ -4705,7 +4744,24 @@ public record PlanillaTraficoRow(
     // "Ver Adjunto". "Ver Adicionales" no necesita campo nuevo: filtra viaje_adicional por IdViaje.
     string IdOperador,
     string GpsCod,
-    string Adjunto);
+    string Adjunto)
+{
+    /// <summary>
+    /// Estado tal como lo PINTA la grilla, no el que guarda la base. Réplica exacta de
+    /// arma_grid (trafico2.scx, líneas 356-368): CURSO y CHEQUEO NO existen como dato en
+    /// viaje.estado_via — el FoxPro los deriva en memoria al armar el grid con un Replace
+    /// sobre el cursor local. Reglas fieles:
+    ///   • ASIGNADO   + hs_inicio &lt;= ahora  → CURSO   (el servicio ya arrancó)
+    ///   • SIN ASIGNAR + chequeo &gt; 0        → CHEQUEO (unidad chequeada, aún sin asignar)
+    /// El resto de estados se muestra tal cual. Usar SOLO para display (columna Estado y
+    /// color de fila de la grilla de servicios). Los filtros server-side, el Excel y el
+    /// Zoom siguen usando <see cref="Estado"/> crudo, que es lo que dice la tabla.
+    /// </summary>
+    public string EstadoDisplay =>
+        Estado == "ASIGNADO"   && HsInicio is { } hi && hi <= DateTime.Now ? "CURSO"
+      : Estado == "SIN ASIGNAR" && (Chq ?? 0) > 0                          ? "CHEQUEO"
+      : Estado;
+}
 
 /// <summary>
 /// Tipo de filtro server-side de la planilla de Tráfico (rama "Aplicar Filtros" del menú
@@ -4756,8 +4812,13 @@ public record InternoOpcion(string Codigo, long Interno, string Dominio);
 /// <summary>
 /// Listas para los combos de unidades de la pantalla de Tráfico (trafico2.scx):
 /// Programadas = "interno por empresas" (filtra U/Pr), Asignadas = "todos los internos" (filtra U/Cb).
+/// Cada unidad asignada lleva su Empresa (fletero.id_contrat) para la cascada empresa → internos:
+/// al elegir una empresa en el combo 1, el combo 2 se achica a sus internos (en memoria).
 /// </summary>
-public record CombosUnidadesTrafico(List<string> Programadas, List<string> Asignadas);
+public record CombosUnidadesTrafico(List<string> Programadas, List<UnidadAsignadaCombo> Asignadas);
+
+/// <summary>Ítem del combo U/Asignada: el interno (vehiculo.cronograma) + su empresa.</summary>
+public record UnidadAsignadaCombo(string Interno, string Empresa);
 
 /// <summary>Token de versión para el auto-refresh de Tráfico (detección de cambios).</summary>
 public record TraficoVersion(int CantViajes, DateTime? UltimoCambioViaje, DateTime? UltimoCambioVehiculo);
@@ -4800,6 +4861,8 @@ public record TraficoCanceladoRow(
     int? UAs,
     int? Chq,
     string Recorrido,
+    // Largo del tramo origen dentro de Recorrido — ver PlanillaTraficoRow.RecorridoDesdeLen.
+    int RecorridoDesdeLen,
     string Motivo,
     string Veh,
     string Cliente,
@@ -4846,6 +4909,7 @@ public class DetalleViajeDto
     public DateOnly? FPedido { get; set; }
     public DateOnly? FReserva { get; set; }
     public string Estado { get; set; } = "";
+    public int? Chequeo { get; set; }                 // viaje.chequeo (para derivar CHEQUEO en display)
     public string TipoServicio { get; set; } = "";   // Transporte Personal / Servicio Especial
     public int? Voucher { get; set; }
 
@@ -4922,6 +4986,15 @@ public class DetalleViajeDto
 
     public bool TieneAdjunto => !string.IsNullOrWhiteSpace(Adjunto);
     public bool TieneGrupo => !string.IsNullOrWhiteSpace(Grupo) && Grupo != "SIN GRUPO";
+
+    /// <summary>Estado tal como lo pinta la grilla de Tráfico (CURSO/CHEQUEO derivados en
+    /// memoria como el FoxPro), para que el Zoom coincida con la fila que se clickeó. Misma
+    /// regla que PlanillaTraficoRow.EstadoDisplay: ASIGNADO+hs_inicio&lt;=ahora→CURSO;
+    /// SIN ASIGNAR+chequeo&gt;0→CHEQUEO. No toca la base (v.estado_via sigue crudo).</summary>
+    public string EstadoDisplay =>
+        Estado == "ASIGNADO"   && HsInicio is { } hi && hi <= DateTime.Now ? "CURSO"
+      : Estado == "SIN ASIGNAR" && (Chequeo ?? 0) > 0                       ? "CHEQUEO"
+      : Estado;
 }
 
 // ── Facturación: Resumen de Liquidaciones (liquidacion_cliente.scx) ──

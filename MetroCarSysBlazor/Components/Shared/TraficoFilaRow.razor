@@ -1,0 +1,165 @@
+@*  Fila de la grilla de Tráfico como COMPONENTE con render gateado.
+
+    POR QUÉ EXISTE (18/07/2026 — nivel 2 del plan de performance):
+    Cada interacción del padre (click de fila, tecla ↑/↓, abrir el menú contextual,
+    abrir el Zoom) dispara un re-render de PlanillaTrafico. Ese re-render vuelve a
+    invocar el ChildContent de <Virtualize>, que re-renderiza TODAS sus filas
+    materializadas (~25 del viewport + 2×OverscanCount ≈ 70). Cada fila son 25 celdas
+    → ~1.750 diffs de celda por interacción, casi todos inútiles: la fila que cambió
+    es una sola.
+
+    Con la fila como componente, ShouldRender() devuelve false salvo que haya cambiado
+    algo PROPIO de esa fila → Blazor se saltea el diff de sus 25 celdas. Solo la fila
+    que realmente cambió (la que se seleccionó, la que hizo flash) se vuelve a pintar.
+
+    ⚠ TRAMPA DEL PATRÓN: si mañana una celda pasa a depender de estado externo que NO
+    está en los parámetros comparados abajo, esa celda queda DESACTUALIZADA (el gate se
+    come el render). Al agregar una dependencia nueva: sumarla como [Parameter] Y
+    compararla en ShouldRender(). Las dos cosas, siempre.
+
+    Doc de fondo: docs/performance/PENDIENTE_GRILLA_TRAFICO_BLANQUEO.md
+*@
+
+<tr class="tg-row @EstadoCss(Fila.EstadoDisplay) @(EsActiva ? "fila-activa" : "") @(EsFlash ? "fila-flash" : "")"
+    style="cursor:pointer;"
+    title="Doble click: detalle del viaje · Click derecho: menú de acciones"
+    @onclick="() => OnClick.InvokeAsync(Fila)"
+    @ondblclick="() => OnDobleClick.InvokeAsync(Fila)"
+    @oncontextmenu:preventDefault="true"
+    @oncontextmenu="(e) => OnMenuContexto.InvokeAsync((e, Fila))">
+    <td class="r" style="color:#9AA7BC; font-size:0.72rem;">@Nro</td>
+    @* title propio en la celda: pisa el title genérico del <tr> para mostrar el nº de reserva.
+       EstadoDisplay = estado pintado (CURSO/CHEQUEO derivados en memoria como el FoxPro), no el crudo.
+       El chip es clickeable: filtra la grilla por ese estado (misma acción que el botón del pie).
+       stopPropagation en click Y dblclick para no disparar además la selección de fila ni el Zoom
+       —el resto de la fila (24 columnas) conserva intacto doble clic → Zoom y clic derecho → menú. *@
+    <td title="Reserva Nº @Fila.IdViaje">
+        <span class="estado-chip estado-chip--@Fila.EstadoDisplay.ToLowerInvariant().Replace(" ", "-") estado-chip--filtra"
+              title="Reserva Nº @Fila.IdViaje · Clic: filtrar la grilla por @EstadoLabel(Fila.EstadoDisplay)"
+              @onclick="() => OnEstadoClick.InvokeAsync(Fila.EstadoDisplay)"
+              @onclick:stopPropagation="true"
+              @ondblclick:stopPropagation="true">@EstadoLabel(Fila.EstadoDisplay)</span>
+    </td>
+    <td>@Fila.Fecha.ToString("dd/MM/yyyy")</td>
+    <td class="td-bold">@Fila.HPre</td>
+    <td class="td-bold">@Fila.HIni</td>
+    <td class="td-bold">@Fila.HFin</td>
+    <td>@Fila.HAvi</td>
+    <td>@Fila.HCie</td>
+    <td>@Fila.UPr</td>
+    <td>@Fila.UCb</td>
+    <td>@Fila.UAs</td>
+    <td class="c">@Fila.Chq</td>
+    <td class="c">@Fila.Ag</td>
+    @* Recorrido "DESDE ➜ HASTA": la flecha naranja reemplaza el ' a '
+       solo en pantalla (el tooltip conserva el texto original). *@
+    <td class="td-bold" title="@Fila.Recorrido">
+        @if (PartirRecorrido(Fila.Recorrido, Fila.RecorridoDesdeLen) is { } rec)
+        {
+            @rec.Desde<span class="rec-flecha"> ➜ </span>@rec.Hasta
+        }
+        else
+        {
+            @Fila.Recorrido
+        }
+    </td>
+    <td>@Fila.Fletero</td>
+    <td title="@Fila.Chofer">@Fila.Chofer</td>
+    <td>@Fila.Veh</td>
+    <td class="td-bold">@Fila.Cliente</td>
+    <td class="r td-bold">@Fila.Pax</td>
+    <td class="c td-bold">@Fila.Agua</td>
+    <td class="c">@Fila.Adj</td>
+    <td class="td-bold" title="@Fila.Comentario">@Fila.Comentario</td>
+    <td>@(string.IsNullOrWhiteSpace(Fila.Grupo) ? "SIN GRUPO" : Fila.Grupo)</td>
+    <td>@(string.IsNullOrWhiteSpace(Fila.Vuelo) ? "SIN VUELO" : Fila.Vuelo)</td>
+    <td>@(string.IsNullOrWhiteSpace(Fila.Guia) ? "SIN GUIA" : Fila.Guia)</td>
+</tr>
+
+@code {
+    [Parameter, EditorRequired] public PlanillaTraficoRow Fila { get; set; } = default!;
+
+    /// <summary>Nº de orden 1-based del servicio en el día (columna #).</summary>
+    [Parameter] public int Nro { get; set; }
+
+    /// <summary>Fila seleccionada por click o por teclado.</summary>
+    [Parameter] public bool EsActiva { get; set; }
+
+    /// <summary>Fila que cambió en el último refresh (animación de flash).</summary>
+    [Parameter] public bool EsFlash { get; set; }
+
+    [Parameter] public EventCallback<PlanillaTraficoRow> OnClick { get; set; }
+    [Parameter] public EventCallback<PlanillaTraficoRow> OnDobleClick { get; set; }
+    [Parameter] public EventCallback<(MouseEventArgs E, PlanillaTraficoRow Fila)> OnMenuContexto { get; set; }
+
+    /// <summary>
+    /// Clic en el chip de la columna Estado → suma/quita ese estado del filtro de la grilla
+    /// (mismo handler que la botonera del pie). Va el estado PINTADO (EstadoDisplay), que es
+    /// el que filtra. No entra en el gate de ShouldRender: es un EventCallback (ver nota abajo).
+    /// </summary>
+    [Parameter] public EventCallback<string> OnEstadoClick { get; set; }
+
+    // ── Gate de render ────────────────────────────────────────────────────────
+    // Última combinación de parámetros efectivamente PINTADA. Si los parámetros que
+    // llegan son los mismos, no hay nada nuevo que mostrar → se saltea el render.
+    // Los EventCallback NO se comparan a propósito: el padre los recrea en cada render
+    // (son lambdas), así que compararlos haría que el gate nunca cierre. Que cambien de
+    // identidad no afecta al usuario — el callback vigente se invoca igual.
+    private PlanillaTraficoRow? _pintadaFila;
+    private int _pintadaNro;
+    private bool _pintadaActiva;
+    private bool _pintadaFlash;
+
+    protected override void OnInitialized() => RegistrarPintada();
+
+    protected override bool ShouldRender()
+    {
+        if (ReferenceEquals(Fila, _pintadaFila)
+            && Nro == _pintadaNro
+            && EsActiva == _pintadaActiva
+            && EsFlash == _pintadaFlash)
+            return false;
+
+        RegistrarPintada();
+        return true;
+    }
+
+    private void RegistrarPintada()
+    {
+        _pintadaFila = Fila;
+        _pintadaNro = Nro;
+        _pintadaActiva = EsActiva;
+        _pintadaFlash = EsFlash;
+    }
+
+    // ── Helpers de presentación (public static: los reusan la grilla de cancelados
+    //    y el panel Buses en PlanillaTrafico.razor, que NO usan este componente) ──
+
+    /// <summary>Clase CSS de color de fondo según el estado pintado del viaje.</summary>
+    public static string EstadoCss(string estado) => estado switch
+    {
+        "ASIGNADO"   => "fila-estado--asignado",
+        "CURSO"      => "fila-estado--curso",
+        "FINALIZADO" => "fila-estado--finalizado",
+        "FACTURADO"  => "fila-estado--facturado",
+        "CHEQUEO"    => "fila-estado--chequeo",
+        _            => ""    // SIN ASIGNAR y otros: fila blanca
+    };
+
+    /// <summary>Texto visible del estado (CURSO se muestra como "EN CURSO", igual que el FoxPro).</summary>
+    public static string EstadoLabel(string estado) => estado == "CURSO" ? "EN CURSO" : estado;
+
+    // Parte "DESDE a HASTA" en (desde, hasta) para pintar el separador como flecha ➜
+    // (solo presentación: el dato, la búsqueda, el tooltip y el Excel siguen con ' a ').
+    // NO busca ' a ' en el string (hay tramos reales con ' a ' adentro: "VER A CIRUJANO",
+    // "...A LAS 10 HS"): usa el largo del tramo origen que calcula el SQL (desdeLen) y
+    // verifica defensivamente que en esa posición esté el ' a ' esperado — si no (origen
+    // vacío + Trim del mapper corrió el índice, o sin tramo hasta), devuelve null y la
+    // celda muestra el recorrido tal cual, sin flecha.
+    public static (string Desde, string Hasta)? PartirRecorrido(string recorrido, int desdeLen)
+    {
+        if (desdeLen <= 0 || desdeLen + 3 > recorrido.Length) return null;
+        if (recorrido.Substring(desdeLen, 3) != " a ") return null;
+        return (recorrido[..desdeLen], recorrido[(desdeLen + 3)..]);
+    }
+}

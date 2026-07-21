@@ -44,6 +44,15 @@ window.traficoScrollFila = (selectorWrap, indice, itemSize) => {
     const wrap = document.querySelector(selectorWrap);
     if (!wrap || indice < 0) return;
 
+    // Si venía una animación de rueda en vuelo (traficoSuavizarScroll), cortarla: el
+    // scroll por teclado manda y debe ser inmediato. Sin esto, la animación seguiría
+    // corriendo hacia su destino viejo y pisaría el salto que hacemos acá abajo.
+    if (wrap._traficoRaf) {
+        cancelAnimationFrame(wrap._traficoRaf);
+        wrap._traficoRaf = null;
+        wrap._traficoDestino = null;
+    }
+
     const filaTop = indice * itemSize;
     const filaBottom = filaTop + itemSize;
     const vistaTop = wrap.scrollTop;
@@ -57,6 +66,116 @@ window.traficoScrollFila = (selectorWrap, indice, itemSize) => {
         wrap.scrollTop = filaBottom - wrap.clientHeight;
     }
     // Si ya estaba visible, no se toca el scroll (evita saltos innecesarios).
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Suavizado del scroll de rueda en la grilla de Tráfico.
+//
+// POR QUÉ: la grilla usa <Virtualize>. Al scrollear, el navegador ya movió el scroll
+// pero las filas nuevas todavía no existen en el DOM: hay que ir y volver por SignalR
+// para que el servidor renderice el tramo. Si el scroll avanza más rápido que ese
+// round-trip, se ve el hueco en blanco. No es un bug de pintado, es una CARRERA.
+//
+// QUÉ HACE: intercepta la rueda, aplica el delta multiplicado por FACTOR (más lento)
+// y lo anima con requestAnimationFrame en vez de saltar de golpe. Las dos cosas ayudan:
+//   · más lento  → el round-trip tiene tiempo de ganar la carrera;
+//   · continuo   → el overscan de <Virtualize> (20 filas = 400px) absorbe el movimiento
+//                  gradual mucho mejor que un salto seco de 100px por notch.
+//
+// COSTO CERO PARA EL SERVIDOR: es 100% cliente. No toca Blazor ni SignalR, así que
+// NO puede degradar el click, el Zoom del Viaje ni el menú contextual — que es
+// exactamente donde fracasaron los dos intentos anteriores (ver
+// docs/performance/PENDIENTE_GRILLA_TRAFICO_BLANQUEO.md).
+//
+// TRACKPAD: no se toca. El trackpad ya entrega scroll continuo y de grano fino;
+// ralentizarlo se siente roto. Se detecta por la firma del delta (ver esRueda).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Cuánto del movimiento original se conserva. 1 = sin cambio; más bajo = más lento.
+// 0.70 = 30% más lento. Es la perilla a calibrar: si con 0.75 el blanco ya no molesta,
+// mejor (menos intrusivo); si sigue apareciendo, bajar a 0.60.
+const TRAFICO_SCROLL_FACTOR = 0.70;
+
+// Cuánto se acerca el scroll al destino en cada frame (0-1). Más alto = llega antes
+// pero más brusco. 0.22 da un frenado suave sin sensación de "arrastre".
+const TRAFICO_SCROLL_EASING = 0.22;
+
+// Distancia (px) bajo la cual se considera que ya llegamos y se corta la animación.
+const TRAFICO_SCROLL_EPSILON = 0.5;
+
+window.traficoSuavizarScroll = (selectorWrap, activar) => {
+    const wrap = document.querySelector(selectorWrap);
+    if (!wrap) return;
+
+    // Desactivar / limpiar: se llama al salir de la página para no dejar el listener
+    // colgado sobre un nodo huérfano (el circuito Blazor puede sobrevivir a la página).
+    if (!activar) {
+        if (wrap._traficoWheel) {
+            wrap.removeEventListener('wheel', wrap._traficoWheel);
+            if (wrap._traficoRaf) cancelAnimationFrame(wrap._traficoRaf);
+            delete wrap._traficoWheel;
+            delete wrap._traficoRaf;
+            delete wrap._traficoDestino;
+        }
+        return;
+    }
+
+    if (wrap._traficoWheel) return;   // idempotente: ya está enganchado
+
+    // Distingue rueda de mouse (saltos grandes y discretos) de trackpad (deltas chicos
+    // y continuos). El trackpad se deja pasar sin tocar: ya scrollea suave de por sí.
+    const esRueda = (e) => {
+        if (e.deltaMode !== 0) return true;          // el driver manda líneas/páginas → rueda
+        return Math.abs(e.deltaY) >= 40;             // píxeles en saltos grandes → rueda
+    };
+
+    const onWheel = (e) => {
+        // Scroll horizontal, zoom con Ctrl o gesto de trackpad: que lo maneje el navegador.
+        if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY) || !esRueda(e)) return;
+
+        // deltaMode 1 = líneas, 2 = páginas. Se normaliza a píxeles antes de escalar.
+        let delta = e.deltaY;
+        if (e.deltaMode === 1) delta *= 20;                    // ~1 línea = alto de fila
+        else if (e.deltaMode === 2) delta *= wrap.clientHeight;
+
+        const maxScroll = wrap.scrollHeight - wrap.clientHeight;
+        if (maxScroll <= 0) return;
+
+        // Si ya estamos pegados al borde y el gesto empuja hacia afuera, no capturamos:
+        // así el navegador puede encadenar el scroll hacia arriba (comportamiento normal).
+        const base = wrap._traficoDestino ?? wrap.scrollTop;
+        if ((base <= 0 && delta < 0) || (base >= maxScroll && delta > 0)) return;
+
+        e.preventDefault();   // requiere el listener en modo { passive: false }
+
+        // El destino se ACUMULA sobre el destino previo, no sobre scrollTop: si el usuario
+        // gira la rueda varias veces seguidas, los notches se suman en vez de pisarse.
+        wrap._traficoDestino = Math.max(0, Math.min(maxScroll, base + delta * TRAFICO_SCROLL_FACTOR));
+
+        if (wrap._traficoRaf) return;   // ya hay una animación corriendo
+
+        const paso = () => {
+            const destino = wrap._traficoDestino;
+            const restante = destino - wrap.scrollTop;
+
+            if (Math.abs(restante) <= TRAFICO_SCROLL_EPSILON) {
+                wrap.scrollTop = destino;
+                wrap._traficoRaf = null;
+                wrap._traficoDestino = null;
+                return;
+            }
+
+            wrap.scrollTop += restante * TRAFICO_SCROLL_EASING;
+            wrap._traficoRaf = requestAnimationFrame(paso);
+        };
+
+        wrap._traficoRaf = requestAnimationFrame(paso);
+    };
+
+    // passive:false es OBLIGATORIO: sin esto el navegador ignora el preventDefault()
+    // y el scroll nativo se aplica igual (quedaría doble movimiento).
+    wrap.addEventListener('wheel', onWheel, { passive: false });
+    wrap._traficoWheel = onWheel;
 };
 
 // Abre una URL externa en una pestaña/ventana nueva — lo usa "Ubicar en GPS" de la

@@ -250,6 +250,14 @@ para cualquier informe con filtros + KPIs + gráficos + tabla. Las piezas y por 
    recargar datos con `<div @key="_chartsKey">` (regenerar el Guid en `Recalcular`).
 6. **Tabla pivote**: `<Virtualize SpacerElement="tr">` en el `<tbody>` (regla de performance);
    columna clave `position:sticky; left:0`; header y `<tfoot>` de totales `position:sticky`.
+   ⚠ Limitación conocida (18/07/2026, SIN resolver): `<Virtualize>` en Blazor Server deja la
+   grilla EN BLANCO un instante con scroll rápido (cada scroll fuera del overscan = round-trip
+   SignalR). Se probó el camino alternativo (render completo + `content-visibility` + fila como
+   componente con `ShouldRender` gateado): elimina el blanco, pero hacía sentir lentos el Zoom
+   del Viaje y el menú contextual → **se revirtió; `<Virtualize>` sigue vigente**. NO reintentar
+   sin leer `docs/performance/PENDIENTE_GRILLA_TRAFICO_BLANQUEO.md` (causa, mediciones A/B e
+   hipótesis nuevas — la más prometedora: aislar el subárbol de la grilla para que abrir el
+   Zoom/menú no dispare el render de las filas).
 7. **Drill-down con detalle lazy**: la query de detalle (una fila por registro) se trae **una
    sola vez por combinación de filtros** (cacheada), recién al primer click o Excel — no en la
    carga inicial. Celdas clickeables abren un dialog (`ReservasFsDetalleDialog`) que reusa el
@@ -271,6 +279,18 @@ para cualquier informe con filtros + KPIs + gráficos + tabla. Las piezas y por 
     nuevo en la misma categoría togglea. Si el informe tiene 2+ dimensiones categóricas, los
     focos son combinables (AND), uno por dimensión. Ver § Cross-filter abajo (incluye la
     variante dos dimensiones). No preguntar si se incluye: se incluye.
+11. **Comparación mes-a-mes / tendencia (OPCIONAL, para pivotes con eje temporal en columnas).**
+    Cuando la tabla pivote es entidad × mes (ReservasPorCliente), agregar el control de tendencia
+    (validado por el usuario 15/07/2026). Piezas — ver § Comparación mes-a-mes abajo:
+    - Selector **"Comparar"** (vs mes anterior `M1` / vs N meses atrás `N` + combo Salto / vs año
+      pasado `YoY`). Todo **en memoria** sobre `_pivMap` — NO re-query. El interanual solo tiene
+      números si el rango cargado abarca también el año anterior (si no, la celda muestra `·`/`—`;
+      es el usuario quien amplía el "Desde", decisión acordada).
+    - Switch **"Variación"**: togglea toda la grilla entre cantidad (default) y Δ por celda vs su
+      mes base (verde sube / rojo baja). El footer y la caption también cambian.
+    - Columna **"Tendencia"** SIEMPRE visible (sticky-right junto a TOTAL): Δ del último mes vs su
+      base (▲/▼ + valor + `│ %`) + sparkline SVG inline (sin librerías). Ordena "los que suben"
+      arriba. `nth-last-child(2)` sticky para pinnear TOTAL + Tendencia juntas a la derecha.
 
 ### Colores unificados por categoría — patrón (ReservasFechaServicio.razor)
 
@@ -446,6 +466,59 @@ Segundo informe con cross-filter, con dos focos independientes que se combinan c
 - **Barras APILADAS multi-serie**: el clic en un segmento llega igual por
   `OnDataPointSelection`; como cada `ApexPointSeries` ya viene filtrada por categoría, el
   primer item de `e.DataPoint.Items` trae la categoría de la serie clickeada.
+
+### Comparación mes-a-mes / tendencia — patrón (ReservasPorCliente.razor, 15/07/2026)
+
+Para pivotes **entidad × mes** (columnas = meses), agregar un control que "cante" si cada
+entidad sube o baja respecto de un mes de referencia. Pedido y validado por el usuario. **Todo
+en memoria** sobre el `_pivMap` ya calculado — **cero re-query, cero cambios en el service**.
+
+**Tres piezas** (todas en el mismo `.razor`):
+
+1. **Selector "Comparar"** — contra qué mes se compara cada mes:
+   - `M1` = mes inmediatamente anterior en la grilla (índice −1 en `_pivMeses`).
+   - `N` = N meses calendario atrás (combo "Salto" 2/3/4/6); se busca ese mes en `_pivMeses`.
+   - `YoY` = mismo mes del año anterior. **Solo tiene números si el rango cargado abarca también
+     el año previo** — si no, la celda muestra `·`/`—`. Decisión de negocio (acordada): es el
+     usuario quien amplía el "Desde" para el interanual, no se auto-trae el año anterior.
+2. **Switch "Variación"** — togglea toda la grilla entre **cantidad** (default) y **Δ por celda**
+   vs su mes base (`+19` verde / `−53` rojo, guión largo real `−` para negativos). El `<tfoot>`
+   de totales y la caption también cambian. La primera columna (sin mes base) queda en `·`.
+3. **Columna "Tendencia"** SIEMPRE visible (en los dos modos): Δ del **último mes** vs su base
+   (▲/▼ + valor + `│ %`) + **sparkline SVG inline** de la serie mensual. Ordenar por ella
+   pone "los que más suben/caen" arriba.
+
+**Helpers clave** (el corazón es `MesBaseDe(mes)` → devuelve el mes contra el que comparar, o
+`null`):
+```csharp
+private static string SumarMeses(string mes, int delta) {   // "2026-03" + (-2) → "2026-01"
+    var y = int.Parse(mes[..4]); var m = int.Parse(mes[5..7]);
+    var idx = y * 12 + (m - 1) + delta;
+    return $"{idx / 12:0000}-{idx % 12 + 1:00}";
+}
+private string? MesBaseDe(string mes) => _comparar switch {
+    "M1"  => _pivMeses.IndexOf(mes) is int i && i > 0 ? _pivMeses[i - 1] : null,
+    "N"   => _pivMeses.Contains(SumarMeses(mes, -_saltoN)) ? SumarMeses(mes, -_saltoN) : null,
+    _     => _pivMeses.Contains(SumarMeses(mes, -12)) ? SumarMeses(mes, -12) : null,   // YoY
+};
+private int? PivVar(string cli, string mes) =>            // Δ de una celda, null si no hay base
+    MesBaseDe(mes) is string b ? PivVal(cli, mes) - PivVal(cli, b) : null;
+```
+El sparkline es un `MarkupString` con un `<svg><polyline>` normalizado (min–max de la serie),
+color por el último tramo (verde/rojo/gris). Sin librerías.
+
+**CSS — pinnear TOTAL + Tendencia juntas a la derecha.** Antes solo `td:last-child` era
+sticky-right (era TOTAL). Al agregar Tendencia como nueva última columna, TOTAL pasa a
+`nth-last-child(2)`: darle a Tendencia un ancho fijo (`width:132px`) y a la anteúltima
+`position:sticky; right:132px`. Duplicar en las reglas de fondo/z-index de thead/tbody/tfoot/hover
+el `:last-child` con `, ... :nth-last-child(2)`.
+
+**Trampa de datos (no es bug):** si la réplica está congelada a mitad de mes, el último mes sale
+casi vacío → `−100%` masivo y sparklines todos en picada. Es artefacto de la réplica (igual que
+Control de cargas); en producción con datos frescos se distribuye normal. No hackear alrededor.
+
+**Legibilidad:** el `%` de la tendencia va separado del Δ con `border-left:1px solid currentColor`
++ padding (si no, `−35−58%` se lee pegado).
 
 ### Trampa de negocio: no todo `id_servici` es un servicio real
 

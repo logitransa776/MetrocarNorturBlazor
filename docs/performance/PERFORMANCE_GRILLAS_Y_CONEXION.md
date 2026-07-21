@@ -1,6 +1,7 @@
 # Performance — Grillas grandes y conexión a SQL (Blazor Server)
 
-> **Fecha:** 16/06/2026
+> **Fecha:** 16/06/2026 · **Nota 18/07/2026:** ver §3 — el blanqueo al scrollear de la
+> Planilla de Tráfico es un **pendiente abierto** (el fix se probó y se revirtió).
 > **Disparador:** El Zoom del Viaje tardaba 6-7 s en abrir sobre la Planilla de Tráfico.
 > **Resultado:** Sub-segundo, comparable a la fluidez de la grilla vieja (Streamlit).
 > **Archivos tocados:** `appsettings.json`, `Program.cs`, `Services/DbWarmupService.cs`
@@ -158,13 +159,32 @@ Cxl, buscador, `Cargar`, `RefrescarConFlash`). El render solo lee los campos.
 
 ---
 
+## §3 — Pendiente abierto: el blanco al scrollear (18/07/2026)
+
+Con `<Virtualize>`, la grilla de la Planilla de Tráfico **queda en blanco un instante al
+scrollear rápido** (rueda fuerte o arrastrando la barra). Es arquitectural de `<Virtualize>`
+en Blazor Server: el scroll le gana al round-trip de SignalR. No se arregla subiendo
+`OverscanCount` (ya está en 20).
+
+Se investigó a fondo y se probó el fix (render completo del día + `content-visibility` +
+fila como componente con `ShouldRender` gateado). **Elimina el blanco** —verificado por
+píxel—, pero hacía sentir **lentos el Zoom del Viaje y el menú contextual**, así que
+**se revirtió**: hoy sigue vigente `<Virtualize>` con el blanqueo.
+
+👉 **Toda la investigación (causa, mediciones A/B, snippets e hipótesis para retomarlo) está
+en `docs/performance/PENDIENTE_GRILLA_TRAFICO_BLANQUEO.md`. Leer ESE doc antes de volver a
+tocar la virtualización de esa grilla — evita repetir un camino ya recorrido.**
+
+---
+
 ## Checklist para CUALQUIER grilla nueva con muchas filas
 
 1. **¿El connection string tiene `Pooling=True`?** (debería; ver `appsettings.json`). Nunca
    poner `Pooling=False`.
 2. **Si la grilla puede superar ~100-150 filas → usar `<Virtualize>`** sobre el `<tbody>`,
    con la clase `--virtual` en la `<table>` y un wrapper de altura fija + `overflow:auto`.
-   No virtualizar tablas chicas (overhead innecesario).
+   No virtualizar tablas chicas (overhead innecesario). Tener presente el trade-off del §3
+   (blanqueo con scroll rápido).
 3. **Memoizar el filtrado** en un campo; recalcular solo al cambiar datos/filtros, no en
    cada render.
 4. **No abrir conexiones en `IHostedService`/arranque vía el DbContextFactory** — usar

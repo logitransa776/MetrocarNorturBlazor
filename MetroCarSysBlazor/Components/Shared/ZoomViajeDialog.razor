@@ -33,10 +33,12 @@
         }
         else
         {
-            @* ── Banda de estado (siempre visible, bien destacada) ── *@
-            <div class="zoom-estado-banda" style="@EstadoBanda(_d.Estado)">
+            @* ── Banda de estado (siempre visible, bien destacada) ──
+               EstadoDisplay = estado pintado (CURSO/CHEQUEO derivados como el FoxPro), para
+               que el Zoom coincida con lo que muestra la grilla de la fila clickeada. *@
+            <div class="zoom-estado-banda" style="@EstadoBanda(_d.EstadoDisplay)">
                 <div class="zoom-estado-banda__label">ESTADO</div>
-                <div class="zoom-estado-banda__valor">@_d.Estado</div>
+                <div class="zoom-estado-banda__valor">@(_d.EstadoDisplay == "CURSO" ? "EN CURSO" : _d.EstadoDisplay)</div>
                 <div class="zoom-estado-banda__sep"></div>
                 <div class="zoom-estado-banda__item">
                     <span class="zoom-estado-banda__label">NRO. RESERVA</span>

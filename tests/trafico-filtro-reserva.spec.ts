@@ -30,7 +30,10 @@ test.beforeEach(async ({ page }) => {
 // "Aplicar Filtros" (MudMenu anidado → se despliega con hover, no con click).
 // Devuelve cuando el ítem hijo pedido es visible.
 async function abrirAplicarFiltros(page: import('@playwright/test').Page, item: RegExp) {
-  const fila = page.locator('table.trafico-grid--virtual tbody tr.tg-row').first();
+  // La grilla principal se ubica por su wrapper .trafico-wrap--nav (y no por la clase
+  // --virtual de la <table>), para que el selector siga sirviendo si cambia la
+  // estrategia de virtualización — ver docs/performance/PENDIENTE_GRILLA_TRAFICO_BLANQUEO.md.
+  const fila = page.locator('.trafico-wrap--nav tbody tr.tg-row').first();
   await expect(fila).toBeVisible({ timeout: 15_000 });
   await fila.click({ button: 'right' });
 
@@ -63,7 +66,7 @@ test('Filtro Nº Reserva — trae el viaje puntual', async ({ page }) => {
   // El conteo del banner se actualiza al terminar de cargar la grilla: un solo servicio.
   await expect(page.locator('.planilla-page__filtro')).toContainText('1 servicios', { timeout: 15_000 });
   // La grilla muestra exactamente 1 fila de datos.
-  await expect(page.locator('table.trafico-grid--virtual tbody tr.tg-row')).toHaveCount(1);
+  await expect(page.locator('.trafico-wrap--nav tbody tr.tg-row')).toHaveCount(1);
 });
 
 test('Filtro Nº Reserva En Ruta — trae los días de la ruta', async ({ page }) => {
@@ -78,7 +81,7 @@ test('Filtro Nº Reserva En Ruta — trae los días de la ruta', async ({ page }
   await expect(page.getByText('Nº Reserva En Ruta 9').first()).toBeVisible({ timeout: 15_000 });
   // Los 3 días de la ruta id_viaje_i = 9 (el conteo se actualiza al terminar de cargar).
   await expect(page.locator('.planilla-page__filtro')).toContainText('3 servicios', { timeout: 15_000 });
-  await expect(page.locator('table.trafico-grid--virtual tbody tr.tg-row')).toHaveCount(3);
+  await expect(page.locator('.trafico-wrap--nav tbody tr.tg-row')).toHaveCount(3);
 
   await captura(page, '/planilla-trafico', 'trafico-filtro-nro-reserva-ruta');
 });

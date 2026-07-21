@@ -1,4 +1,5 @@
 @inherits LayoutComponentBase
+@implements IDisposable
 @inject NorturAuthStateProvider AuthState
 @inject IPermissionService Permisos
 @inject NavigationManager Nav
@@ -1222,6 +1223,11 @@
                 }
 
             </nav>
+
+            <div class="nav-drawer__footer">
+                <img src="images/buslink_icon_e.png" alt="BUS LINK" class="nav-drawer__footer-img" />
+                <span class="nav-drawer__footer-text">BUS LINK</span>
+            </div>
         </div>
 
         @* ── Layout principal ── *@
@@ -1235,9 +1241,15 @@
                                OnClick="ToggleDrawer" />
 
                 <img src="images/logo.png" alt="NORTUR" Class="ml-2" style="height:20px; filter:brightness(0) invert(1);" />
+
+                <div class="appbar-buslink-badge">
+                    <img src="images/buslink_icon_e.png" alt="BUS LINK" />
+                    <span>BUS LINK</span>
+                </div>
+
                 <MudText Typo="Typo.body2" Class="ml-4"
                          Style="color:#C7D6EC; border-left:1px solid rgba(255,255,255,0.3); padding-left:16px;">
-                    Informes y Reportes · Sistema de gestión
+                    @TituloPantallaActual()
                 </MudText>
 
                 <MudSpacer />
@@ -1339,6 +1351,85 @@
     private bool _reparacionesExpanded = false;
 
     private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
+
+    // ── Título dinámico del AppBar: nombre de la pantalla actual ──
+    // El layout NO se re-renderiza solo al navegar → suscripción a LocationChanged
+    // (y desuscripción en Dispose para no fugar el circuito SignalR).
+    protected override void OnInitialized() => Nav.LocationChanged += OnLocationChanged;
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+        => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+
+    // Mapa ruta → nombre de pantalla (mismos textos que el drawer). En Home (o
+    // ruta desconocida) se muestra el texto institucional de siempre.
+    private static readonly Dictionary<string, string> _titulosPorRuta = new()
+    {
+        // Sistema
+        ["usuarios-abm"] = "Usuarios y Permisos",
+        ["auditoria-accesos"] = "Auditoría de accesos",
+        // Reservas
+        ["reservas-especiales"] = "Reservas Especiales",
+        ["reservas-por-plantillas"] = "Reservas por Plantillas",
+        ["operadores"] = "Operadores",
+        ["grupos"] = "Grupos",
+        ["destinos"] = "Destinos",
+        ["plantillas-mantenimiento"] = "Mantenimiento de Plantillas",
+        ["reservas-fecha-servicio"] = "Reservas por fecha y servicio",
+        ["reservas-banda-horaria"] = "Reservas por banda horaria",
+        ["reservas-por-cliente"] = "Reservas por cliente",
+        // Tráfico
+        ["planilla-trafico"] = "Planilla de Tráfico",
+        ["cabeceras-recorridos"] = "Cabeceras - Recorridos",
+        ["francos-ingreso"] = "Ingreso de Francos",
+        ["francos-auditoria"] = "Auditoría de Francos",
+        ["francos"] = "Mantenimiento de Francos",
+        ["viaticos-motivo"] = "Motivos de Viático",
+        ["viaticos-forma-liquidacion"] = "Formas de Liquidación de Viático",
+        ["viaticos"] = "Viáticos",
+        ["voucher-recepcion"] = "Voucher Recepción",
+        ["guardias"] = "Guardia",
+        ["rubros-contacto"] = "Rubros de contactos",
+        ["contactos"] = "Contactos y Proveedores",
+        ["lista-pasajeros"] = "Lista de pasajeros",
+        // Vehículos y Choferes
+        ["choferes"] = "Choferes",
+        ["odometros"] = "Odómetros",
+        ["siniestros"] = "Siniestros",
+        ["vehiculos"] = "Vehículos - Flota",
+        ["viajes-por-chofer"] = "Viajes por chofer",
+        ["km-unidades-servicios"] = "Km Unidades vs Servicios",
+        ["agenda-vencimientos"] = "Agenda de Vencimientos",
+        ["fleteros"] = "Fleteros",
+        ["tipos-vehiculo"] = "Tipo de Vehículos",
+        // Facturación
+        ["clientes-abm"] = "ABM - Clientes",
+        ["resumen-liquidaciones"] = "Resumen de Liquidaciones",
+        ["liquidacion-clientes"] = "Liquidación a Clientes",
+        ["facturacion-estimada"] = "Liquidaciones estimadas",
+        // Combustible
+        ["promedio-consumos"] = "Promedio de Consumos",
+        ["consumo-mensual"] = "Consumo Mensual",
+        ["combustible-conciliacion"] = "ABM y Conciliación cargas",
+        ["control-cargas"] = "Control de cargas",
+        ["saldos-estaciones"] = "Saldos de Estaciones",
+        ["depositos-estacion"] = "Carga de Depósitos",
+        ["depositos-mantenimiento"] = "Mantenimiento de Depósitos",
+        ["articulos-rubro"] = "Artículos por Rubro de Consumo",
+    };
+
+    private string TituloPantallaActual()
+    {
+        // Primer segmento del path ("/siniestros?x=1" → "siniestros")
+        var path = Nav.ToBaseRelativePath(Nav.Uri);
+        var corte = path.IndexOfAny(new[] { '/', '?', '#' });
+        if (corte >= 0) path = path[..corte];
+
+        return _titulosPorRuta.TryGetValue(path, out var titulo)
+            ? titulo
+            : "Informes y Reportes · Sistema de gestión";
+    }
 
     // ── Theme switcher (clases CSS en app.css; theme.js aplica y persiste) ──
     private bool _themeGris;

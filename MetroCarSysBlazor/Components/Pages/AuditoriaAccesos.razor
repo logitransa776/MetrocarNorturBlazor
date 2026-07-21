@@ -8,7 +8,7 @@
 @inject IJSRuntime JS
 @rendermode InteractiveServer
 
-<PageTitle>Auditoría de accesos — NORTUR</PageTitle>
+<PageTitle>BusLink</PageTitle>
 
 @* ── Encabezado ── *@
 <div class="page-header mb-4">
@@ -106,7 +106,7 @@ else
                 <MudTh>Motivo / detalle</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd DataLabel="Fecha y hora" Style="white-space:nowrap;">@context.FEvento.ToString("dd/MM/yyyy HH:mm:ss", _ar)</MudTd>
+                <MudTd DataLabel="Fecha y hora" Style="white-space:nowrap; font-weight:600;">@context.FEvento.ToString("dd/MM/yyyy HH:mm:ss", _ar)</MudTd>
                 <MudTd DataLabel="Evento"><span class="acc-ev @ClaseEvento(context.Evento)">@EventoTexto(context.Evento)</span></MudTd>
                 <MudTd DataLabel="Usuario" Style="font-weight:600;">@context.Usuario</MudTd>
                 <MudTd DataLabel="Nivel">@context.Nivel</MudTd>
@@ -137,7 +137,7 @@ else
     private List<string> _usuarios = new();
     private bool _cargando = true;
 
-    private DateTime? _desde = DateTime.Today.AddDays(-30);
+    private DateTime? _desde = DateTime.Today.AddDays(-7);
     private DateTime? _hasta = DateTime.Today;
     private string? _usuario;
     private IReadOnlyCollection<string> _eventos = new HashSet<string>();   // vacío = todos
@@ -180,7 +180,7 @@ else
     {
         _cargando = true;
         StateHasChanged();
-        var desde = DateOnly.FromDateTime(_desde ?? DateTime.Today.AddDays(-30));
+        var desde = DateOnly.FromDateTime(_desde ?? DateTime.Today.AddDays(-7));
         var hasta = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
         _datos = await Reports.GetAuditoriaAccesosAsync(desde, hasta, _usuario, _eventos);
         _cargando = false;
