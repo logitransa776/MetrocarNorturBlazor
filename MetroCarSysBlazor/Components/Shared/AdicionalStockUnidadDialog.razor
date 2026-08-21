@@ -1,0 +1,116 @@
+@inject ReportService Reports
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   "Adicional al servicio" del menú contextual del panel BUSES.
+   FoxPro: carga_adicional() → DO FORM adicional_stock_abm WITH "trafico", 0,
+   id_vehiculo, interno, nombre_chofer, id_chofer  — un ABM de `adicional_stock`.
+   Acá SOLO LECTURA: los movimientos ya cargados para esa unidad. La carga sigue
+   en el Metrocar (regla strangler).
+
+   ⚠ NO confundir con `viaje_adicional` (los adicionales FACTURABLES de un viaje, que
+   tienen su propio diálogo ViajeAdicionalesDialog). Esto es logística: el stock —agua,
+   etc.— entregado a la unidad. Circuito VIVO: 1.768 movimientos en 2026.
+   Plano: docs/PlanoFoxPro/trafico/TRAFICO_BUSES_MENU.md
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog hist-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.AddShoppingCart" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Adicionales entregados a la unidad</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">Solo lectura</span>
+            <span class="zoom-title-bar__nro">Interno&nbsp;@Interno@(string.IsNullOrWhiteSpace(Dominio) ? "" : $" · {Dominio}")</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:200px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_filas.Count == 0)
+        {
+            <div class="hist-empty">El interno @Interno no tiene adicionales cargados.</div>
+        }
+        else
+        {
+            <div class="nov-count">
+                @_filas.Count movimiento@(_filas.Count == 1 ? "" : "s")@(_filas.Count == 200 ? " (últimos 200)" : "")
+            </div>
+            <div class="hist-grid-wrap">
+                <table class="hist-grid">
+                    <thead>
+                        <tr>
+                            <th>Fecha</th>
+                            <th>Hora</th>
+                            <th>Adicional</th>
+                            <th>Mov.</th>
+                            <th class="r">Cant.</th>
+                            <th>Chofer</th>
+                            <th>Cliente</th>
+                            <th>Comentario</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var f in _filas)
+                        {
+                            <tr>
+                                <td>@Fecha(f.Fecha)</td>
+                                <td>@Dato(f.Hora)</td>
+                                @* El nombre viene de `adicional`; si el código quedó huérfano se
+                                   muestra el código, que es lo que guarda adicional_stock. *@
+                                <td title="@f.IdAdicional">
+                                    @(string.IsNullOrWhiteSpace(f.Adicional) ? Dato(f.IdAdicional) : f.Adicional)
+                                </td>
+                                <td>@Dato(f.Movimiento)</td>
+                                <td class="r">@f.Cantidad</td>
+                                <td title="@f.IdChofer">@Dato(string.IsNullOrWhiteSpace(f.NombreChofer) ? f.IdChofer : f.NombreChofer)</td>
+                                <td>@Dato(f.Cliente)</td>
+                                <td>@Dato(f.Comentario)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudText Typo="Typo.caption" Class="nov-nota">
+            La carga de adicionales se sigue haciendo desde el Metrocar.
+        </MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Interno de la unidad — <c>adicional_stock</c> SÍ tiene columna propia `interno`.</summary>
+    [Parameter] public int Interno { get; set; }
+    /// <summary>Dominio, solo para el encabezado.</summary>
+    [Parameter] public string Dominio { get; set; } = "";
+
+    private List<AdicionalStockUnidadRow> _filas = new();
+    private bool _cargando = true;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override async Task OnInitializedAsync()
+    {
+        _filas = await Reports.GetAdicionalStockUnidadAsync(Interno);
+        _cargando = false;
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private static string Dato(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s.Trim();
+    private string Fecha(DateOnly? d) => d is null ? "—" : d.Value.ToString("dd/MM/yyyy", _ar);
+}

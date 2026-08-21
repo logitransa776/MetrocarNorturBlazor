@@ -1,4 +1,5 @@
 @inject ReportService Reports
+@inject AbmService Abm
 
 @* ───────────────────────────────────────────────────────────────────────────────
    Réplica de "Novedad sobre el viaje" (menú contextual de Tráfico, trafico2.scx →
@@ -8,14 +9,41 @@
        acá listamos las novedades ya cargadas de ese viaje (libro_novedad WHERE id_viaje=X).
      · Cada novedad: fecha de carga + usuario, asunto y el mensaje completo.
    Mismo patrón y estilos que el "Historial del viaje" (HistorialViajeDialog).
+
+   ── TRES MODOS, un solo diálogo ────────────────────────────────────────────────
+   El FoxPro usa el MISMO form (libro_novedad_abm) para los tres, cambiando el
+   parámetro lpId_viaje — acá se replica con parámetros en vez de duplicar pantalla:
+     · IdViaje > 0 → novedades DE UNA RESERVA (menú de la grilla de viajes / F2).
+     · Interno > 0 → novedades DE UNA UNIDAD  (menú del panel Buses,
+                     libro_novedad_alta_veh → lpId_viaje = -1 + interno).
+     · ninguno     → libro suelto de los últimos 7 días.
+   Plano del modo unidad: docs/PlanoFoxPro/trafico/TRAFICO_BUSES_MENU.md
    ─────────────────────────────────────────────────────────────────────────────── *@
 
 <MudDialog Class="zoom-viaje-dialog hist-dialog nov-dialog">
     <TitleContent>
         <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
-            <MudIcon Icon="@Icons.Material.Filled.NoteAlt" Class="me-2" Style="color:#F99410;" />
-            <span class="zoom-title-bar__text">Novedades del viaje</span>
-            <span class="zoom-title-bar__nro">Reserva&nbsp;#@IdViaje</span>
+            <MudIcon Icon="@(EsUnidad ? Icons.Material.Filled.DirectionsBus : Icons.Material.Filled.NoteAlt)"
+                     Class="me-2" Style="color:#F99410;" />
+            @* Con IdViaje = 0 la novedad no cuelga de ninguna reserva: mostrar "Reserva #0"
+               sería mentir. Título y chip cambian según el modo. *@
+            <span class="zoom-title-bar__text">
+                @(EsUnidad ? "Novedades de la unidad" : IdViaje > 0 ? "Novedades del viaje" : "Libro de novedades")
+            </span>
+            @if (EsUnidad)
+            {
+                <span class="zoom-title-bar__nro">
+                    Interno&nbsp;@Interno@(string.IsNullOrWhiteSpace(Dominio) ? "" : $" · {Dominio}")
+                </span>
+            }
+            else if (IdViaje > 0)
+            {
+                <span class="zoom-title-bar__nro">Reserva&nbsp;#@IdViaje</span>
+            }
+            else
+            {
+                <span class="zoom-title-bar__nro">últimos 7 días</span>
+            }
             <span style="flex:1;"></span>
             <MudIconButton Icon="@Icons.Material.Filled.Close"
                            Size="Size.Small"
@@ -26,6 +54,49 @@
     </TitleContent>
 
     <DialogContent>
+        @* ── F2 · Alta de novedad (libro_novedad_abm modo "alta") ──
+           Se despliega con el botón "Nueva novedad". El asunto viene precargado igual que el
+           FoxPro: el nombre del cliente si la novedad cuelga de una reserva, el nombre de la
+           empresa si es suelta. Los dos campos son obligatorios, y son los ÚNICOS que el alta
+           escribe (la tabla tiene 20 columnas; la operación real usa 5). *@
+        @if (_altaAbierta)
+        {
+            <div class="nov-alta">
+                <div class="nov-alta__h">
+                    <MudIcon Icon="@Icons.Material.Filled.PostAdd" Size="Size.Small" />
+                    <span>
+                        Nueva novedad@(EsUnidad
+                            ? $" · interno {Interno}"
+                            : IdViaje > 0 ? $" · reserva #{IdViaje}" : " · sin reserva asociada")
+                    </span>
+                </div>
+                <MudTextField T="string" @bind-Value="_asunto" Label="Asunto" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" MaxLength="200" Immediate="true" />
+                <MudTextField T="string" @bind-Value="_mensaje" Label="Mensaje" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" Lines="4" Immediate="true"
+                              Placeholder="Qué pasó, con el detalle que le sirva al turno siguiente" />
+                @if (_error is not null)
+                {
+                    <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+                }
+                <div class="nov-alta__f">
+                    <span class="nov-alta__hint">
+                        <MudIcon Icon="@(_abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                        @(_abmActivo
+                            ? "Queda en el libro con tu usuario y la hora actual"
+                            : "Escritura preparada · el alta se habilita cuando el libro pase a Buslink")
+                    </span>
+                    <MudSpacer />
+                    <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="CerrarAlta">Cancelar</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar"
+                               Disabled="@(!_abmActivo || _grabando || !PuedeGrabar)">
+                        @(_grabando ? "Guardando…" : "Guardar novedad")
+                    </MudButton>
+                </div>
+            </div>
+        }
+
         @if (_cargando)
         {
             <div class="d-flex justify-center align-center" style="min-height:220px;">
@@ -34,7 +105,13 @@
         }
         else if (_novedades.Count == 0)
         {
-            <div class="hist-empty">Este viaje no tiene novedades cargadas en el libro.</div>
+            <div class="hist-empty">
+                @(EsUnidad
+                    ? $"El interno {Interno} no tiene novedades cargadas en el libro."
+                    : IdViaje > 0
+                        ? "Este viaje no tiene novedades cargadas en el libro."
+                        : "Todavía no hay novedades sueltas cargadas hoy.")
+            </div>
         }
         else
         {
@@ -64,11 +141,19 @@
     </DialogContent>
 
     <DialogActions>
-        @* La carga de nuevas novedades (y el envío de correo al cliente) sigue en FoxPro. *@
+        @* El ENVÍO DE CORREO al cliente no se migró (decisión del usuario, 04/08/2026): es una
+           acción hacia afuera de la empresa y sigue saliendo del Metrocar. *@
         <MudText Typo="Typo.caption" Class="nov-nota">
-            Las altas de novedades se siguen cargando desde el sistema Metrocar (FoxPro).
+            El aviso por correo al cliente se sigue mandando desde el Metrocar.
         </MudText>
         <MudSpacer />
+        @if (!_altaAbierta)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.PostAdd" OnClick="AbrirAlta">
+                Nueva novedad
+            </MudButton>
+        }
         <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
     </DialogActions>
 </MudDialog>
@@ -76,16 +161,105 @@
 @code {
     [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
 
+    /// <summary>Reserva de la que cuelga la novedad. <b>0 = novedad suelta</b>, sin viaje asociado
+    /// (son 752 de las 1.594 de 2026, casi la mitad del libro).</summary>
     [Parameter] public int IdViaje { get; set; }
+    /// <summary>Asunto sugerido al abrir el alta. Desde una fila: el nombre del cliente del viaje.
+    /// Suelta: el nombre de la empresa. Es la precarga que hace el Init del FoxPro.</summary>
+    [Parameter] public string AsuntoSugerido { get; set; } = "";
+    /// <summary>Usuario logueado — queda en <c>libro_novedad.usuario_cr</c>.</summary>
+    [Parameter] public string Usuario { get; set; } = "";
+    /// <summary>Abrir el formulario de alta directamente (F2 sobre la grilla).</summary>
+    [Parameter] public bool AbrirEnAlta { get; set; }
+
+    // ── Modo UNIDAD (menú contextual del panel Buses) ──
+    /// <summary>Interno de la unidad. <b>&gt;0 activa el modo unidad</b>: se listan las novedades
+    /// del interno en vez de las de una reserva, y el alta arma el asunto con el formato del
+    /// FoxPro. 0 = modo viaje / libro suelto.</summary>
+    [Parameter] public int Interno { get; set; }
+    /// <summary>Dominio de la unidad — solo para el asunto y el encabezado (modo unidad).</summary>
+    [Parameter] public string Dominio { get; set; } = "";
+    /// <summary>Nombre del chofer logoneado — el FoxPro lo mete en el asunto recortado a 30.</summary>
+    [Parameter] public string NombreChofer { get; set; } = "";
+
+    private bool EsUnidad => Interno > 0;
+
+    /// <summary>
+    /// Asunto que precarga el alta en modo unidad. Formato <b>literal</b> del
+    /// <c>libro_novedad_abm.Init</c> (caso <c>lpId_viaje = -1</c>) — importa que sea idéntico
+    /// porque es el ÚNICO nexo entre la novedad y la unidad: no hay columna `interno` en la
+    /// tabla, y <see cref="ReportService.GetNovedadesUnidadAsync"/> filtra por este texto.
+    /// <code>"int: " + interno + " dom: " + dominio + IIF(!empty(chofer), " chof:" + LEFT(nombre,30), "")</code>
+    /// </summary>
+    private string AsuntoUnidad
+    {
+        get
+        {
+            var s = $"int: {Interno} dom: {Dominio.Trim()}";
+            var cho = NombreChofer.Trim();
+            if (cho.Length > 0) s += " chof:" + (cho.Length > 30 ? cho[..30] : cho);
+            return s;
+        }
+    }
+
+    private static bool _abmActivo => AbmFeatureFlags.NovedadesAbmActivo;
 
     private List<NovedadViajeRow> _novedades = new();
     private bool _cargando = true;
     private readonly System.Globalization.CultureInfo _ar =
         System.Globalization.CultureInfo.GetCultureInfo("es-AR");
 
+    // ── Alta (F2) ──
+    private bool _altaAbierta, _grabando;
+    private string _asunto = "", _mensaje = "";
+    private string? _error;
+
+    private bool PuedeGrabar =>
+        !string.IsNullOrWhiteSpace(_asunto) && !string.IsNullOrWhiteSpace(_mensaje);
+
     protected override async Task OnInitializedAsync()
     {
-        _novedades = await Reports.GetNovedadesViajeAsync(IdViaje);
+        _novedades = await Cargar();
+        _cargando = false;
+        if (AbrirEnAlta) AbrirAlta();
+    }
+
+    private Task<List<NovedadViajeRow>> Cargar() =>
+        EsUnidad ? Reports.GetNovedadesUnidadAsync(Interno)
+                 : Reports.GetNovedadesViajeAsync(IdViaje);
+
+    private void AbrirAlta()
+    {
+        _altaAbierta = true;
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_asunto))
+            _asunto = EsUnidad ? AsuntoUnidad : AsuntoSugerido;
+    }
+
+    private void CerrarAlta()
+    {
+        _altaAbierta = false;
+        _error = null;
+        _mensaje = "";
+    }
+
+    private async Task Grabar()
+    {
+        _error = null;
+        _grabando = true;
+        // En modo unidad el FoxPro pasa lpId_viaje = -1, pero lo que TERMINA en la base es 0
+        // (verificado: 0 filas con -1, 17.983 con asunto LIKE 'int:%'). La unidad va en el asunto.
+        var r = await Abm.AltaNovedadAsync(EsUnidad ? 0 : IdViaje, _asunto, _mensaje, Usuario);
+        _grabando = false;
+
+        if (!r.Ok) { _error = r.Error; return; }
+
+        // Recargar el libro para que la novedad recién cargada aparezca arriba de todo.
+        _mensaje = "";
+        _altaAbierta = false;
+        _cargando = true;
+        StateHasChanged();
+        _novedades = await Cargar();
         _cargando = false;
     }
 

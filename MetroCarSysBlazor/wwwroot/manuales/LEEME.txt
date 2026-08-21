@@ -1,0 +1,14 @@
+Manuales de Buslink
+===================
+
+Los PDF que se copien en esta carpeta aparecen solos en el menú
+Ayuda -> Descarga de manuales (no hay que tocar código ni configuración).
+
+Para que la lista quede ordenada y con nombres legibles, conviene el formato:
+
+    01 - Planilla de Trafico.pdf
+    02 - Reservas.pdf
+    03 - Facturacion.pdf
+
+El prefijo numérico solo sirve para ordenar: en pantalla se muestra
+"Planilla de Trafico".

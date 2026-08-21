@@ -1,0 +1,164 @@
+@page "/informes"
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject NorturAuthStateProvider AuthState
+
+<PageTitle>Informes · BusLink</PageTitle>
+
+@* ─────────────────────────────────────────────────────────────────────────
+   HUB DE INFORMES — todos los informes del sistema en un solo lugar,
+   filtrados por los permisos del usuario (letras de usuario.acceso).
+
+   El contenido NO se escribe acá: sale de Services/InformesCatalogo.cs, que es
+   la fuente única de verdad (misma lista que alimenta el drawer y el título de
+   la barra). Para agregar un informe nuevo se toca SOLO el catálogo.
+   ───────────────────────────────────────────────────────────────────────── *@
+
+<div class="inf-hub">
+
+    <div class="inf-hub__head">
+        <div>
+            <h1 class="inf-hub__title">Informes</h1>
+            <p class="inf-hub__subtitle">
+                Todos los informes disponibles para tu usuario, agrupados por módulo.
+                @if (_totalDisponibles > 0)
+                {
+                    <span class="inf-hub__count">@_totalDisponibles disponibles</span>
+                }
+            </p>
+        </div>
+    </div>
+
+    @if (!InformesCatalogo.TieneAlguno(Permisos))
+    {
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mt-4">
+            Tu usuario no tiene habilitado ningún módulo con informes.
+            Pedile al supervisor que te asigne permisos desde <b>Sistema → Usuarios y Permisos</b>.
+        </MudAlert>
+    }
+    else
+    {
+        @* ── Barra de búsqueda + filtros por módulo ── *@
+        <div class="inf-hub__toolbar">
+            <MudTextField @bind-Value="_busqueda"
+                          @bind-Value:after="StateHasChanged"
+                          Immediate="true"
+                          Placeholder="Buscar informe… (por nombre, tema o pregunta)"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          Clearable="true"
+                          Class="inf-hub__search" />
+
+            <div class="inf-hub__chips">
+                <button class="inf-chip @(_moduloFoco is null ? "inf-chip--on" : "")"
+                        @onclick="() => _moduloFoco = null">
+                    Todos
+                </button>
+                @foreach (var (modulo, _) in InformesCatalogo.PorModulo(Permisos, _verProximamente))
+                {
+                    var activo = _moduloFoco == modulo.Modulo;
+                    <button class="inf-chip @(activo ? "inf-chip--on" : "")"
+                            style="@(activo ? $"background:{modulo.Color};border-color:{modulo.Color};" : $"color:{modulo.Color};border-color:{modulo.Color}55;")"
+                            @onclick="() => AlternarModulo(modulo.Modulo)">
+                        <MudIcon Icon="@modulo.Icono" Size="Size.Small" />
+                        <span>@modulo.Nombre</span>
+                    </button>
+                }
+            </div>
+
+            <label class="inf-hub__switch" title="Muestra también los informes del Metrocar que todavía se están migrando">
+                <input type="checkbox" checked="@_verProximamente" @onchange="ToggleProximamente" />
+                <span>Ver los que vienen</span>
+            </label>
+        </div>
+
+        @* ── Secciones por módulo ── *@
+        var grupos = InformesCatalogo.PorModulo(Permisos, _verProximamente)
+            .Where(g => _moduloFoco is null || g.Modulo.Modulo == _moduloFoco)
+            .Select(g => (g.Modulo, Informes: g.Informes.Where(i => i.Coincide(_busqueda)).ToList()))
+            .Where(g => g.Informes.Count > 0)
+            .ToList();
+
+        @if (grupos.Count == 0)
+        {
+            <div class="inf-vacio">
+                <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Large" />
+                <p>No hay informes que coincidan con <b>@_busqueda</b>.</p>
+                <MudButton Variant="Variant.Text" OnClick="LimpiarFiltros">Limpiar la búsqueda</MudButton>
+            </div>
+        }
+
+        @foreach (var grupo in grupos)
+        {
+            <section class="inf-modulo">
+                <header class="inf-modulo__head" style="@($"--inf-color:{grupo.Modulo.Color};")">
+                    <MudIcon Icon="@grupo.Modulo.Icono" Size="Size.Small" />
+                    <h2>@grupo.Modulo.Nombre</h2>
+                    <span class="inf-modulo__count">@grupo.Informes.Count(i => i.Estado == EstadoInforme.Disponible)</span>
+                </header>
+
+                <div class="inf-grid">
+                    @foreach (var informe in grupo.Informes)
+                    {
+                        var proximo = informe.Estado == EstadoInforme.Proximamente;
+
+                        @if (proximo)
+                        {
+                            <div class="inf-card inf-card--soon" style="@($"--inf-color:{grupo.Modulo.Color};")">
+                                <div class="inf-card__icon"><MudIcon Icon="@informe.Icono" /></div>
+                                <div class="inf-card__body">
+                                    <h3 class="inf-card__title">@informe.Titulo</h3>
+                                    <p class="inf-card__q">@informe.Pregunta</p>
+                                </div>
+                                <span class="inf-card__badge">Próximamente</span>
+                            </div>
+                        }
+                        else
+                        {
+                            <a class="inf-card" href="@informe.Href()" style="@($"--inf-color:{grupo.Modulo.Color};")">
+                                <div class="inf-card__icon"><MudIcon Icon="@informe.Icono" /></div>
+                                <div class="inf-card__body">
+                                    <h3 class="inf-card__title">@informe.Titulo</h3>
+                                    <p class="inf-card__q">@informe.Pregunta</p>
+                                </div>
+                                <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Class="inf-card__go" Size="Size.Small" />
+                            </a>
+                        }
+                    }
+                </div>
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private string? _busqueda;
+    private ModuloInforme? _moduloFoco;
+    private bool _verProximamente = true;
+    private int _totalDisponibles;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo("/login", forceLoad: false);
+            return;
+        }
+
+        _totalDisponibles = InformesCatalogo.Visibles(Permisos, incluirProximamente: false).Count();
+    }
+
+    private void AlternarModulo(ModuloInforme modulo) =>
+        _moduloFoco = _moduloFoco == modulo ? null : modulo;
+
+    private void ToggleProximamente(ChangeEventArgs e) =>
+        _verProximamente = e.Value is true;
+
+    private void LimpiarFiltros()
+    {
+        _busqueda = null;
+        _moduloFoco = null;
+    }
+}

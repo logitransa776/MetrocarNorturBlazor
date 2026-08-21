@@ -42,7 +42,7 @@ BEGIN
         puerto       int            NULL,               -- PUERTO (legacy FoxPro LAN; NULL en web)
         puerto_env   int            NULL,               -- PUERTO_ENV (legacy FoxPro LAN; NULL en web)
 
-        motivo_fin   nvarchar(20)   NULL,               -- 'LOGOUT' | 'EXPIRADA' | NULL
+        motivo_fin   nvarchar(20)   NULL,               -- 'LOGOUT' | 'DESCONECTADO' | 'EXPIRADA' | 'VENCIDA' | NULL
 
         -- metadata de réplica (igual que el resto de replicaVPF)
         _deleted     bit            NOT NULL DEFAULT 0,

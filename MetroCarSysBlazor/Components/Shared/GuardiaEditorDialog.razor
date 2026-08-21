@@ -65,7 +65,7 @@
                         @if (SoloEscritura)
                         {
                             <MudSelect T="long" @bind-Value="_interno" Dense="true"
-                                       Variant="Variant.Outlined" Margin="Margin.Dense" OnClick="@(() => {})">
+                                       Variant="Variant.Outlined" Margin="Margin.Dense">
                                 @foreach (var v in _internos)
                                 {
                                     <MudSelectItem Value="@v.Interno">@v.Codigo · @v.Dominio</MudSelectItem>

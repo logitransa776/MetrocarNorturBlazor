@@ -1,0 +1,219 @@
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Editor de una novedad del libro — réplica de libro_novedad_abm.scx en sus modos
+   alta / modifica / baja, más un modo "ver" que el FoxPro no tiene.
+
+   Fidelidad al original (verificado en el fuente, 19/08/2026):
+     · ALTA: escribe SOLO 5 campos (f_carga, asunto, mensaje, usuario_cr, id_viaje).
+     · MODIFICA: cambia SOLO el mensaje. El asunto queda fijo a propósito — en las novedades
+       de unidad es el único nexo con el interno (la tabla no tiene columna `interno`).
+     · BAJA: física (DELETE). 🐛 La baja de ESTE form está rota en el fuente (el DELETE está
+       comentado y apunta a la tabla `agenda`); la que borra de verdad es la de la lista
+       libro_novedad.scx, que es la que se replica.
+
+   ⚠ ANDAMIAJE: los tres modos de escritura están construidos pero el botón está DESHABILITADO
+   hasta AbmFeatureFlags.NovedadesAbmActivo = true.
+   Plano: docs/PlanoFoxPro/trafico/LIBRO_NOVEDADES.md
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@_icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@_titulo</span>
+            @if (Fila is not null && Fila.IdViaje > 0)
+            {
+                <span class="zoom-title-bar__nro">Reserva&nbsp;#@Fila.IdViaje</span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (!AbmActivo && Modo != "ver")
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                <b>Vista previa del ABM.</b> El libro de novedades todavía se escribe desde el
+                Metrocar; esta pantalla queda lista para el día que la tabla pase a Buslink.
+            </MudAlert>
+        }
+        @if (Modo == "baja")
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                Se va a <b>eliminar definitivamente</b> esta novedad del libro. La tabla no tiene
+                baja lógica: el registro desaparece.
+            </MudAlert>
+        }
+        @if (Modo == "modifica")
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                Solo se puede cambiar el <b>mensaje</b> — igual que en el Metrocar. El asunto queda
+                fijo porque es lo que liga la novedad con la unidad o el cliente.
+            </MudAlert>
+        }
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+        }
+
+        <div class="zoom-box zoom-box--sec">
+            <span class="zoom-box__label">Novedad</span>
+            <div class="zoom-row pa-2">
+                <div class="zoom-field zoom-field--4">
+                    <div class="zoom-field__label">Asunto</div>
+                    @if (Modo == "alta")
+                    {
+                        <MudTextField T="string" @bind-Value="_asunto" Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" MaxLength="200" Immediate="true" />
+                    }
+                    else
+                    {
+                        <div class="zoom-field__value zoom-field__value--acento" title="@_asunto">@_asunto</div>
+                    }
+                </div>
+            </div>
+            @if (Fila is not null)
+            {
+                <div class="zoom-row pa-2">
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Fecha de carga</div>
+                        <div class="zoom-field__value">@(Fila.FCarga?.ToString("dd/MM/yyyy HH:mm") ?? "—")</div>
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Usuario</div>
+                        <div class="zoom-field__value">@(Fila.Usuario.Length > 0 ? Fila.Usuario : "—")</div>
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Origen</div>
+                        <div class="zoom-field__value">@Fila.Origen</div>
+                    </div>
+                    <div class="zoom-field zoom-field--sm">
+                        <div class="zoom-field__label">Enviada por correo</div>
+                        <div class="zoom-field__value">@(Fila.FEnvio?.ToString("dd/MM/yyyy") ?? "Pendiente")</div>
+                    </div>
+                </div>
+                @if (Fila.Cliente.Length > 0)
+                {
+                    <div class="zoom-row pa-2">
+                        <div class="zoom-field zoom-field--4">
+                            <div class="zoom-field__label">Cliente de la reserva</div>
+                            <div class="zoom-field__value" title="@Fila.Cliente">@Fila.Cliente</div>
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+
+        <div class="zoom-box zoom-box--sec">
+            <span class="zoom-box__label">Mensaje</span>
+            <div class="pa-2">
+                @if (Modo is "alta" or "modifica")
+                {
+                    <MudTextField T="string" @bind-Value="_mensaje" Variant="Variant.Outlined"
+                                  Margin="Margin.Dense" Lines="6" Immediate="true"
+                                  Placeholder="Qué pasó, con el detalle que le sirva al turno siguiente" />
+                }
+                else
+                {
+                    <div class="nov-card__msg">@(_mensaje.Length > 0 ? _mensaje : "(sin mensaje)")</div>
+                }
+            </div>
+        </div>
+    </DialogContent>
+
+    <DialogActions>
+        <span class="cli-toolbar__hint" style="margin-right:auto;">
+            <MudIcon Icon="@(AbmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+            @(AbmActivo ? "Queda en el libro con tu usuario y la hora actual"
+                        : "Escritura preparada · se habilita cuando el libro pase a Buslink")
+        </span>
+        <MudButton Variant="Variant.Text" OnClick="Cerrar">Cancelar</MudButton>
+        @if (Modo != "ver")
+        {
+            <MudButton Variant="Variant.Filled" Color="@(Modo == "baja" ? Color.Error : Color.Success)"
+                       StartIcon="@(Modo == "baja" ? Icons.Material.Filled.Delete : Icons.Material.Filled.Save)"
+                       OnClick="Grabar" Disabled="@(!AbmActivo || _grabando || !PuedeGrabar)">
+                @(_grabando ? "Guardando…" : Modo == "baja" ? "Eliminar" : "Grabar")
+            </MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>"alta" · "modifica" · "baja" · "ver".</summary>
+    [Parameter] public string Modo { get; set; } = "ver";
+    [Parameter] public LibroNovedadRow? Fila { get; set; }
+    /// <summary>Asunto precargado en el alta (el nombre de la empresa, como el Init del FoxPro).</summary>
+    [Parameter] public string AsuntoSugerido { get; set; } = "";
+    /// <summary>Usuario logueado — queda en <c>libro_novedad.usuario_cr</c>.</summary>
+    [Parameter] public string Usuario { get; set; } = "";
+    [Parameter] public bool AbmActivo { get; set; }
+
+    private string _asunto = "", _mensaje = "";
+    private bool _grabando;
+    private string? _error;
+
+    private bool PuedeGrabar => Modo switch
+    {
+        "alta" => !string.IsNullOrWhiteSpace(_asunto) && !string.IsNullOrWhiteSpace(_mensaje),
+        "modifica" => !string.IsNullOrWhiteSpace(_mensaje),
+        _ => true,
+    };
+
+    private string _titulo => Modo switch
+    {
+        "alta" => "Nueva novedad",
+        "modifica" => "Modificar novedad",
+        "baja" => "Eliminar novedad",
+        _ => "Novedad del libro",
+    };
+
+    private string _icono => Modo switch
+    {
+        "alta" => Icons.Material.Filled.PostAdd,
+        "baja" => Icons.Material.Filled.DeleteForever,
+        _ => Icons.Material.Filled.NoteAlt,
+    };
+
+    protected override void OnInitialized()
+    {
+        if (Fila is not null)
+        {
+            _asunto = Fila.Asunto;
+            _mensaje = Fila.Mensaje;
+        }
+        else if (Modo == "alta")
+        {
+            _asunto = AsuntoSugerido;
+        }
+    }
+
+    private async Task Grabar()
+    {
+        _error = null;
+        _grabando = true;
+
+        var r = Modo switch
+        {
+            // Desde esta pantalla la novedad es SUELTA (id_viaje = 0): el alta ligada a una
+            // reserva se hace desde la planilla de Tráfico con F2, que es donde el operador
+            // tiene el viaje delante.
+            "alta" => await Abm.AltaNovedadAsync(0, _asunto, _mensaje, Usuario),
+            "modifica" => await Abm.ModificarNovedadAsync(Fila?.Id ?? 0, _mensaje),
+            "baja" => await Abm.BajaNovedadAsync(Fila?.Id ?? 0),
+            _ => AbmService.AbmResult.Fallo("Modo no soportado."),
+        };
+
+        _grabando = false;
+        if (!r.Ok) { _error = r.Error; return; }
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cerrar() => MudDialog.Close();
+}

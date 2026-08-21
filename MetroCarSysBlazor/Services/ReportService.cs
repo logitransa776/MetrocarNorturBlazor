@@ -63,39 +63,216 @@ public partial class ReportService
     private static string ListaCabecerasSql =>
         string.Join(",", ServiciosCabecera.Select(s => $"'{s}'"));
 
+    /// <summary>
+    /// Las 3 líneas de negocio del informe "Reservas por fecha y servicio", en el vocabulario
+    /// del cliente final. Salen de <c>servicio.modo_uso</c>, que en el ABM del FoxPro
+    /// (<c>servicio_abm.scx</c>, Optiongroup3 "Uso") es el radio
+    /// <c>Ambos ('A') / Especial ('T') / Transporte de Personal ('P')</c>:
+    ///   · <b>Turismo</b>      → modo_uso 'T' (+ los 'A', que sirven a las dos líneas)
+    ///   · <b>Personal</b>     → modo_uso 'P' (+ los 'A') — CABECERA_KM/SERV, GUARDIA4/8, CONUAR*, ATOMICA…
+    ///   · <b>Internos</b>     → el cliente propio (`parametro.id_cliente`, hoy 'NORTUR')
+    /// </summary>
+    public const string TipoTurismo = "Turismo";
+    public const string TipoPersonal = "Personal";
+    public const string TipoInternos = "Internos";
+
+    public static readonly IReadOnlyList<string> TiposServicio =
+        new[] { TipoTurismo, TipoPersonal, TipoInternos };
+
+    /// <summary>Dimensión de desglose del informe: por servicio (default) o por cliente.</summary>
+    public const string DimServicio = "Servicio";
+    public const string DimCliente = "Cliente";
+
+    // Filtro de línea de negocio. `Internos` GANA sobre modo_uso (criterio validado 30/07/2026):
+    // un viaje del cliente propio es interno aunque su servicio sea de Transporte de Personal —
+    // si no, las ~10.700 GUARDIA 4/8 de NORTUR (movimientos a taller/engrase) se mezclarían con
+    // los viajes facturables de AEROLINEAS/YPF. Es el mismo criterio que usa Banda Horaria.
+    //
+    // Los servicios 'A' (Ambos: TRASLADO, HORA ADICIONAL, LUJAN…) cuentan en las DOS líneas: se
+    // ven tanto pidiendo Turismo como pidiendo Personal (no se duplican: el filtro es un WHERE
+    // sobre el viaje, no un desglose por línea).
+    //
+    // Convención: lista vacía o las 3 tildadas = sin filtro (todo, internos incluidos).
+    // Requiere que la query tenga el LEFT JOIN a `servicio s` (los 94 viajes históricos con
+    // id_servici fuera del catálogo caen en 'A' y por eso nunca desaparecen del informe).
+    private static string FiltroTipoServicioSql(
+        IReadOnlyCollection<string> tiposSel,
+        string idClienteInterno)
+    {
+        if (tiposSel.Count == 0 || tiposSel.Count >= TiposServicio.Count) return "";
+
+        var esInterno = $"RTRIM(ISNULL(v.id_cliente, '')) = '{idClienteInterno.Replace("'", "''")}'";
+        var letras = new List<string>();
+        if (tiposSel.Contains(TipoTurismo)) { letras.Add("'T'"); letras.Add("'A'"); }
+        if (tiposSel.Contains(TipoPersonal)) { letras.Add("'P'"); letras.Add("'A'"); }
+        letras = letras.Distinct().ToList();
+
+        var partes = new List<string>();
+        if (letras.Count > 0)
+            partes.Add($"(NOT ({esInterno}) AND ISNULL(RTRIM(s.modo_uso), 'A') IN ({string.Join(",", letras)}))");
+        if (tiposSel.Contains(TipoInternos))
+            partes.Add($"({esInterno})");
+
+        return partes.Count == 0 ? "1 = 0" : "(" + string.Join(" OR ", partes) + ")";
+    }
+
     // WHERE compartido del informe "Reservas por fecha y servicio" (vista agregada y detalle).
-    // Convención: lista de servicios/estados vacía = sin filtro (todos).
-    // excluirInterno replica los informes FoxPro: afuera el cliente de prueba de
-    // `parametro.id_cliente` (hoy 'NORTUR' — guardias y viajes internos).
+    // Convención: lista de categorías/estados vacía = sin filtro (todas).
+    // categoriasSel: los códigos del desplegable, que son de SERVICIO o de CLIENTE según
+    // `dimension` — el desplegable acompaña al desglose elegido (30/07/2026).
+    // tiposSel: línea de negocio (ver FiltroTipoServicioSql). Reemplazó al viejo `excluirInterno`
+    // booleano (30/07/2026) — "Internos" pasó a ser una de las tres opciones del filtro.
     // excluirCabeceras: deja fuera CABECERA_KM/SERV (modos de facturación, no servicios).
     private static string WhereReservasFechaServicio(
         DateOnly desde,
         DateOnly hasta,
-        IReadOnlyCollection<string> serviciosSel,
+        IReadOnlyCollection<string> categoriasSel,
         IReadOnlyCollection<string> estadosSel,
-        bool excluirInterno,
-        bool excluirCabeceras)
+        IReadOnlyCollection<string> tiposSel,
+        string idClienteInterno,
+        bool excluirCabeceras,
+        string dimension = DimServicio)
     {
         var where = new List<string>
         {
             "v._deleted = 0",
             $"v.f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'"
         };
-        if (serviciosSel.Count > 0)
+        if (categoriasSel.Count > 0)
         {
-            var lista = string.Join(",", serviciosSel.Select(s => $"'{s.Replace("'", "''")}'"));
-            where.Add($"v.id_servici IN ({lista})");
+            var lista = string.Join(",", categoriasSel.Select(s => $"'{s.Replace("'", "''")}'"));
+            // Por cliente se compara contra la MISMA expresión que arma el código de la categoría
+            // (DimensionSql): así lo que se tilda en el desplegable mapea 1:1 con las filas del
+            // pivote, incluidos los viajes sin cliente (código '').
+            where.Add(dimension == DimCliente
+                ? $"{DimensionSql(DimCliente).Cod} IN ({lista})"
+                : $"v.id_servici IN ({lista})");
         }
         if (estadosSel.Count > 0 && estadosSel.Count < EstadosViaje.Count)
         {
             var lista = string.Join(",", estadosSel.Select(s => $"'{s.Replace("'", "''")}'"));
             where.Add($"v.estado_via IN ({lista})");
         }
-        if (excluirInterno)
-            where.Add("v.id_cliente <> (SELECT TOP 1 RTRIM(ISNULL(id_cliente, '')) FROM parametro)");
+        var tipo = FiltroTipoServicioSql(tiposSel, idClienteInterno);
+        if (tipo.Length > 0)
+            where.Add(tipo);
         if (excluirCabeceras)
             where.Add($"v.id_servici NOT IN ({ListaCabecerasSql})");
         return string.Join(" AND ", where);
+    }
+
+    // Expresiones de la categoría de desglose. Se comparten entre la vista agregada y el DETALLE
+    // (drill-down/Excel): las dos tienen que producir el MISMO string, porque la UI cruza las
+    // filas del detalle contra las etiquetas del pivote comparando texto.
+    private const string EtiquetaServicioSql =
+        "COALESCE(NULLIF(LTRIM(RTRIM(s.nombre)), ''), LTRIM(RTRIM(v.id_servici)), '(sin servicio)')";
+    private const string EtiquetaClienteSql =
+        "COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cli)), ''), NULLIF(LTRIM(RTRIM(v.id_cliente)), ''), '(sin cliente)')";
+
+    /// <summary>Par (código, etiqueta) SQL de la dimensión de desglose elegida.</summary>
+    private static (string Cod, string Etiqueta) DimensionSql(string dimension) =>
+        dimension == DimCliente
+            ? ("COALESCE(LTRIM(RTRIM(v.id_cliente)), '')", EtiquetaClienteSql)
+            : ("COALESCE(LTRIM(RTRIM(v.id_servici)), '')", EtiquetaServicioSql);
+
+    /// <summary>
+    /// Los servicios que REALMENTE tuvieron viajes en el período, para el desplegable de filtros.
+    /// Antes se ofrecía el catálogo completo (61 servicios) y la clienta veía códigos como
+    /// ATOMICA, CONUAR* o AR.EZEIZA*, que no tienen un solo viaje desde 2021 (30/07/2026).
+    /// Trae `modo_uso` para que la UI pueda además esconder los que no son de la línea filtrada.
+    /// </summary>
+    public async Task<List<CategoriaMovimientoDto>> GetServiciosConMovimientoAsync(DateOnly desde, DateOnly hasta)
+    {
+        var key = $"rfsservmov|{desde:yyyyMMdd}|{hasta:yyyyMMdd}";
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            var sql = $"""
+                SELECT DISTINCT
+                    LTRIM(RTRIM(v.id_servici))         AS Cod,
+                    {EtiquetaServicioSql}              AS Nombre,
+                    ISNULL(RTRIM(s.modo_uso), 'A')     AS ModoUso
+                FROM viaje v
+                LEFT JOIN servicio s ON v.id_servici = s.id_servici
+                WHERE v._deleted = 0
+                  AND v.f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'
+                ORDER BY Nombre
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+
+            var result = new List<CategoriaMovimientoDto>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                result.Add(new CategoriaMovimientoDto(
+                    Cod: reader.GetString(0).Trim(),
+                    Nombre: reader.GetString(1).Trim(),
+                    ModoUso: reader.GetString(2).Trim()));
+            return result;
+        }) ?? new();
+    }
+
+    /// <summary>
+    /// Los CLIENTES que realmente tuvieron viajes en el período, para el mismo desplegable de
+    /// filtros cuando el informe se desglosa por cliente (30/07/2026): el combo acompaña al
+    /// desglose en lugar de quedar ofreciendo servicios que ya no son la unidad de análisis.
+    /// A diferencia de los servicios, acá el filtro de línea de negocio se aplica EN LA QUERY
+    /// (el cliente no tiene `modo_uso`): pidiendo solo Turismo no aparecen las empresas de
+    /// Transporte de Personal. Las cabeceras NO se excluyen — por cliente sí informan.
+    /// El código puede venir vacío ('' = "(sin cliente)"), igual que en el pivote.
+    /// </summary>
+    public async Task<List<CategoriaMovimientoDto>> GetClientesConMovimientoAsync(
+        DateOnly desde,
+        DateOnly hasta,
+        IReadOnlyCollection<string> tiposSel)
+    {
+        var tipKey = tiposSel.Count == 0 ? "all" : string.Join(",", tiposSel.OrderBy(x => x));
+        var key = $"rfsclimov|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{tipKey}";
+
+        var idInterno = await GetIdClienteInternoAsync();
+
+        return await _cache.GetOrCreateAsync(key, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+
+            // `nombre_cli` está desnormalizado en viaje: el mismo id_cliente puede aparecer
+            // escrito de varias formas. Se agrupa por CÓDIGO (que es lo que filtra) y se toma
+            // un nombre con MAX, para no repetir el mismo cliente en la lista.
+            var where = WhereReservasFechaServicio(
+                desde, hasta, Array.Empty<string>(), Array.Empty<string>(), tiposSel,
+                idInterno, excluirCabeceras: false, dimension: DimCliente);
+
+            var sql = $"""
+                SELECT
+                    {DimensionSql(DimCliente).Cod}   AS Cod,
+                    MAX({EtiquetaClienteSql})        AS Nombre
+                FROM viaje v
+                LEFT JOIN servicio s ON v.id_servici = s.id_servici
+                WHERE {where}
+                GROUP BY {DimensionSql(DimCliente).Cod}
+                ORDER BY Nombre
+                """;
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+
+            var result = new List<CategoriaMovimientoDto>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                result.Add(new CategoriaMovimientoDto(
+                    Cod: reader.IsDBNull(0) ? "" : reader.GetString(0).Trim(),
+                    Nombre: reader.IsDBNull(1) ? "(sin cliente)" : reader.GetString(1).Trim(),
+                    ModoUso: "A"));
+            return result;
+        }) ?? new();
     }
 
     /// <summary>
@@ -107,10 +284,13 @@ public partial class ReportService
         DateOnly desde,
         DateOnly hasta,
         IReadOnlyCollection<string> estadosSel,
-        bool excluirInterno)
+        IReadOnlyCollection<string> tiposSel)
     {
         var estKey = estadosSel.Count == 0 ? "all" : string.Join(",", estadosSel.OrderBy(x => x));
-        var key = $"rfscab|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{excluirInterno}|{estKey}";
+        var tipKey = tiposSel.Count == 0 ? "all" : string.Join(",", tiposSel.OrderBy(x => x));
+        var key = $"rfscab|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{tipKey}|{estKey}";
+
+        var idInterno = await GetIdClienteInternoAsync();
 
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
@@ -119,11 +299,13 @@ public partial class ReportService
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
 
-            // Mismo WHERE, pero fijando servicios = solo cabeceras y sin excluirlas.
-            var where = WhereReservasFechaServicio(desde, hasta, ServiciosCabecera, estadosSel, excluirInterno, excluirCabeceras: false);
+            // Mismo WHERE, pero fijando servicios = solo cabeceras y sin excluirlas. El JOIN a
+            // `servicio` es obligatorio: el filtro de línea de negocio mira s.modo_uso.
+            var where = WhereReservasFechaServicio(desde, hasta, ServiciosCabecera, estadosSel, tiposSel, idInterno, excluirCabeceras: false, dimension: DimServicio);
             var sql = $"""
                 SELECT COUNT(*) AS Reservas, SUM(COALESCE(v.pax, 0)) AS Pax
                 FROM viaje v
+                LEFT JOIN servicio s ON v.id_servici = s.id_servici
                 WHERE {where}
                 """;
 
@@ -136,17 +318,30 @@ public partial class ReportService
         });
     }
 
+    /// <summary>
+    /// Vista agregada del informe: una fila por fecha × categoría de desglose.
+    /// </summary>
+    /// <param name="dimension">
+    /// <see cref="DimServicio"/> (default) o <see cref="DimCliente"/>. El desglose por CLIENTE
+    /// (30/07/2026) es lo que hace usable la línea de Transporte de Personal: ahí el 99% de los
+    /// viajes son CABECERA_KM/CABECERA_SERV — modos de facturación cuyo "servicio" no informa
+    /// nada — y el corte con sentido es la empresa (AEROLINEAS, YPF, CONUAR, MAPFRE…).
+    /// </param>
     public async Task<List<ReservaFechaServicioRow>> GetReservasPorFechaServicioAsync(
         DateOnly desde,
         DateOnly hasta,
-        IReadOnlyCollection<string> serviciosSel,
+        IReadOnlyCollection<string> categoriasSel,
         IReadOnlyCollection<string> estadosSel,
-        bool excluirInterno,
-        bool excluirCabeceras)
+        IReadOnlyCollection<string> tiposSel,
+        bool excluirCabeceras,
+        string dimension = DimServicio)
     {
-        var servKey = serviciosSel.Count == 0 ? "all" : string.Join(",", serviciosSel.OrderBy(x => x));
+        var catKey = categoriasSel.Count == 0 ? "all" : string.Join(",", categoriasSel.OrderBy(x => x));
         var estKey = estadosSel.Count == 0 ? "all" : string.Join(",", estadosSel.OrderBy(x => x));
-        var key = $"rfs|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{excluirInterno}|{excluirCabeceras}|{estKey}|{servKey}";
+        var tipKey = tiposSel.Count == 0 ? "all" : string.Join(",", tiposSel.OrderBy(x => x));
+        var key = $"rfs|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{dimension}|{tipKey}|{excluirCabeceras}|{estKey}|{catKey}";
+
+        var idInterno = await GetIdClienteInternoAsync();
 
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
@@ -155,19 +350,20 @@ public partial class ReportService
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
 
+            var (codSql, etiquetaSql) = DimensionSql(dimension);
             var sql = $"""
                 SELECT
                     v.f_reserva                              AS Fecha,
-                    v.id_servici                             AS CodServicio,
-                    COALESCE(s.nombre, v.id_servici)         AS Servicio,
+                    {codSql}                                 AS Cod,
+                    {etiquetaSql}                            AS Etiqueta,
                     COUNT(*)                                 AS Reservas,
                     SUM(CASE WHEN v.estado_via='CANCELADO' THEN 1 ELSE 0 END) AS Canceladas,
                     SUM(COALESCE(v.pax, 0))                  AS Pax
                 FROM viaje v
                 LEFT JOIN servicio s ON v.id_servici = s.id_servici
-                WHERE {WhereReservasFechaServicio(desde, hasta, serviciosSel, estadosSel, excluirInterno, excluirCabeceras)}
-                GROUP BY v.f_reserva, v.id_servici, s.nombre
-                ORDER BY v.f_reserva, Servicio
+                WHERE {WhereReservasFechaServicio(desde, hasta, categoriasSel, estadosSel, tiposSel, idInterno, excluirCabeceras, dimension)}
+                GROUP BY v.f_reserva, {codSql}, {etiquetaSql}
+                ORDER BY v.f_reserva, Etiqueta
                 """;
 
             using var cmd = conn.CreateCommand();
@@ -198,14 +394,18 @@ public partial class ReportService
     public async Task<List<ReservaFsDetalleRow>> GetReservasFechaServicioDetalleAsync(
         DateOnly desde,
         DateOnly hasta,
-        IReadOnlyCollection<string> serviciosSel,
+        IReadOnlyCollection<string> categoriasSel,
         IReadOnlyCollection<string> estadosSel,
-        bool excluirInterno,
-        bool excluirCabeceras)
+        IReadOnlyCollection<string> tiposSel,
+        bool excluirCabeceras,
+        string dimension = DimServicio)
     {
-        var servKey = serviciosSel.Count == 0 ? "all" : string.Join(",", serviciosSel.OrderBy(x => x));
+        var catKey = categoriasSel.Count == 0 ? "all" : string.Join(",", categoriasSel.OrderBy(x => x));
         var estKey = estadosSel.Count == 0 ? "all" : string.Join(",", estadosSel.OrderBy(x => x));
-        var key = $"rfsdet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{excluirInterno}|{excluirCabeceras}|{estKey}|{servKey}";
+        var tipKey = tiposSel.Count == 0 ? "all" : string.Join(",", tiposSel.OrderBy(x => x));
+        var key = $"rfsdet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{dimension}|{tipKey}|{excluirCabeceras}|{estKey}|{catKey}";
+
+        var idInterno = await GetIdClienteInternoAsync();
 
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
@@ -215,14 +415,16 @@ public partial class ReportService
             await conn.OpenAsync();
 
             // viaje.id_viaje y viaje.pax son int (no bigint) — leer con GetInt32.
+            // Servicio y Cliente usan las MISMAS expresiones que la vista agregada
+            // (EtiquetaServicioSql / EtiquetaClienteSql): el drill-down cruza por texto.
             var sql = $"""
                 SELECT
                     v.id_viaje                                            AS IdViaje,
                     v.f_reserva                                           AS Fecha,
                     COALESCE(CONVERT(varchar(5), v.hs_inicio, 108), '')   AS Hora,
-                    COALESCE(v.id_servici, '')                            AS CodServicio,
-                    COALESCE(s.nombre, v.id_servici, '')                  AS Servicio,
-                    COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cli)), ''), v.id_cliente, '') AS Cliente,
+                    COALESCE(LTRIM(RTRIM(v.id_servici)), '')              AS CodServicio,
+                    {EtiquetaServicioSql}                                 AS Servicio,
+                    {EtiquetaClienteSql}                                  AS Cliente,
                     LTRIM(RTRIM(COALESCE(v.d_destino, ''))) +
                         CASE WHEN LTRIM(RTRIM(COALESCE(v.h_destino, ''))) <> ''
                              THEN ' a ' + LTRIM(RTRIM(v.h_destino)) ELSE '' END AS Recorrido,
@@ -234,7 +436,7 @@ public partial class ReportService
                     COALESCE(v.grupo, '')                                 AS Grupo
                 FROM viaje v
                 LEFT JOIN servicio s ON v.id_servici = s.id_servici
-                WHERE {WhereReservasFechaServicio(desde, hasta, serviciosSel, estadosSel, excluirInterno, excluirCabeceras)}
+                WHERE {WhereReservasFechaServicio(desde, hasta, categoriasSel, estadosSel, tiposSel, idInterno, excluirCabeceras, dimension)}
                 ORDER BY v.f_reserva, v.hs_inicio, v.id_viaje
                 """;
 
@@ -284,9 +486,13 @@ public partial class ReportService
             v.origen                                             AS Origen,
             CONVERT(varchar(5), v.hs_present, 108)               AS HPre,
             CONVERT(varchar(5), v.hs_inicio, 108)                AS HIni,
-            CONVERT(varchar(5), v.hs_fin, 108)                   AS HFin,
+            -- ⚠️ H.Fin = hs_fin_apr (fin PROGRAMADO) y H.Cie = hs_fin (cierre REAL).
+            -- No es un typo: es lo que hace el FoxPro (arma_grid_viaje_sup_ref de
+            -- trafico2.scx → column4 = hs_fin_aprox "H. Fin", column6 = hs_fin "H. Cie").
+            -- Estaba al revés hasta el 03/08/2026. La grilla de CANCELADOS ya lo tenía bien.
+            CONVERT(varchar(5), v.hs_fin_apr, 108)               AS HFin,
             CONVERT(varchar(5), v.hs_aviso, 108)                 AS HAvi,
-            CONVERT(varchar(5), v.hs_fin_apr, 108)               AS HCie,
+            CONVERT(varchar(5), v.hs_fin, 108)                   AS HCie,
             v.cronogram2                                         AS UPr,
             v.cronograma                                         AS UCb,
             v.id_interno                                         AS UAs,
@@ -299,7 +505,12 @@ public partial class ReportService
             LEN(LTRIM(v.d_destino))                              AS RecorridoDesdeLen,
             v.fletero                                            AS Fletero,
             v.nombre_cho                                         AS Chofer,
-            LEFT(LTRIM(RTRIM(v.id_vehicu2)), 4)                  AS Veh,
+            -- Veh = TIPO de vehículo pedido para el servicio (BUS / VAN / MINI / AUTO /
+            -- HIACE), igual que la columna "Veh" del Metrocar. ⚠️ En la réplica los dos
+            -- campos están CRUZADOS respecto del FoxPro: v.id_vehicul es el TIPO y
+            -- v.id_vehicu2 es el DOMINIO (la patente). Hasta el 18/08/2026 esta columna
+            -- mostraba LEFT(id_vehicu2, 4) — o sea, la patente cortada a 4 letras.
+            LTRIM(RTRIM(v.id_vehicul))                           AS Veh,
             v.id_cliente                                         AS Cliente,
             v.pax                                                AS Pax,
             v.agua                                               AS Agua,
@@ -317,6 +528,10 @@ public partial class ReportService
             v.interno                                            AS Interno,
             v.hs_inicio                                          AS HsInicio,
             v.hs_fin                                             AS HsFin,
+            -- Cierre COMPLETO (con fecha), no solo HH:mm como HCie: el Tablero de ocupación
+            -- necesita la fecha para dibujar los servicios que cruzan la medianoche
+            -- (ej. sale 17:00 y cierra 01:00 del día siguiente). Ver OcupacionFlotaDialog.
+            v.hs_fin_apr                                         AS HsCierre,
             -- Claves para el submenú "Ver Datos Extras" (réplica de verdatosex de trafico2.scx).
             -- id_operado → cliente_operador (Ver Datos Operador); gps_cod → cabecera (Ver
             -- Recorrido); [file] → ruta del adjunto (Ver Adjunto). El de Adicionales usa IdViaje.
@@ -327,20 +542,24 @@ public partial class ReportService
         """;
 
     // Mapea una fila del reader (proyección TraficoProjection) a PlanillaTraficoRow.
-    // Réplica de la lógica chkNortur de arma_grid_viaje: fila interna NORTUR si
-    // cronograma, cronogramacbio (réplica: cronogram2) o id_chofer == 'NORTUR'.
+    // EsNortur = servicio INTERNO de la empresa: id_cliente = 'NORTUR' (la misma columna
+    // "Cliente" que se ve en la grilla). Son los turnos médicos, guardias, engrases, VTV, etc.
+    // ⚠️ CAMBIO (03/08/2026, pedido por el usuario): antes esto replicaba el chkNortur del
+    // FoxPro (arma_grid_viaje), que marcaba la fila si cronograma / cronogram2 (U/Cb, U/Pr) o
+    // id_chofer valían 'NORTUR'. Eso NO son los internos: es el placeholder de DIAGRAMACIÓN de
+    // flota propia sin interno concreto, que casualmente coincide con parametro.id_cliente.
+    // El botón de la Planilla ahora filtra por cliente, que es lo que el usuario espera ver.
+    private const string IdClienteNortur = "NORTUR";
     private static PlanillaTraficoRow MapPlanillaRow(System.Data.Common.DbDataReader reader)
     {
         string S(string c) { var i = reader.GetOrdinal(c); return reader.IsDBNull(i) ? "" : reader.GetValue(i).ToString()!.Trim(); }
         int? N(string c) { var i = reader.GetOrdinal(c); return reader.IsDBNull(i) ? null : Convert.ToInt32(reader.GetValue(i)); }
         DateTime? D(string c) { var i = reader.GetOrdinal(c); return reader.IsDBNull(i) ? null : reader.GetDateTime(i); }
 
-        const string idClientePrueba = "NORTUR";
         var cronograma = S("UCb");
-        var cronogramaCbio = S("UPr");
         var idChofer = S("IdChofer");
         var cliente = S("Cliente");
-        bool esNortur = cronograma == idClientePrueba || cronogramaCbio == idClientePrueba || idChofer == idClientePrueba;
+        bool esNortur = string.Equals(cliente, IdClienteNortur, StringComparison.OrdinalIgnoreCase);
 
         return new PlanillaTraficoRow(
             IdViaje: Convert.ToInt32(reader.GetValue(reader.GetOrdinal("IdViaje"))),
@@ -374,6 +593,7 @@ public partial class ReportService
             Interno: N("Interno"),
             HsInicio: D("HsInicio"),
             HsFin: D("HsFin"),
+            HsCierre: D("HsCierre"),
             IdChofer: idChofer,
             IdVehiculo: S("IdVehiculo"),
             IdOperador: S("IdOperador"),
@@ -400,7 +620,11 @@ public partial class ReportService
                 WHERE v._deleted = 0
                   AND v.f_reserva = '{dia:yyyyMMdd}'
                   AND v.estado_via <> 'CANCELADO'
-                ORDER BY v.hs_inicio, v.hs_present
+                -- Orden IDÉNTICO al FoxPro (arma_grid_viaje): única clave real = hs_inicio.
+                -- Empates → id_viaje (orden de inserción = el orden físico/natural de VFP en
+                -- empates). NO usar hs_present: el FoxPro no la usa y en la réplica viene NULL
+                -- en casi todas las filas → desordenaba los empates (validado 22/07/2026).
+                ORDER BY v.hs_inicio, v.id_viaje
                 """;
 
             using var cmd = conn.CreateCommand();
@@ -501,7 +725,9 @@ public partial class ReportService
         var sql = $"""
             {TraficoProjection}
             WHERE {where}
-            ORDER BY v.f_reserva, v.hs_inicio, v.hs_present
+            -- Mismo criterio que la vista de día (parity FoxPro): hs_inicio + desempate por
+            -- id_viaje. f_reserva primero para que los filtros con rango de fechas agrupen por día.
+            ORDER BY v.f_reserva, v.hs_inicio, v.id_viaje
             """;
 
         using var cmd = conn.CreateCommand();
@@ -512,6 +738,142 @@ public partial class ReportService
         while (await reader.ReadAsync())
             result.Add(MapPlanillaRow(reader));
         return result;
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // F6-F9 · Cambio de CRONOGRAMA (diagramación) — catálogos del diálogo
+    // ───────────────────────────────────────────────────────────────────────────
+    // Plano: docs/PlanoFoxPro/trafico/TRAFICO_CRONOGRAMA.md
+    // Réplica de los 3 cursores del Init de trafico_cambia_cronograma.scx.
+
+    /// <summary>
+    /// Fleteros para el combo del diálogo de cronograma. A diferencia de
+    /// <see cref="GetFleterosAsync"/> (que devuelve solo el código para el filtro), acá hacen
+    /// falta las 4 columnas del cursor del FoxPro: <c>cronograma</c> es el PREFIJO de 2 letras
+    /// que se pega al interno (NT + 0049 = NT0049), <c>diagrama</c> dice si esa empresa se
+    /// diagrama por interno (hoy solo NT y TS de 22) o entra como empresa entera
+    /// (<c>id_contratado</c>: TEDESCHI, VANSQ…). Caché 5 min.
+    /// </summary>
+    public async Task<List<FleteroCronogramaRow>> GetFleterosCronogramaAsync()
+    {
+        return await _cache.GetOrCreateAsync("cronograma-fleteros", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            // ⚠️ DOS borrados distintos y NO son lo mismo:
+            //   f_delete = baja de NEGOCIO (la que hace FoxPro; el fuente filtra Empty(f_delete))
+            //   _deleted = baja de la RÉPLICA DBF→SQL
+            // Filtrando solo por _deleted salen 28 fleteros; con el filtro del FoxPro son los 22
+            // que realmente están vigentes. Hay que poner los dos.
+            // Nombre truncado a 10 chars: id_contratado → id_contrat.
+            cmd.CommandText = """
+                SELECT LTRIM(RTRIM(cronograma)) AS Prefijo,
+                       LTRIM(RTRIM(nombre))     AS Nombre,
+                       LTRIM(RTRIM(id_contrat)) AS IdContratado,
+                       diagrama                 AS Diagrama
+                FROM fletero
+                WHERE _deleted = 0 AND f_delete IS NULL AND LTRIM(RTRIM(cronograma)) <> ''
+                ORDER BY orden
+                """;
+            var lista = new List<FleteroCronogramaRow>();
+            using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                lista.Add(new FleteroCronogramaRow(
+                    rd.GetValue(0).ToString()!.Trim(),
+                    rd.GetValue(1).ToString()!.Trim(),
+                    rd.IsDBNull(2) ? "" : rd.GetValue(2).ToString()!.Trim(),
+                    !rd.IsDBNull(3) && Convert.ToBoolean(rd.GetValue(3))));
+            }
+            return lista;
+        }) ?? new();
+    }
+
+    /// <summary>
+    /// Internos ACTIVOS de un fletero, para el segundo combo del diálogo. Literal del FoxPro
+    /// (<c>arma_combo_interno</c>): se une <c>vehiculo.fletero</c> con <c>fletero.id_contratado</c>
+    /// y se filtra por el PREFIJO (<c>fletero.cronograma</c>), no por el id_contratado.
+    /// </summary>
+    public async Task<List<int>> GetInternosPorFleteroAsync(string prefijoFletero)
+    {
+        if (string.IsNullOrWhiteSpace(prefijoFletero)) return new();
+        return await _cache.GetOrCreateAsync($"cronograma-internos-{prefijoFletero}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            // CAST a int: vehiculo.interno es BIGINT en la réplica (igual que viaje.interno) y
+            // leerlo con GetInt32 tira InvalidCastException — regla del proyecto.
+            cmd.CommandText = """
+                SELECT CAST(a.interno AS int) AS interno
+                FROM vehiculo a
+                INNER JOIN fletero b ON LTRIM(RTRIM(a.fletero)) = LTRIM(RTRIM(b.id_contrat))
+                WHERE a.activo = 1 AND a._deleted = 0 AND b._deleted = 0 AND b.f_delete IS NULL
+                  AND LTRIM(RTRIM(b.cronograma)) = @pref
+                ORDER BY a.interno
+                """;
+            AgregarParam(cmd, "@pref", prefijoFletero.Trim());
+            var lista = new List<int>();
+            using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+                if (!rd.IsDBNull(0)) lista.Add(Convert.ToInt32(rd.GetValue(0)));
+            return lista;
+        }) ?? new();
+    }
+
+    /// <summary>
+    /// El código de "empresa propia" que muestra el tercer radio del diálogo y el botón NORTUR
+    /// de la planilla. En FoxPro es <c>parametro.id_cliente_prueba</c>; en la réplica el nombre
+    /// quedó truncado a <c>parametro.id_cliente</c> (hoy vale <c>NORTUR</c>). Caché 30 min.
+    /// </summary>
+    public async Task<string> GetClientePruebaAsync()
+    {
+        return await _cache.GetOrCreateAsync("parametro-cliente-prueba", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30);
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT TOP 1 LTRIM(RTRIM(id_cliente)) FROM parametro";
+            var v = await cmd.ExecuteScalarAsync();
+            var s = v is null or DBNull ? "" : v.ToString()!.Trim();
+            return string.IsNullOrEmpty(s) ? IdClienteNortur : s;
+        }) ?? IdClienteNortur;
+    }
+
+    /// <summary>
+    /// Motivos del cambio de unidad. ⚠️ El FoxPro reusa el catálogo de LLEGADAS TARDE
+    /// (<c>viaje_motivo_tarde</c>, 17 filas): varios no tienen nada que ver con cambiar de
+    /// unidad (CHOFER DORMIDO, DEMORAS POR TRANSITO PESADO…). Se deja igual a propósito —
+    /// decisión del usuario 03/08/2026 — para que el historial de <c>viaje_log</c> siga siendo
+    /// comparable entre los dos sistemas. Depurarlo es tarea post día D.
+    /// </summary>
+    public async Task<List<string>> GetMotivosCambioUnidadAsync()
+    {
+        return await _cache.GetOrCreateAsync("cronograma-motivos", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT LTRIM(RTRIM(nombre)) AS n
+                FROM viaje_motivo_tarde
+                WHERE _deleted = 0 AND LTRIM(RTRIM(nombre)) <> ''
+                ORDER BY nombre
+                """;
+            var lista = new List<string>();
+            using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync()) lista.Add(rd.GetValue(0).ToString()!.Trim());
+            return lista;
+        }) ?? new();
     }
 
     /// <summary>
@@ -738,6 +1100,19 @@ public partial class ReportService
         // sus claves ("odometros|...", "agenda-venc|...") se dejan expirar por TTL.
     }
 
+    /// <summary>
+    /// Invalida los cachés que derivan de la fila única de <c>parametro</c>. Se llama al grabar
+    /// Parámetros Empresa/Generales: esos valores gobiernan pantallas ya entregadas (chip de
+    /// Vencimientos, motor de avisos F4, tasa de IVA de Facturación), y sin esto el cambio
+    /// tardaría hasta 30 minutos en verse. Ver skill <c>modulo-sistema</c>.
+    /// </summary>
+    public void InvalidarCacheParametros()
+    {
+        _cache.Remove("nortur:piva");             // tasa de IVA (Facturación)
+        _cache.Remove("aviso_config");            // aviso_cheq + aviso_tiem (motor F4 de Tráfico)
+        _cache.Remove("agenda-venc|parametros");  // aviso_cho/veh/mat (chip de Vencimientos)
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     //  ABM DE USUARIOS Y PERMISOS (Sistema → Accesos del FoxPro: usuario.scx / usuario_abm.scx)
     //  Tabla `usuario`: id (int, PK física NO identity), usuario (nvarchar 15, PK lógica),
@@ -951,7 +1326,7 @@ public partial class ReportService
         }
 
         // Filtro de eventos (lista blanca de valores conocidos → seguro para concatenar).
-        var permitidos = new[] { "LOGIN", "LOGOUT", "EXPIRADA", "VENCIDA", "LOGIN_FALLIDO" };
+        var permitidos = new[] { "LOGIN", "LOGOUT", "DESCONECTADO", "EXPIRADA", "VENCIDA", "LOGIN_FALLIDO" };
         var evFiltro = (eventos ?? Enumerable.Empty<string>())
             .Select(e => (e ?? "").Trim().ToUpperInvariant())
             .Where(e => permitidos.Contains(e))
@@ -1140,7 +1515,12 @@ public partial class ReportService
                     LTRIM(RTRIM(v.nextel))     AS Nextel,
                     v.pax                      AS Pax,
                     LTRIM(RTRIM(v.id_vehicul)) AS Vehiculo,
-                    v.hs_inicio                AS HsInicio
+                    v.hs_inicio                AS HsInicio,
+                    v.id                       AS Id,
+                    LTRIM(RTRIM(v.nombre_cho)) AS NombreChofer,
+                    v.id_viaje_i               AS IdViajeInt,
+                    LTRIM(RTRIM(v.uso))        AS Uso,
+                    LTRIM(RTRIM(v.cronograma)) AS Cronograma
                 FROM vehiculo v
                 INNER JOIN fletero f ON v.fletero = f.id_contrat
                 OUTER APPLY (
@@ -1187,7 +1567,12 @@ public partial class ReportService
                     Nextel: S(reader, "Nextel"),
                     Pax: N(reader, "Pax"),
                     Vehiculo: S(reader, "Vehiculo"),
-                    HsInicio: hsInicio
+                    HsInicio: hsInicio,
+                    Id: N(reader, "Id") ?? 0,
+                    NombreChofer: S(reader, "NombreChofer"),
+                    IdViajeInt: N(reader, "IdViajeInt"),
+                    Uso: S(reader, "Uso"),
+                    Cronograma: S(reader, "Cronograma")
                 ));
             }
             return result;
@@ -1234,7 +1619,9 @@ public partial class ReportService
                     -- ' a ' adentro). LEN ignora espacios finales; el LTRIM sí hace falta.
                     LEN(LTRIM(v.d_destino))                              AS RecorridoDesdeLen,
                     COALESCE(m.motivo, '')                               AS Motivo,
-                    LEFT(LTRIM(RTRIM(v.id_vehicu2)), 4)                  AS Veh,
+                    -- Veh = TIPO de vehículo (BUS/VAN/MINI/…), igual que la grilla
+                    -- normal: v.id_vehicul es el tipo, v.id_vehicu2 la patente.
+                    LTRIM(RTRIM(v.id_vehicul))                           AS Veh,
                     v.id_cliente                                         AS Cliente,
                     v.pax                                                AS Pax,
                     v.comentario                                         AS Comentario,
@@ -1247,7 +1634,9 @@ public partial class ReportService
                 WHERE v._deleted = 0
                   AND v.f_reserva = '{dia:yyyyMMdd}'
                   AND v.estado_via = 'CANCELADO'
-                ORDER BY v.hs_inicio
+                -- FoxPro (arma_grid_viaje CANCELADO): Order By hs_inicio. Desempate por id_viaje
+                -- para orden determinístico (igual que la vista normal).
+                ORDER BY v.hs_inicio, v.id_viaje
                 """;
 
             using var cmd = conn.CreateCommand();
@@ -1295,7 +1684,8 @@ public partial class ReportService
     ///   - id_servici/2/3 → servicio.nombre (1°/2°/3° servicio)
     ///   - id_operado     → cliente_operador.nombre (operador = contacto del cliente; el Fox
     ///                       resuelve el operador SIEMPRE contra cliente_operador, no cliente)
-    ///   - id_vehicu2     → vehiculo_tipo.nombre + capacidad (pax)
+    ///   - id_vehicul     → vehiculo_tipo.nombre + capacidad (pax) — ojo: en la réplica el
+    ///                       TIPO es id_vehicul (el FoxPro lo tiene en id_vehicu2)
     ///   - id_grupo       → cliente_grupo.nombre / f_grupo_fi / f_grupo_fc (si grupo &lt;&gt; 'SIN GRUPO')
     /// Nombres de columna ya mapeados FoxPro→SQL (truncados a 10 chars en la réplica).
     /// </summary>
@@ -1354,7 +1744,12 @@ public partial class ReportService
                     ser3.nombre                                 AS Servicio3,
                     v.cabecera                                  AS Cabecera,
                     v.km                                        AS Km,
-                    v.id_vehicu2                                AS TipoVehiculo,
+                    -- ⚠️ CRUZADOS en la réplica (corregido 18/08/2026): id_vehicul es el
+                    -- TIPO (BUS/VAN/MINI) e id_vehicu2 es el DOMINIO. Hasta hoy el Zoom
+                    -- mostraba la patente bajo "Tipo Vehículo" y el tipo bajo "Vehículo",
+                    -- y "Capac" salía siempre 0 porque el JOIN a vehiculo_tipo iba contra
+                    -- la patente y no matcheaba nunca.
+                    v.id_vehicul                                AS TipoVehiculo,
                     vt.pax                                      AS Capacidad,
                     v.pax                                       AS Pax,
                     v.agua                                      AS Agua,
@@ -1382,14 +1777,14 @@ public partial class ReportService
                     v.id_chofer                                 AS IdChofer,
                     v.id_chofer2                                AS IdChofer2,
                     v.tipo_chofe                                AS TipoChofer,
-                    v.id_vehicul                                AS Vehiculo,
+                    v.id_vehicu2                                AS Vehiculo,
                     v.fletero                                   AS Fletero
                 FROM viaje v
                     LEFT JOIN servicio       ser1 ON ser1.id_servici = v.id_servici AND ser1._deleted = 0
                     LEFT JOIN servicio       ser2 ON ser2.id_servici = v.id_servic2 AND ser2._deleted = 0
                     LEFT JOIN servicio       ser3 ON ser3.id_servici = v.id_servic3 AND ser3._deleted = 0
                     LEFT JOIN cliente_operador op  ON LTRIM(RTRIM(op.id_operado)) = LTRIM(RTRIM(v.id_operado)) AND op._deleted = 0
-                    LEFT JOIN vehiculo_tipo  vt   ON vt.id_vehicul   = v.id_vehicu2 AND vt._deleted = 0
+                    LEFT JOIN vehiculo_tipo  vt   ON vt.id_vehicul   = v.id_vehicul AND vt._deleted = 0
                     LEFT JOIN cliente_grupo  cg   ON cg.id           = v.id_grupo   AND cg._deleted = 0
                 WHERE v._deleted = 0
                   {fResFiltro}
@@ -1665,6 +2060,58 @@ public partial class ReportService
     public static readonly IReadOnlyList<string> BandasHorarias =
         new[] { "00:00-00:01", "00:02-06:29", "06:30-08:29", "08:30-14:00", "14:01-18:00", "18:01-23:59" };
 
+    // Las 24 horas del día como etiqueta de columna ("00:00" … "23:00"), en orden fijo. Es la
+    // agrupación alternativa a las bandas (pedido del frente final, 30/07/2026): mismo dato,
+    // grano más fino, para analizar la capacidad operativa de un día concreto.
+    public static readonly IReadOnlyList<string> HorasDelDia =
+        Enumerable.Range(0, 24).Select(h => $"{h:00}:00").ToList();
+
+    /// <summary>
+    /// Las 3 categorías de servicio del informe, en orden fijo de series/columnas.
+    /// `Empresa` = transporte de personal (origen 'P'), `Turismo` = transportación (origen 'T'),
+    /// `Nortur` = servicios del propio NORTUR (el cliente de `parametro.id_cliente`).
+    /// Renombrada de "Interno" a "Nortur" el 19/08/2026 (pedido del frente final, más claro
+    /// para el usuario final) — el dato es el mismo, solo cambió la etiqueta.
+    /// </summary>
+    public static readonly IReadOnlyList<string> CategoriasServicio =
+        new[] { "Empresa", "Turismo", "Nortur" };
+
+    // Clasificación en las 3 categorías. `Nortur` GANA sobre origen: un viaje del cliente
+    // interno es Nortur sea 'P' o 'T' (es como lo trataba el FoxPro, que directamente lo
+    // excluía). Solo existen los orígenes 'P' y 'T' en la base (verificado 30/07/2026 sobre
+    // las 531.806 filas del rango válido) → el ELSE cae en Turismo sin riesgo de mezclar.
+    //
+    // ⚠ El id del cliente interno entra como LITERAL, no como subconsulta a `parametro`:
+    // este CASE se repite en el GROUP BY y SQL Server rechaza subconsultas ahí
+    // ("No se pueden usar agregados ni subconsultas en las expresiones de la lista de
+    // agrupación de la cláusula GROUP BY"). Se resuelve antes con GetIdClienteInternoAsync().
+    private static string CategoriaCase(string idClienteInterno) => $"""
+        CASE
+            WHEN RTRIM(ISNULL(v.id_cliente, '')) = '{idClienteInterno.Replace("'", "''")}' THEN 'Nortur'
+            WHEN v.origen = 'P' THEN 'Empresa'
+            ELSE 'Turismo'
+        END
+        """;
+
+    /// <summary>
+    /// El código de cliente que la empresa usa para sus propios servicios (`parametro.id_cliente`,
+    /// hoy 'NORTUR'). Cacheado: es un valor de configuración, no cambia entre queries.
+    /// </summary>
+    public async Task<string> GetIdClienteInternoAsync()
+    {
+        return await _cache.GetOrCreateAsync("param-id-cliente-interno", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT TOP 1 RTRIM(ISNULL(id_cliente, '')) FROM parametro";
+            var v = await cmd.ExecuteScalarAsync();
+            return v as string ?? "";
+        }) ?? "";
+    }
+
     // Expresión SQL que clasifica un viaje en su banda por CAST(hs_inicio AS TIME).
     // Comparación por strings "HH:mm" (bordes inclusivos) para reproducir el FoxPro al dígito.
     // Se comparte entre la vista agregada y el detalle para que ambas den la MISMA banda.
@@ -1681,23 +2128,35 @@ public partial class ReportService
         """;
 
     // WHERE compartido del informe "Reservas por banda horaria" (agregado + detalle).
-    // Fiel al FoxPro: solo origen='T', excluye el cliente interno (parametro.id_cliente),
-    // exige hs_inicio no nula. Los estados se pasan como parámetro (default de la UI = todos
-    // menos CANCELADO); si vienen todos (5) o vacío, no se filtra por estado.
+    //
+    // ⚠ CAMBIO DE ALCANCE (30/07/2026, pedido del frente final): antes esto tenía fijos
+    // `v.origen = 'T'` y la exclusión del cliente interno — o sea que el informe mostraba
+    // SOLO Turismo (~7% de la operación: 280 viajes contra 3.946 de Empresa en jul/2026).
+    // Ahora el recorte lo elige el usuario con el filtro "Tipo de servicio" y las tres
+    // categorías vienen tildadas por defecto. Si querés el comportamiento viejo, destildá
+    // Empresa e Interno. Sigue exigiendo hs_inicio no nula (sin hora no hay banda).
+    //
+    // Los estados y los tipos de vehículo se pasan como parámetro (default de la UI = todos
+    // los estados menos CANCELADO); si vienen todos o vacío, no se filtra por ese campo.
     private static string WhereBandaHoraria(
         DateOnly desde,
         DateOnly hasta,
         IReadOnlyCollection<string> vehiculosSel,
-        IReadOnlyCollection<string> estadosSel)
+        IReadOnlyCollection<string> estadosSel,
+        IReadOnlyCollection<string> categoriasSel,
+        string idClienteInterno)
     {
         var where = new List<string>
         {
             "v._deleted = 0",
             $"v.f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'",
-            "v.origen = 'T'",
-            "v.id_cliente <> (SELECT TOP 1 RTRIM(ISNULL(id_cliente, '')) FROM parametro)",
             "v.hs_inicio IS NOT NULL"
         };
+        if (categoriasSel.Count > 0 && categoriasSel.Count < CategoriasServicio.Count)
+        {
+            var lista = string.Join(",", categoriasSel.Select(c => $"'{c.Replace("'", "''")}'"));
+            where.Add($"{CategoriaCase(idClienteInterno)} IN ({lista})");
+        }
         if (estadosSel.Count > 0 && estadosSel.Count < EstadosViaje.Count)
         {
             var lista = string.Join(",", estadosSel.Select(s => $"'{s.Replace("'", "''")}'"));
@@ -1711,18 +2170,27 @@ public partial class ReportService
         return string.Join(" AND ", where);
     }
 
-    // Vista agregada: conteo de viajes + suma de pax por fecha × tipo de vehículo × banda.
-    // Trae Reservas y Pax juntos para que el toggle de métrica en la UI recalcule en memoria
-    // (sin re-query), igual que el informe de fecha/servicio.
+    // Vista agregada: conteo de viajes + suma de pax por fecha × tipo de vehículo × categoría ×
+    // banda × hora. Trae Reservas y Pax juntos para que el toggle de métrica en la UI recalcule
+    // en memoria (sin re-query), igual que el informe de fecha/servicio.
+    //
+    // Se agrupa por banda Y por hora a la vez (30/07/2026) porque la UI alterna entre las dos
+    // agrupaciones sin volver a SQL. No es redundante: las bandas NO están alineadas a la hora
+    // (06:30-08:29 parte la hora 6 y la 8), así que ninguna de las dos determina a la otra.
+    // El costo es acotado: el grano más fino posible es 1 fila por viaje del período.
     public async Task<List<BandaHorariaRow>> GetReservasPorBandaHorariaAsync(
         DateOnly desde,
         DateOnly hasta,
         IReadOnlyCollection<string> vehiculosSel,
-        IReadOnlyCollection<string> estadosSel)
+        IReadOnlyCollection<string> estadosSel,
+        IReadOnlyCollection<string> categoriasSel)
     {
         var vehKey = vehiculosSel.Count == 0 ? "all" : string.Join(",", vehiculosSel.OrderBy(x => x));
         var estKey = estadosSel.Count == 0 ? "all" : string.Join(",", estadosSel.OrderBy(x => x));
-        var key = $"rbh|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{vehKey}|{estKey}";
+        var catKey = categoriasSel.Count == 0 ? "all" : string.Join(",", categoriasSel.OrderBy(x => x));
+        var key = $"rbh|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{vehKey}|{estKey}|{catKey}";
+
+        var idInterno = await GetIdClienteInternoAsync();
 
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
@@ -1731,16 +2199,19 @@ public partial class ReportService
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
 
+            var categoriaCase = CategoriaCase(idInterno);
             var sql = $"""
                 SELECT
                     v.f_reserva                       AS Fecha,
                     v.id_vehicul                      AS TipoVehiculo,
+                    {categoriaCase}                   AS Categoria,
                     {BandaCaseSql}                    AS Banda,
+                    DATEPART(hour, v.hs_inicio)       AS Hora,
                     COUNT(*)                          AS Reservas,
                     SUM(COALESCE(v.pax, 0))           AS Pax
                 FROM viaje v
-                WHERE {WhereBandaHoraria(desde, hasta, vehiculosSel, estadosSel)}
-                GROUP BY v.f_reserva, v.id_vehicul, {BandaCaseSql}
+                WHERE {WhereBandaHoraria(desde, hasta, vehiculosSel, estadosSel, categoriasSel, idInterno)}
+                GROUP BY v.f_reserva, v.id_vehicul, {categoriaCase}, {BandaCaseSql}, DATEPART(hour, v.hs_inicio)
                 ORDER BY v.f_reserva, v.id_vehicul
                 """;
 
@@ -1751,14 +2222,16 @@ public partial class ReportService
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
             {
-                var banda = reader.IsDBNull(2) ? null : reader.GetString(2);
+                var banda = reader.IsDBNull(3) ? null : reader.GetString(3);
                 if (banda is null) continue;   // hs_inicio fuera de toda banda (raro): se descarta
                 result.Add(new BandaHorariaRow(
-                    DateOnly.FromDateTime(reader.GetDateTime(0)),
-                    reader.IsDBNull(1) ? "" : reader.GetString(1).Trim(),
-                    banda,
-                    reader.GetInt32(3),
-                    reader.IsDBNull(4) ? 0 : reader.GetInt32(4)
+                    Fecha: DateOnly.FromDateTime(reader.GetDateTime(0)),
+                    TipoVehiculo: reader.IsDBNull(1) ? "" : reader.GetString(1).Trim(),
+                    Categoria: reader.GetString(2),
+                    Banda: banda,
+                    Hora: reader.GetInt32(4),
+                    Reservas: reader.GetInt32(5),
+                    Pax: reader.IsDBNull(6) ? 0 : reader.GetInt32(6)
                 ));
             }
             return result;
@@ -1774,11 +2247,14 @@ public partial class ReportService
         DateOnly desde,
         DateOnly hasta,
         IReadOnlyCollection<string> vehiculosSel,
-        IReadOnlyCollection<string> estadosSel)
+        IReadOnlyCollection<string> estadosSel,
+        IReadOnlyCollection<string> categoriasSel)
     {
         var vehKey = vehiculosSel.Count == 0 ? "all" : string.Join(",", vehiculosSel.OrderBy(x => x));
         var estKey = estadosSel.Count == 0 ? "all" : string.Join(",", estadosSel.OrderBy(x => x));
-        var key = $"rbhdet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{vehKey}|{estKey}";
+        var catKey = categoriasSel.Count == 0 ? "all" : string.Join(",", categoriasSel.OrderBy(x => x));
+        var key = $"rbhdet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{vehKey}|{estKey}|{catKey}";
+        var idInterno = await GetIdClienteInternoAsync();
 
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
@@ -1795,6 +2271,8 @@ public partial class ReportService
                     {BandaCaseSql}                                        AS Banda,
                     RTRIM(ISNULL(v.id_vehicul, ''))                       AS TipoVehiculo,
                     COALESCE(CONVERT(varchar(5), v.hs_inicio, 108), '')   AS Hora,
+                    {CategoriaCase(idInterno)}                            AS Categoria,
+                    DATEPART(hour, v.hs_inicio)                           AS HoraNum,
                     COALESCE(s.nombre, v.id_servici, '')                  AS Servicio,
                     COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cli)), ''), v.id_cliente, '') AS Cliente,
                     LTRIM(RTRIM(COALESCE(v.d_destino, ''))) +
@@ -1808,7 +2286,7 @@ public partial class ReportService
                     COALESCE(v.grupo, '')                                 AS Grupo
                 FROM viaje v
                 LEFT JOIN servicio s ON v.id_servici = s.id_servici
-                WHERE {WhereBandaHoraria(desde, hasta, vehiculosSel, estadosSel)}
+                WHERE {WhereBandaHoraria(desde, hasta, vehiculosSel, estadosSel, categoriasSel, idInterno)}
                 ORDER BY v.f_reserva, v.hs_inicio, v.id_viaje
                 """;
 
@@ -1824,20 +2302,22 @@ public partial class ReportService
                 result.Add(new BandaHorariaDetalleRow(
                     Banda: banda,
                     TipoVehiculo: reader.GetString(3).Trim(),
+                    Categoria: reader.GetString(5),
+                    Hora: reader.GetInt32(6),
                     Reserva: new ReservaFsDetalleRow(
                         IdViaje: reader.GetInt32(0),
                         Fecha: DateOnly.FromDateTime(reader.GetDateTime(1)),
                         Hora: reader.GetString(4),
                         CodServicio: "",
-                        Servicio: reader.GetString(5).Trim(),
-                        Cliente: reader.GetString(6).Trim(),
-                        Recorrido: reader.GetString(7).Trim(),
-                        Pax: reader.GetInt32(8),
-                        Estado: reader.GetString(9).Trim(),
-                        Chofer: reader.GetString(10).Trim(),
-                        Interno: reader.IsDBNull(11) ? null : Convert.ToInt32(reader.GetValue(11)),
-                        Origen: reader.GetString(12).Trim(),
-                        Grupo: reader.GetString(13).Trim())));
+                        Servicio: reader.GetString(7).Trim(),
+                        Cliente: reader.GetString(8).Trim(),
+                        Recorrido: reader.GetString(9).Trim(),
+                        Pax: reader.GetInt32(10),
+                        Estado: reader.GetString(11).Trim(),
+                        Chofer: reader.GetString(12).Trim(),
+                        Interno: reader.IsDBNull(13) ? null : Convert.ToInt32(reader.GetValue(13)),
+                        Origen: reader.GetString(14).Trim(),
+                        Grupo: reader.GetString(15).Trim())));
             }
             return result;
         }) ?? new();
@@ -1853,13 +2333,48 @@ public partial class ReportService
     public static readonly IReadOnlyList<string> TiposReservaCliente =
         new[] { "PROPIO", "CONTRATADO", "SIN REALIZAR" };
 
-    // Clasificación del FoxPro por el interno de la unidad asignada al viaje:
-    // 0 (o NULL en la réplica) = sin unidad todavía; <1000 = flota propia; >=1000 = fletero.
-    private const string TipoReservaClienteCaseSql = """
-        CASE WHEN ISNULL(v.interno, 0) = 0 THEN 'SIN REALIZAR'
-             WHEN v.interno < 1000 THEN 'PROPIO'
-             ELSE 'CONTRATADO' END
-        """;
+    /// <summary>Criterio con el que se decide si la unidad del viaje es contratada.</summary>
+    public const string CriterioUso = "USO";
+    public const string CriterioFletero = "FLETERO";
+
+    /// <summary>El fletero con el que se identifica la flota propia en `vehiculo.fletero`.</summary>
+    private const string FleteroPropio = "NORTUR";
+
+    // ── Clasificación de la unidad del viaje ────────────────────────────────────────────
+    //
+    // 🔴 La regla original del FoxPro era por el NÚMERO de interno del viaje:
+    //        interno = 0 → SIN REALIZAR · interno < 1000 → PROPIO · interno >= 1000 → CONTRATADO
+    // Hoy esa regla NO mide lo que dice (verificado contra la base el 30/07/2026):
+    //  · Los internos 3003-9999 son unidades PROPIAS de NORTUR (uso='PROPIO', fletero='NORTUR'),
+    //    y la regla los llamaba CONTRATADO — 136 viajes de 2026, 235 de 2025.
+    //  · Las unidades REALMENTE contratadas (PANELLA, NUEVOS RUMBOS, TEB, VASCOTUR, NEUQUEN…)
+    //    tienen internos 26, 35, 36, 129, 298, 326… — o sea < 1000 — y la regla las llamaba
+    //    PROPIO. Serie por año de contratados reales vs. lo que mostraba la regla vieja:
+    //    2022: 743 vs 0 · 2023: 741 vs 1 · 2024: 423 vs 19 · 2025: 268 vs 235 · 2026: 64 vs 136.
+    //  Los dos conjuntos ni se superponen. Por eso ahora se clasifica leyendo la FICHA del
+    //  vehículo, uniendo `viaje.id_vehicu2` (= DOMINIO; ojo que id_vehicul es el TIPO — ver
+    //  memoria viaje-campos-vehiculo-cruzados) con `vehiculo.dominio`, que es único
+    //  (412 filas / 412 dominios) y resuelve el 100% de los viajes con unidad asignada
+    //  (verificado 2026: 8.496 con match, 0 sin match, 3.007 sin unidad).
+    //
+    // Quedan DOS definiciones posibles de "contratado" y el informe deja elegir, porque la
+    // carga de la flota no es consistente entre los dos campos (hay 14 unidades de MVTRAVEL
+    // con uso='PROPIO' y fletero='MVTRAVEL'):
+    //  · CriterioUso     → `vehiculo.uso = 'CONTRATADO'` (el campo que el propio FoxPro usa
+    //    para su filtro "Ver Flota Propia" — es el default).
+    //  · CriterioFletero → el dueño de la unidad no es NORTUR.
+    // Sin match en `vehiculo` = todavía no se asignó unidad = SIN REALIZAR.
+    private static string TipoUnidadCaseSql(string criterio) => criterio == CriterioFletero
+        ? $"""
+          CASE WHEN veh.dominio IS NULL THEN 'SIN REALIZAR'
+               WHEN RTRIM(ISNULL(veh.fletero, '')) NOT IN ('', '{FleteroPropio}') THEN 'CONTRATADO'
+               ELSE 'PROPIO' END
+          """
+        : """
+          CASE WHEN veh.dominio IS NULL THEN 'SIN REALIZAR'
+               WHEN RTRIM(ISNULL(veh.uso, '')) = 'CONTRATADO' THEN 'CONTRATADO'
+               ELSE 'PROPIO' END
+          """;
 
     /// <summary>Catálogo de motivos de cancelación (viaje_motivo_cancela, 6 filas).</summary>
     public async Task<List<MotivoCancelaDto>> GetMotivosCancelacionAsync()
@@ -1885,29 +2400,45 @@ public partial class ReportService
         }) ?? new();
     }
 
-    // WHERE compartido del informe por cliente (agregado + detalle). Fiel al FoxPro en lo
-    // esencial (origen='T'); las mejoras acordadas con el usuario (03/07/2026):
-    //  - incluirInterno: el cliente de parametro.id_cliente (NORTUR, ~30% del volumen acá)
-    //    se excluye por defecto — el FoxPro lo incluía.
+    // WHERE compartido del informe por cliente (agregado + detalle).
+    //
+    // ⚠ CAMBIO DE ALCANCE (30/07/2026, mismo caso que Banda Horaria): el informe tenía fijo
+    // `v.origen = 'T'` + exclusión del cliente interno, o sea que mostraba SOLO Turismo — el
+    // 7% de la operación (85.035 viajes 'T' contra 439.769 'P' en el histórico). Ahora el
+    // recorte lo elige el usuario con el filtro "Tipo de servicio" (las mismas 3 categorías
+    // de Banda Horaria: Empresa = origen 'P' · Turismo = origen 'T' · Interno = el cliente de
+    // parametro.id_cliente, que GANA sobre origen). Con solo "Turismo" tildado —el default—
+    // el resultado es idéntico al informe anterior, al dígito.
+    //
+    // Cancelaciones (decisión 03/07/2026, ampliada 30/07/2026):
     //  - canceladas=false → viajes NO cancelados (ISNULL(id_motivo,0)=0 — en la réplica el
     //    campo viene NULL donde el DBF tenía 0).
     //  - canceladas=true → SIEMPRE respeta el período (el FoxPro barría todo el histórico) y
-    //    filtra por los motivos elegidos (lista vacía = todos los motivos, no solo el 2).
+    //    filtra por los motivos elegidos. Lista vacía = TODOS los motivos: el default del
+    //    FoxPro era solo el motivo 2 y escondía las 371 cancelaciones "POR ERROR EN CARGA"
+    //    de 2025-26.
     private static string WhereReservasPorCliente(
         DateOnly desde,
         DateOnly hasta,
-        bool incluirInterno,
+        IReadOnlyCollection<string> categoriasSel,
+        string idClienteInterno,
         bool canceladas,
         IReadOnlyCollection<int> motivosSel)
     {
         var where = new List<string>
         {
             "v._deleted = 0",
-            $"v.f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'",
-            "v.origen = 'T'"
+            $"v.f_reserva BETWEEN '{desde:yyyyMMdd}' AND '{hasta:yyyyMMdd}'"
         };
-        if (!incluirInterno)
-            where.Add("v.id_cliente <> (SELECT TOP 1 RTRIM(ISNULL(id_cliente, '')) FROM parametro)");
+        if (categoriasSel.Count > 0 && categoriasSel.Count < CategoriasServicio.Count)
+        {
+            var lista = string.Join(",", categoriasSel.Select(c => $"'{c.Replace("'", "''")}'"));
+            where.Add($"{CategoriaCase(idClienteInterno)} IN ({lista})");
+        }
+        else if (categoriasSel.Count == 0)
+        {
+            where.Add("1 = 0");   // sin ninguna categoría tildada no hay nada que mostrar
+        }
         if (!canceladas)
             where.Add("ISNULL(v.id_motivo, 0) = 0");
         else if (motivosSel.Count > 0)
@@ -1917,26 +2448,36 @@ public partial class ReportService
         return string.Join(" AND ", where);
     }
 
-    // Vista agregada: viajes + pax por mes × cliente × tipo. Agrupa por id_cliente (no por el
-    // nombre desnormalizado del FoxPro: un cliente renombrado partía en dos filas del pivot)
-    // y muestra el nombre más reciente. Trae ambas métricas para el toggle Viajes↔Pax en
-    // memoria, sin re-query.
+    // Vista agregada: viajes + pax por mes × cliente × tipo de unidad × motivo. Agrupa por
+    // id_cliente (no por el nombre desnormalizado del FoxPro: un cliente renombrado partía en
+    // dos filas del pivot) y muestra el nombre más reciente. Trae ambas métricas para el toggle
+    // Viajes↔Pax y LAS DOS clasificaciones de unidad (uso y fletero) para que el selector de
+    // criterio del informe no dispare una query nueva — todo se recalcula en memoria.
+    //
+    // El `motivo` viaja siempre (vacío en las reservas activas): en modo Canceladas es la 2ª
+    // dimensión del tablero, porque ahí "tipo de unidad" no dice nada — el 100% de las
+    // canceladas está SIN REALIZAR (5.948 de 5.948 en 2025-26, verificado).
     public async Task<List<ReservaClienteRow>> GetReservasPorClienteAsync(
         DateOnly desde,
         DateOnly hasta,
-        bool incluirInterno,
+        IReadOnlyCollection<string> categoriasSel,
         bool canceladas,
         IReadOnlyCollection<int> motivosSel)
     {
         var motKey = motivosSel.Count == 0 ? "all" : string.Join(",", motivosSel.OrderBy(x => x));
-        var key = $"rpc|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{incluirInterno}|{canceladas}|{motKey}";
+        var catKey = string.Join(",", categoriasSel.OrderBy(x => x));
+        var key = $"rpc|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{catKey}|{canceladas}|{motKey}";
 
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            var idInterno = await GetIdClienteInternoAsync();
             await using var db = await _dbFactory.CreateDbContextAsync();
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
+
+            var tipoUso = TipoUnidadCaseSql(CriterioUso);
+            var tipoFle = TipoUnidadCaseSql(CriterioFletero);
 
             // Mes 'yyyy-MM' con CONVERT(char(7), ..., 120) — SQL 2012-friendly.
             var sql = $"""
@@ -1944,13 +2485,16 @@ public partial class ReportService
                     CONVERT(char(7), v.f_reserva, 120)            AS Mes,
                     RTRIM(ISNULL(v.id_cliente, ''))               AS IdCliente,
                     MAX(COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cli)), ''), RTRIM(v.id_cliente), '')) AS Cliente,
-                    {TipoReservaClienteCaseSql}                   AS Tipo,
+                    {tipoUso}                                     AS TipoUso,
+                    {tipoFle}                                     AS TipoFletero,
+                    ISNULL(v.id_motivo, 0)                        AS IdMotivo,
                     COUNT(*)                                      AS Viajes,
                     SUM(COALESCE(v.pax, 0))                       AS Pax
                 FROM viaje v
-                WHERE {WhereReservasPorCliente(desde, hasta, incluirInterno, canceladas, motivosSel)}
+                LEFT JOIN vehiculo veh ON veh.dominio = v.id_vehicu2 AND veh._deleted = 0
+                WHERE {WhereReservasPorCliente(desde, hasta, categoriasSel, idInterno, canceladas, motivosSel)}
                 GROUP BY CONVERT(char(7), v.f_reserva, 120), RTRIM(ISNULL(v.id_cliente, '')),
-                    {TipoReservaClienteCaseSql}
+                    {tipoUso}, {tipoFle}, ISNULL(v.id_motivo, 0)
                 ORDER BY Mes, IdCliente
                 """;
 
@@ -1962,12 +2506,14 @@ public partial class ReportService
             while (await reader.ReadAsync())
             {
                 result.Add(new ReservaClienteRow(
-                    reader.GetString(0),
-                    reader.GetString(1).Trim(),
-                    reader.GetString(2).Trim(),
-                    reader.GetString(3),
-                    reader.GetInt32(4),
-                    reader.IsDBNull(5) ? 0 : reader.GetInt32(5)
+                    Mes: reader.GetString(0),
+                    IdCliente: reader.GetString(1).Trim(),
+                    Cliente: reader.GetString(2).Trim(),
+                    TipoUso: reader.GetString(3),
+                    TipoFletero: reader.GetString(4),
+                    IdMotivo: Convert.ToInt32(reader.GetValue(5)),
+                    Viajes: reader.GetInt32(6),
+                    Pax: reader.IsDBNull(7) ? 0 : reader.GetInt32(7)
                 ));
             }
             return result;
@@ -1975,24 +2521,31 @@ public partial class ReportService
     }
 
     // Detalle uno-por-uno para el drill-down y el Excel. Reusa ReservaFsDetalleRow para reusar
-    // ReservasFsDetalleDialog + Zoom del Viaje. Lleva mes/cliente/tipo para filtrar en memoria
-    // y el motivo de cancelación (para la hoja Viajes del Excel en modo canceladas).
+    // ReservasFsDetalleDialog + Zoom del Viaje. Lleva mes/cliente/tipos/motivo para filtrar en
+    // memoria, y la UNIDAD (interno, dominio, fletero) para el detalle de composición del KPI
+    // "Contratados" — sin eso, la pregunta de la clienta ("¿de qué está hecho ese número?") no
+    // se puede contestar: hay que poder ver de quién es cada unidad.
     public async Task<List<ReservaClienteDetalleRow>> GetReservasPorClienteDetalleAsync(
         DateOnly desde,
         DateOnly hasta,
-        bool incluirInterno,
+        IReadOnlyCollection<string> categoriasSel,
         bool canceladas,
         IReadOnlyCollection<int> motivosSel)
     {
         var motKey = motivosSel.Count == 0 ? "all" : string.Join(",", motivosSel.OrderBy(x => x));
-        var key = $"rpcdet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{incluirInterno}|{canceladas}|{motKey}";
+        var catKey = string.Join(",", categoriasSel.OrderBy(x => x));
+        var key = $"rpcdet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{catKey}|{canceladas}|{motKey}";
 
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+            var idInterno = await GetIdClienteInternoAsync();
             await using var db = await _dbFactory.CreateDbContextAsync();
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
+
+            var tipoUso = TipoUnidadCaseSql(CriterioUso);
+            var tipoFle = TipoUnidadCaseSql(CriterioFletero);
 
             // viaje.id_viaje y viaje.pax son int (no bigint) — leer con GetInt32.
             var sql = $"""
@@ -2001,7 +2554,7 @@ public partial class ReportService
                     v.f_reserva                                           AS Fecha,
                     CONVERT(char(7), v.f_reserva, 120)                    AS Mes,
                     RTRIM(ISNULL(v.id_cliente, ''))                       AS IdCliente,
-                    {TipoReservaClienteCaseSql}                           AS Tipo,
+                    {tipoUso}                                             AS TipoUso,
                     COALESCE(CONVERT(varchar(5), v.hs_inicio, 108), '')   AS Hora,
                     COALESCE(s.nombre, v.id_servici, '')                  AS Servicio,
                     COALESCE(NULLIF(LTRIM(RTRIM(v.nombre_cli)), ''), v.id_cliente, '') AS Cliente,
@@ -2014,11 +2567,17 @@ public partial class ReportService
                     v.interno                                             AS Interno,
                     COALESCE(v.origen, '')                                AS Origen,
                     COALESCE(v.grupo, '')                                 AS Grupo,
-                    RTRIM(ISNULL(m.motivo, ''))                           AS Motivo
+                    RTRIM(ISNULL(m.motivo, ''))                           AS Motivo,
+                    ISNULL(v.id_motivo, 0)                                AS IdMotivo,
+                    {tipoFle}                                             AS TipoFletero,
+                    RTRIM(ISNULL(veh.dominio, ''))                        AS Dominio,
+                    RTRIM(ISNULL(veh.fletero, ''))                        AS Fletero,
+                    RTRIM(ISNULL(veh.uso, ''))                            AS Uso
                 FROM viaje v
                 LEFT JOIN servicio s ON v.id_servici = s.id_servici
                 LEFT JOIN viaje_motivo_cancela m ON v.id_motivo = m.id
-                WHERE {WhereReservasPorCliente(desde, hasta, incluirInterno, canceladas, motivosSel)}
+                LEFT JOIN vehiculo veh ON veh.dominio = v.id_vehicu2 AND veh._deleted = 0
+                WHERE {WhereReservasPorCliente(desde, hasta, categoriasSel, idInterno, canceladas, motivosSel)}
                 ORDER BY v.f_reserva, v.hs_inicio, v.id_viaje
                 """;
 
@@ -2032,8 +2591,13 @@ public partial class ReportService
                 result.Add(new ReservaClienteDetalleRow(
                     Mes: reader.GetString(2),
                     IdCliente: reader.GetString(3).Trim(),
-                    Tipo: reader.GetString(4),
+                    TipoUso: reader.GetString(4),
+                    TipoFletero: reader.GetString(17),
+                    IdMotivo: Convert.ToInt32(reader.GetValue(16)),
                     Motivo: reader.GetString(15),
+                    Dominio: reader.GetString(18),
+                    Fletero: reader.GetString(19),
+                    Uso: reader.GetString(20),
                     Reserva: new ReservaFsDetalleRow(
                         IdViaje: reader.GetInt32(0),
                         Fecha: DateOnly.FromDateTime(reader.GetDateTime(1)),
@@ -2070,10 +2634,15 @@ public partial class ReportService
     //   sin clasificar) para no inflar con datos sin unidad.
     // ─────────────────────────────────────────────────────────────────────────
 
-    // WHERE compartido del informe de choferes (agregado + detalle). incluirInterno suma el
-    // cliente NORTUR (parametro.id_cliente); incluirContratados suma tipo_chofe='CONTRATADO'.
+    // WHERE compartido del informe de choferes (agregado + detalle). categoriasSel filtra por
+    // Tipo de servicio (Empresa/Turismo/Interno — mismo esquema que Reservas por banda horaria);
+    // tipoChoferSel filtra por Tipo de chofer (Propio/Contratado); vehiculosSel por tipo de
+    // vehículo (v.id_vehicul). Todos vacíos o completos = sin filtro (todos).
     private static string WhereViajesPorChofer(
-        DateOnly desde, DateOnly hasta, bool incluirInterno, bool incluirContratados)
+        DateOnly desde, DateOnly hasta,
+        IReadOnlyCollection<string> categoriasSel, string idClienteInterno,
+        IReadOnlyCollection<string> tipoChoferSel,
+        IReadOnlyCollection<string> vehiculosSel)
     {
         var where = new List<string>
         {
@@ -2084,24 +2653,45 @@ public partial class ReportService
             "ISNULL(v.id_motivo, 0) = 0",
             "NULLIF(LTRIM(RTRIM(v.id_chofer)), '') IS NOT NULL"
         };
-        // Solo choferes con tipo clasificado (PROPIO / CONTRATADO); nunca el tipo vacío.
-        where.Add(incluirContratados
-            ? "v.tipo_chofe IN ('PROPIO', 'CONTRATADO')"
-            : "v.tipo_chofe = 'PROPIO'");
-        if (!incluirInterno)
-            where.Add("v.id_cliente <> (SELECT TOP 1 RTRIM(ISNULL(id_cliente, '')) FROM parametro)");
+        // Tipo de chofer: solo choferes con tipo clasificado (PROPIO / CONTRATADO); nunca el
+        // tipo vacío (35k filas sin clasificar), aunque estén tildadas las dos categorías.
+        where.Add(tipoChoferSel.Count == 1 && tipoChoferSel.Contains("Contratado")
+            ? "v.tipo_chofe = 'CONTRATADO'"
+            : tipoChoferSel.Count == 1 && tipoChoferSel.Contains("Propio")
+                ? "v.tipo_chofe = 'PROPIO'"
+                : "v.tipo_chofe IN ('PROPIO', 'CONTRATADO')");
+        if (categoriasSel.Count > 0 && categoriasSel.Count < CategoriasServicio.Count)
+        {
+            var lista = string.Join(",", categoriasSel.Select(c => $"'{c.Replace("'", "''")}'"));
+            where.Add($"{CategoriaCase(idClienteInterno)} IN ({lista})");
+        }
+        if (vehiculosSel.Count > 0)
+        {
+            var lista = string.Join(",", vehiculosSel.Select(v => $"'{v.Replace("'", "''")}'"));
+            where.Add($"v.id_vehicul IN ({lista})");
+        }
         return string.Join(" AND ", where);
     }
 
     /// <summary>
-    /// Agregado por chofer × día: viajes, turismo, cabecera, km, primer/último horario y pax.
-    /// La fila "franco" (día sin viajes entre el primer y último día trabajado del chofer) se
-    /// calcula en memoria en la página, como hacía el form FoxPro.
+    /// Agregado por chofer × día × categoría de servicio: viajes, km, pax y primer/último
+    /// horario. La categoría entra en el GROUP BY (18/08/2026) para poder filtrar el informe
+    /// por tipo de servicio en las tres métricas — con las categorías como columnas sueltas,
+    /// Km y Pax no se podían desglosar. La fila "franco" (día sin viajes entre el primer y
+    /// último día trabajado del chofer) se calcula en memoria en la página, como el FoxPro.
     /// </summary>
     public async Task<List<ViajesChoferRow>> GetViajesPorChoferAsync(
-        DateOnly desde, DateOnly hasta, bool incluirInterno, bool incluirContratados)
+        DateOnly desde, DateOnly hasta,
+        IReadOnlyCollection<string> categoriasSel,
+        IReadOnlyCollection<string> tipoChoferSel,
+        IReadOnlyCollection<string> vehiculosSel)
     {
-        var key = $"vpc|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{incluirInterno}|{incluirContratados}";
+        var catKey = categoriasSel.Count == 0 ? "all" : string.Join(",", categoriasSel.OrderBy(x => x));
+        var choKey = tipoChoferSel.Count == 0 ? "all" : string.Join(",", tipoChoferSel.OrderBy(x => x));
+        var vehKey = vehiculosSel.Count == 0 ? "all" : string.Join(",", vehiculosSel.OrderBy(x => x));
+        var key = $"vpc|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{catKey}|{choKey}|{vehKey}";
+        var idInterno = await GetIdClienteInternoAsync();
+
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = CacheTtl;
@@ -2109,6 +2699,10 @@ public partial class ReportService
             await using var conn = db.Database.GetDbConnection();
             await conn.OpenAsync();
 
+            // El CASE de categoría entra en el GROUP BY: por eso recibe el id del cliente
+            // interno como LITERAL y no como subconsulta (SQL Server rechaza subconsultas en
+            // el GROUP BY). Mismo patrón que GetReservasPorBandaHorariaAsync.
+            var categoriaCase = CategoriaCase(idInterno);
             var sql = $"""
                 SELECT
                     RTRIM(ISNULL(v.id_chofer, ''))                        AS IdChofer,
@@ -2117,17 +2711,22 @@ public partial class ReportService
                     MAX(RTRIM(ISNULL(c.localidad, '')))                   AS Localidad,
                     MAX(RTRIM(ISNULL(v.tipo_chofe, '')))                  AS Tipo,
                     v.f_reserva                                           AS Fecha,
+                    {categoriaCase}                                       AS Categoria,
                     COUNT(*)                                              AS Viajes,
-                    SUM(CASE WHEN v.origen = 'T' THEN 1 ELSE 0 END)       AS Turismo,
-                    SUM(CASE WHEN v.origen = 'P' THEN 1 ELSE 0 END)       AS Cabecera,
                     SUM(CAST(ISNULL(v.km, 0) AS bigint))                  AS Km,
                     SUM(COALESCE(v.pax, 0))                               AS Pax,
                     CONVERT(varchar(5), MIN(v.hs_inicio), 108)            AS HoraInicio,
-                    CONVERT(varchar(5), MAX(v.hs_fin), 108)               AS HoraFin
+                    CONVERT(varchar(5), MAX(v.hs_fin), 108)               AS HoraFin,
+                    SUM(CASE
+                            WHEN v.hs_inicio IS NOT NULL AND v.hs_fin IS NOT NULL
+                                 AND DATEDIFF(MINUTE, v.hs_inicio, v.hs_fin) > 0
+                            THEN DATEDIFF(MINUTE, v.hs_inicio, v.hs_fin)
+                            ELSE 0
+                        END)                                              AS Minutos
                 FROM viaje v
                 LEFT JOIN chofer c ON c.id_chofer = v.id_chofer AND c._deleted = 0
-                WHERE {WhereViajesPorChofer(desde, hasta, incluirInterno, incluirContratados)}
-                GROUP BY RTRIM(ISNULL(v.id_chofer, '')), v.f_reserva
+                WHERE {WhereViajesPorChofer(desde, hasta, categoriasSel, idInterno, tipoChoferSel, vehiculosSel)}
+                GROUP BY RTRIM(ISNULL(v.id_chofer, '')), v.f_reserva, {categoriaCase}
                 ORDER BY IdChofer, v.f_reserva
                 """;
 
@@ -2143,13 +2742,13 @@ public partial class ReportService
                     Localidad: reader.GetString(2).Trim(),
                     Tipo: reader.GetString(3).Trim(),
                     Fecha: DateOnly.FromDateTime(reader.GetDateTime(4)),
-                    Viajes: reader.GetInt32(5),
-                    Turismo: reader.GetInt32(6),
-                    Cabecera: reader.GetInt32(7),
-                    Km: reader.IsDBNull(8) ? 0 : Convert.ToInt32(reader.GetValue(8)),
-                    Pax: reader.IsDBNull(9) ? 0 : reader.GetInt32(9),
-                    HoraInicio: reader.IsDBNull(10) ? "" : reader.GetString(10),
-                    HoraFin: reader.IsDBNull(11) ? "" : reader.GetString(11)));
+                    Categoria: reader.GetString(5),
+                    Viajes: reader.GetInt32(6),
+                    Km: reader.IsDBNull(7) ? 0 : Convert.ToInt32(reader.GetValue(7)),
+                    Pax: reader.IsDBNull(8) ? 0 : reader.GetInt32(8),
+                    HoraInicio: reader.IsDBNull(9) ? "" : reader.GetString(9),
+                    HoraFin: reader.IsDBNull(10) ? "" : reader.GetString(10),
+                    Minutos: reader.IsDBNull(11) ? 0 : Convert.ToInt32(reader.GetValue(11))));
             }
             return result;
         }) ?? new();
@@ -2158,9 +2757,17 @@ public partial class ReportService
     /// <summary>Detalle uno-por-uno para el drill-down/Excel del informe de choferes. IdChofer +
     /// Fecha para filtrar en memoria; el resto reusa ReservaFsDetalleRow (Zoom del Viaje).</summary>
     public async Task<List<ViajesChoferDetalleRow>> GetViajesPorChoferDetalleAsync(
-        DateOnly desde, DateOnly hasta, bool incluirInterno, bool incluirContratados)
+        DateOnly desde, DateOnly hasta,
+        IReadOnlyCollection<string> categoriasSel,
+        IReadOnlyCollection<string> tipoChoferSel,
+        IReadOnlyCollection<string> vehiculosSel)
     {
-        var key = $"vpcdet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{incluirInterno}|{incluirContratados}";
+        var catKey = categoriasSel.Count == 0 ? "all" : string.Join(",", categoriasSel.OrderBy(x => x));
+        var choKey = tipoChoferSel.Count == 0 ? "all" : string.Join(",", tipoChoferSel.OrderBy(x => x));
+        var vehKey = vehiculosSel.Count == 0 ? "all" : string.Join(",", vehiculosSel.OrderBy(x => x));
+        var key = $"vpcdet|{desde:yyyyMMdd}|{hasta:yyyyMMdd}|{catKey}|{choKey}|{vehKey}";
+        var idInterno = await GetIdClienteInternoAsync();
+
         return await _cache.GetOrCreateAsync(key, async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = CacheTtl;
@@ -2184,10 +2791,11 @@ public partial class ReportService
                     COALESCE(v.nombre_cho, '')                            AS Chofer,
                     v.interno                                             AS Interno,
                     COALESCE(v.origen, '')                                AS Origen,
-                    COALESCE(v.grupo, '')                                 AS Grupo
+                    COALESCE(v.grupo, '')                                 AS Grupo,
+                    {CategoriaCase(idInterno)}                            AS Categoria
                 FROM viaje v
                 LEFT JOIN servicio s ON v.id_servici = s.id_servici
-                WHERE {WhereViajesPorChofer(desde, hasta, incluirInterno, incluirContratados)}
+                WHERE {WhereViajesPorChofer(desde, hasta, categoriasSel, idInterno, tipoChoferSel, vehiculosSel)}
                 ORDER BY v.f_reserva, v.hs_inicio, v.id_viaje
                 """;
 
@@ -2200,6 +2808,7 @@ public partial class ReportService
                 result.Add(new ViajesChoferDetalleRow(
                     IdChofer: reader.GetString(2).Trim(),
                     Fecha: DateOnly.FromDateTime(reader.GetDateTime(1)),
+                    Categoria: reader.GetString(13),
                     Reserva: new ReservaFsDetalleRow(
                         IdViaje: reader.GetInt32(0),
                         Fecha: DateOnly.FromDateTime(reader.GetDateTime(1)),
@@ -2864,7 +3473,8 @@ public partial class ReportService
     /// <summary>
     /// Login con el flujo del FoxPro (login.scx): existencia → baja lógica
     /// (f_delete) → contraseña, cada caso con su mensaje propio. Devuelve
-    /// acceso/nivel/operador para cargar los claims de la sesión.
+    /// acceso/nivel/operador para cargar los claims de la sesión. El acceso por Internet
+    /// se deriva de la letra 'I' del string `acceso` (no hay columna aparte).
     /// </summary>
     public async Task<LoginResultDto> LoginAsync(string usuario, string password)
     {
@@ -2890,7 +3500,9 @@ public partial class ReportService
             return LoginResultDto.Fallo("Usuario inexistente");
         if (rd.GetInt32(5) == 1)
             return LoginResultDto.Fallo("Usuario inhabilitado");
-        if (!string.Equals(rd.GetString(1), password.Trim(), StringComparison.OrdinalIgnoreCase))
+        // La contraseña es CASE SENSITIVE: se compara exacta (byte a byte), no como el
+        // nombre de usuario. "Sergio" ≠ "sergio". Ordinal (no OrdinalIgnoreCase).
+        if (!string.Equals(rd.GetString(1), password.Trim(), StringComparison.Ordinal))
             return LoginResultDto.Fallo("Contraseña incorrecta");
 
         return new LoginResultDto(true, null,
@@ -4195,7 +4807,11 @@ public partial class ReportService
         await conn.OpenAsync();
 
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"""
+        // idViaje = 0 → novedades SUELTAS (sin reserva asociada): son 752 de las 1.594 de 2026,
+        // casi la mitad del libro. Se acota a los últimos 7 días con TOP 50: sin eso serían
+        // ~28.000 filas históricas, que no le sirven a nadie en la pantalla de Tráfico.
+        cmd.CommandText = idViaje > 0
+            ? $"""
             SELECT
                 id         AS Id,
                 f_carga    AS FCarga,
@@ -4205,6 +4821,19 @@ public partial class ReportService
                 finalizo   AS Finalizo
             FROM libro_novedad
             WHERE _deleted = 0 AND id_viaje = {idViaje}
+            ORDER BY f_carga DESC, id DESC
+            """
+            : """
+            SELECT TOP 50
+                id         AS Id,
+                f_carga    AS FCarga,
+                asunto     AS Asunto,
+                mensaje    AS Mensaje,
+                usuario_cr AS UsuarioCarga,
+                finalizo   AS Finalizo
+            FROM libro_novedad
+            WHERE _deleted = 0 AND ISNULL(id_viaje, 0) = 0
+              AND f_carga >= DATEADD(day, -7, CAST(GETDATE() AS date))
             ORDER BY f_carga DESC, id DESC
             """;
 
@@ -4220,6 +4849,559 @@ public partial class ReportService
                 S("Mensaje"), S("UsuarioCarga"), B("Finalizo")));
         }
         return lista;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Menú contextual del panel BUSES (clic derecho sobre una unidad)
+    // Plano: docs/PlanoFoxPro/trafico/TRAFICO_BUSES_MENU.md
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// "Novedad sobre la unidad" — las novedades del libro de guardia cargadas para un interno.
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>`libro_novedad` NO tiene columna `interno`.</b> El FoxPro (<c>libro_novedad_alta_veh</c>
+    /// → <c>libro_novedad_abm</c> con <c>lpId_viaje = -1</c>) embebe la unidad como TEXTO en el
+    /// asunto, con el formato exacto <c>"int: N dom: XXX chof:YYY"</c>, y graba la fila con
+    /// <c>id_viaje = 0</c> (el -1 no llega a la base: verificado, 0 filas con -1 y 17.983 con
+    /// <c>asunto LIKE 'int:%'</c>). Así que el único filtro posible es por texto.
+    ///
+    /// El <b>espacio final del patrón es obligatorio</b>: <c>'int: 3 %'</c> — sin él, el interno 3
+    /// traería también las del 32, 300, etc.
+    ///
+    /// ⚠️ Ambigüedad heredada: 54 internos están repetidos entre fleteros distintos, y el alta del
+    /// FoxPro resuelve el interno con <c>WHERE interno = N AND activo</c> (toma el primero que
+    /// encuentra). Por eso el diálogo muestra el asunto completo — el dominio que trae adentro es
+    /// la única forma de saber a qué unidad correspondía cada novedad.
+    /// </remarks>
+    public async Task<List<NovedadViajeRow>> GetNovedadesUnidadAsync(int interno)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        using var cmd = conn.CreateCommand();
+        // TOP 200: son 17.983 novedades de unidad en total; la más vieja no le sirve a nadie
+        // en la pantalla de Tráfico, pero el historial completo de UNA unidad sí entra holgado.
+        cmd.CommandText = """
+            SELECT TOP 200
+                id         AS Id,
+                f_carga    AS FCarga,
+                asunto     AS Asunto,
+                mensaje    AS Mensaje,
+                usuario_cr AS UsuarioCarga,
+                finalizo   AS Finalizo
+            FROM libro_novedad
+            WHERE _deleted = 0
+              AND ISNULL(id_viaje, 0) = 0
+              AND (asunto LIKE @pat OR asunto = @exacto)
+            ORDER BY f_carga DESC, id DESC
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@pat", $"int: {interno} %"));
+        cmd.Parameters.Add(NuevoParam(cmd, "@exacto", $"int: {interno}"));
+
+        var lista = new List<NovedadViajeRow>();
+        using var rd = await cmd.ExecuteReaderAsync();
+        string S(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? "" : rd.GetValue(i).ToString()!.Trim(); }
+        DateTime? DT(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? null : rd.GetDateTime(i); }
+        bool B(string c) { var i = rd.GetOrdinal(c); return !rd.IsDBNull(i) && Convert.ToBoolean(rd.GetValue(i)); }
+        while (await rd.ReadAsync())
+            lista.Add(new NovedadViajeRow(
+                Convert.ToInt32(rd["Id"]), DT("FCarga"), S("Asunto"),
+                S("Mensaje"), S("UsuarioCarga"), B("Finalizo")));
+        return lista;
+    }
+
+    /// <summary>
+    /// "Adicional al servicio" — el stock de adicionales entregado a una unidad
+    /// (<c>adicional_stock</c>, ABM <c>adicional_stock_abm</c> del FoxPro).
+    /// </summary>
+    /// <remarks>
+    /// NO confundir con <c>viaje_adicional</c> (los adicionales facturables de un viaje, que ya
+    /// tienen su propio diálogo). Acá es logística: agua, etc. cargada a la unidad.
+    /// A diferencia de <c>libro_novedad</c>, esta tabla SÍ tiene columna <c>interno</c> propia.
+    /// Circuito vivo: 1.768 movimientos en 2026.
+    /// </remarks>
+    public async Task<List<AdicionalStockUnidadRow>> GetAdicionalStockUnidadAsync(int interno)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT TOP 200
+                a.id                                   AS Id,
+                a.fecha                                AS Fecha,
+                RTRIM(ISNULL(a.hora, ''))              AS Hora,
+                RTRIM(ISNULL(a.id_adicion, ''))        AS IdAdicional,
+                RTRIM(ISNULL(b.nombre, ''))            AS Adicional,
+                RTRIM(ISNULL(a.tmov, ''))              AS Movimiento,
+                CAST(ISNULL(a.cantidad, 0) AS int)     AS Cantidad,
+                RTRIM(ISNULL(a.dominio, ''))           AS Dominio,
+                RTRIM(ISNULL(a.id_chofer, ''))         AS IdChofer,
+                RTRIM(ISNULL(a.nombre_cho, ''))        AS NombreChofer,
+                RTRIM(ISNULL(a.razon_soci, ''))        AS Cliente,
+                RTRIM(ISNULL(a.comentario, ''))        AS Comentario
+            FROM adicional_stock a
+            LEFT JOIN adicional b ON b.id_adicion = a.id_adicion AND b._deleted = 0
+            WHERE a._deleted = 0 AND a.interno = @interno
+            ORDER BY a.fecha DESC, a.id DESC
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@interno", (long)interno));
+
+        var lista = new List<AdicionalStockUnidadRow>();
+        using var rd = await cmd.ExecuteReaderAsync();
+        string S(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? "" : rd.GetValue(i).ToString()!.Trim(); }
+        while (await rd.ReadAsync())
+        {
+            var iF = rd.GetOrdinal("Fecha");
+            lista.Add(new AdicionalStockUnidadRow(
+                Convert.ToInt32(rd["Id"]),
+                rd.IsDBNull(iF) ? null : DateOnly.FromDateTime(rd.GetDateTime(iF)),
+                S("Hora"), S("IdAdicional"), S("Adicional"), S("Movimiento"),
+                Convert.ToInt32(rd["Cantidad"]), S("Dominio"), S("IdChofer"),
+                S("NombreChofer"), S("Cliente"), S("Comentario")));
+        }
+        return lista;
+    }
+
+    /// <summary>
+    /// "Orden de trabajo" — historial de órdenes del taller para una unidad (<c>taller_service</c>).
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ <b>Circuito discontinuado.</b> <c>taller_service</c> por año de <c>d_create</c>:
+    /// 2016→1.317, 2017→736, 2018→552, 2019→2.544, 2020→1.020, <b>2021→2, después nada</b>.
+    /// NORTUR dejó de usar el módulo Taller hace 5 años. Por eso se migra solo la CONSULTA del
+    /// historial (decisión del usuario, 04/08/2026) y no el alta del FoxPro, que además insertaba
+    /// una novedad automática en <c>libro_novedad</c>.
+    ///
+    /// Se busca por <b>dominio</b> (la clave estable) y no por interno: los internos se reasignan
+    /// entre unidades con los años, y estas OT son históricas.
+    /// ⚠️ <c>fecha_ini</c> tiene fechas corruptas (MAX = año 2169) → se ordena por <c>d_create</c>.
+    /// </remarks>
+    public async Task<List<OrdenTrabajoUnidadRow>> GetOrdenesTrabajoUnidadAsync(string dominio)
+    {
+        dominio = (dominio ?? "").Trim();
+        if (dominio.Length == 0) return new();
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT TOP 100
+                t.id                                 AS Id,
+                CAST(ISNULL(t.orden, 0) AS int)      AS Orden,
+                RTRIM(ISNULL(t.orden_tipo, ''))      AS Tipo,
+                t.d_create                           AS FCreacion,
+                t.fecha_ini                          AS FechaIni,
+                t.fecha_fin                          AS FechaFin,
+                CAST(ISNULL(t.interno, 0) AS int)    AS Interno,
+                CAST(ISNULL(t.odometro, 0) AS bigint) AS Odometro,
+                RTRIM(ISNULL(t.urgencia, ''))        AS Urgencia,
+                RTRIM(ISNULL(t.id_chofer, ''))       AS IdChofer,
+                RTRIM(ISNULL(t.comentario, ''))      AS Comentario,
+                RTRIM(ISNULL(t.novedad, ''))         AS Novedad,
+                RTRIM(ISNULL(t.u_create, ''))        AS Usuario,
+                (SELECT COUNT(*) FROM taller_service_item i
+                  WHERE i.id_service = t.id AND ISNULL(i._deleted, 0) = 0) AS Items
+            FROM taller_service t
+            WHERE ISNULL(t._deleted, 0) = 0 AND t.dominio = @dominio
+            ORDER BY t.d_create DESC, t.id DESC
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@dominio", dominio));
+
+        var lista = new List<OrdenTrabajoUnidadRow>();
+        using var rd = await cmd.ExecuteReaderAsync();
+        string S(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? "" : rd.GetValue(i).ToString()!.Trim(); }
+        DateTime? DT(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? null : rd.GetDateTime(i); }
+        while (await rd.ReadAsync())
+            lista.Add(new OrdenTrabajoUnidadRow(
+                Convert.ToInt32(rd["Id"]), Convert.ToInt32(rd["Orden"]), S("Tipo"),
+                DT("FCreacion"), DT("FechaIni"), DT("FechaFin"),
+                Convert.ToInt32(rd["Interno"]), Convert.ToInt64(rd["Odometro"]),
+                S("Urgencia"), S("IdChofer"), S("Comentario"), S("Novedad"),
+                S("Usuario"), Convert.ToInt32(rd["Items"])));
+        return lista;
+    }
+
+    /// <summary>
+    /// "Ver Datos Extras → Tarjetas" — ficha de solo consulta del form <c>vehiculo_tarjeta.scx</c>.
+    /// </summary>
+    /// <remarks>
+    /// No lee ninguna tabla nueva: son campos de <c>vehiculo</c> (tarjetas YPF/ESSO, Nextel,
+    /// telepase) + los dos PIN del conductor que están en <c>chofer</c>. El form FoxPro tiene
+    /// TODOS los campos con <c>Enabled = .f.</c> y el botón dice "Consulta" — es 100% lectura,
+    /// así que esta migración no necesita andamiaje.
+    /// Si el chofer no se encuentra, los dos PIN del conductor quedan vacíos (igual que el FoxPro).
+    /// </remarks>
+    public async Task<TarjetasUnidadDto?> GetTarjetasUnidadAsync(string idVehiculo, string idChofer)
+    {
+        idVehiculo = (idVehiculo ?? "").Trim();
+        idChofer = (idChofer ?? "").Trim();
+        if (idVehiculo.Length == 0) return null;
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT TOP 1
+                CAST(ISNULL(v.interno, 0) AS int)  AS Interno,
+                RTRIM(ISNULL(v.id_vehicul, ''))    AS IdVehiculo,
+                RTRIM(ISNULL(v.dominio, ''))       AS Dominio,
+                RTRIM(ISNULL(v.nombre_cho, ''))    AS NombreChofer,
+                RTRIM(ISNULL(v.nextel, ''))        AS Nextel,
+                RTRIM(ISNULL(v.tac_au_oes, ''))    AS TelepaseOeste,
+                RTRIM(ISNULL(v.ypf_tar, ''))       AS YpfTarjeta,
+                v.ypf_venc                         AS YpfVence,
+                RTRIM(ISNULL(v.ypf_pin, ''))       AS YpfPin,
+                RTRIM(ISNULL(v.esso_tar, ''))      AS EssoTarjeta,
+                v.esso_venc                        AS EssoVence,
+                RTRIM(ISNULL(v.esso_pin, ''))      AS EssoPin,
+                RTRIM(ISNULL(c.ypf_pin, ''))       AS YpfPinConductor,
+                RTRIM(ISNULL(c.esso_pin, ''))      AS EssoPinConductor,
+                RTRIM(ISNULL(c.nombre, ''))        AS ConductorNombre
+            FROM vehiculo v
+            LEFT JOIN chofer c ON c.id_chofer = @chofer AND c._deleted = 0
+            WHERE v.id_vehicul = @veh AND v._deleted = 0
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@veh", idVehiculo));
+        cmd.Parameters.Add(NuevoParam(cmd, "@chofer", idChofer));
+
+        using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        string S(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? "" : rd.GetValue(i).ToString()!.Trim(); }
+        DateOnly? D(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? null : DateOnly.FromDateTime(rd.GetDateTime(i)); }
+        return new TarjetasUnidadDto(
+            Convert.ToInt32(rd["Interno"]), S("IdVehiculo"), S("Dominio"), S("NombreChofer"),
+            S("Nextel"), S("TelepaseOeste"),
+            S("YpfTarjeta"), D("YpfVence"), S("YpfPin"),
+            S("EssoTarjeta"), D("EssoVence"), S("EssoPin"),
+            S("YpfPinConductor"), S("EssoPinConductor"), S("ConductorNombre"));
+    }
+
+    /// <summary>
+    /// Réplica de <c>controla_vencimiento()</c> de <c>trafico2.scx</c>: devuelve la lista de
+    /// vencimientos que bloquearían/advertirían la puesta en servicio de la unidad.
+    /// Lista vacía = todo en regla.
+    /// </summary>
+    /// <remarks>
+    /// Reglas literales del FoxPro (nótese que compara con <c>&lt; Date()</c>, o sea vencido AYER;
+    /// lo que vence HOY todavía pasa):
+    /// <list type="bullet">
+    ///   <item><c>vehiculo.verificacion_vto</c> (SQL <c>verificac2</c>) vencida</item>
+    ///   <item><c>vehiculo.poliza_vto</c> vencida</item>
+    ///   <item>solo si <c>vehiculo.uso = 'PROPIO'</c>: <c>chofer.registro_vto</c> (SQL
+    ///         <c>registro_v</c>) y <c>chofer.registro_vto_cnrt</c> (SQL <c>registro_3</c>),
+    ///         para el 1º y el 2º conductor</item>
+    /// </list>
+    /// El menú de Buses del FoxPro NO llama a esta función (la usa el circuito de asignación).
+    /// Acá se usa como ADVERTENCIA informativa en el diálogo de logoneo — no bloquea nada.
+    /// </remarks>
+    public async Task<List<string>> GetVencimientosUnidadAsync(
+        string idVehiculo, string uso, string idChofer, string idChofer2)
+    {
+        var avisos = new List<string>();
+        idVehiculo = (idVehiculo ?? "").Trim();
+        if (idVehiculo.Length == 0) return avisos;
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT TOP 1 v.verificac2 AS Vtv, v.poliza_vto AS Poliza
+            FROM vehiculo v WHERE v.id_vehicul = @veh AND v._deleted = 0
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@veh", idVehiculo));
+
+        var hoy = DateOnly.FromDateTime(DateTime.Today);
+        using (var rd = await cmd.ExecuteReaderAsync())
+        {
+            if (await rd.ReadAsync())
+            {
+                if (!rd.IsDBNull(0) && DateOnly.FromDateTime(rd.GetDateTime(0)) < hoy)
+                    avisos.Add("VERIFICACIÓN TÉCNICA vencida");
+                if (!rd.IsDBNull(1) && DateOnly.FromDateTime(rd.GetDateTime(1)) < hoy)
+                    avisos.Add("PÓLIZA DE SEGURO vencida");
+            }
+        }
+
+        // El FoxPro solo mira los registros del conductor si la unidad es PROPIA.
+        if (!string.Equals((uso ?? "").Trim(), "PROPIO", StringComparison.OrdinalIgnoreCase))
+            return avisos;
+
+        foreach (var (id, etiqueta) in new[] { (idChofer, ""), (idChofer2, "2º CONDUCTOR con ") })
+        {
+            var cho = (id ?? "").Trim();
+            if (cho.Length == 0) continue;
+
+            using var cmd2 = conn.CreateCommand();
+            cmd2.CommandText = """
+                SELECT TOP 1 registro_v AS Reg, registro_3 AS Cnrt
+                FROM chofer WHERE id_chofer = @cho AND _deleted = 0
+                """;
+            cmd2.Parameters.Add(NuevoParam(cmd2, "@cho", cho));
+            using var rd2 = await cmd2.ExecuteReaderAsync();
+            if (!await rd2.ReadAsync()) continue;
+            if (!rd2.IsDBNull(0) && DateOnly.FromDateTime(rd2.GetDateTime(0)) < hoy)
+                avisos.Add($"{etiqueta}REGISTRO DE CONDUCTOR vencido");
+            if (!rd2.IsDBNull(1) && DateOnly.FromDateTime(rd2.GetDateTime(1)) < hoy)
+                avisos.Add($"{etiqueta}REGISTRO DE LA CNRT vencido");
+        }
+        return avisos;
+    }
+
+    /// <summary>
+    /// Choferes elegibles para logonear en una unidad — réplica literal del combo de
+    /// <c>trafico_logonear.scx</c>.
+    /// </summary>
+    /// <remarks>
+    /// La regla no obvia: solo choferes <b>del mismo fletero</b> que la unidad y que <b>no estén
+    /// ya logoneados en ninguna otra unidad</b>, ni como 1º ni como 2º conductor:
+    /// <code>
+    /// Where Empty(f_delete) And fletero = lpFletero
+    ///   And !Exists(Select * From vehiculo b Where a.id_chofer = b.id_chofer)
+    ///   And !Exists(Select * From vehiculo b Where a.id_chofer = b.id_chofer2)
+    /// </code>
+    /// Se agrega el flag <paramref name="TieneFrancoHoy"/> (el FoxPro lo resuelve con una lista
+    /// aparte de francos del fletero): si el elegido está de franco, el original pide confirmación
+    /// y graba <c>vehiculo.franco = .T.</c>.
+    /// </remarks>
+    public async Task<List<ChoferLogoneoRow>> GetChoferesParaLogonearAsync(string fletero)
+    {
+        fletero = (fletero ?? "").Trim();
+        if (fletero.Length == 0) return new();
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                RTRIM(a.id_chofer)          AS IdChofer,
+                RTRIM(ISNULL(a.nombre, '')) AS Nombre,
+                CASE WHEN f.id_chofer IS NULL THEN 0 ELSE 1 END AS TieneFranco
+            FROM chofer a
+            OUTER APPLY (
+                SELECT TOP 1 c.id_chofer FROM chofer_franco c
+                WHERE c.id_chofer = a.id_chofer AND c.fecha = @hoy AND c._deleted = 0
+            ) f
+            WHERE a._deleted = 0
+              AND (a.f_delete IS NULL OR a.f_delete < '19010101')
+              AND a.fletero = @fletero
+              AND NOT EXISTS (SELECT 1 FROM vehiculo b WHERE b._deleted = 0 AND b.id_chofer  = a.id_chofer)
+              AND NOT EXISTS (SELECT 1 FROM vehiculo b WHERE b._deleted = 0 AND b.id_chofer2 = a.id_chofer)
+            ORDER BY a.id_chofer
+            """;
+        cmd.Parameters.Add(NuevoParam(cmd, "@fletero", fletero));
+        cmd.Parameters.Add(NuevoParam(cmd, "@hoy", DateTime.Today));
+
+        var lista = new List<ChoferLogoneoRow>();
+        using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+            lista.Add(new ChoferLogoneoRow(
+                rd.GetString(0).Trim(), rd.GetString(1).Trim(), Convert.ToInt32(rd.GetValue(2)) == 1));
+        return lista;
+    }
+
+    /// <summary>
+    /// Zonas activas — combo de zona de logoneo / zona de detención al deslogonear
+    /// (<c>Select * From zona Where Empty(f_delete) Order By nombre</c> de los dos forms).
+    /// </summary>
+    /// <remarks>
+    /// La clave es <c>id_zona</c> (texto: CENTRO, EZEIZA, TALLER…), que es lo que guarda
+    /// <c>vehiculo.id_zona</c>; <c>nombre</c> es solo la etiqueta larga (CHOFER → "EN PODER DEL
+    /// CHOFER"). Son 6 filas.
+    /// </remarks>
+    public async Task<List<ZonaRow>> GetZonasAsync()
+    {
+        return await _cache.GetOrCreateAsync("zonas-combo", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheTtlAbm;
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT RTRIM(ISNULL(id_zona, '')) AS IdZona, RTRIM(ISNULL(nombre, '')) AS Nombre
+                FROM zona
+                WHERE _deleted = 0 AND (f_delete IS NULL OR f_delete < '19010101')
+                ORDER BY nombre
+                """;
+            var lista = new List<ZonaRow>();
+            using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                var id = rd.GetString(0).Trim();
+                if (id.Length > 0) lista.Add(new ZonaRow(id, rd.GetString(1).Trim()));
+            }
+            return lista;
+        }) ?? new();
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // F4 · Aviso sobre el viaje — la alarma por hora de Tráfico
+    // ───────────────────────────────────────────────────────────────────────────
+    // Plano completo: docs/PlanoFoxPro/trafico/TRAFICO_F4_AVISO.md
+    //
+    // El FoxPro tiene DOS niveles de aviso y uno pisa al otro:
+    //   · automático → todos los servicios avisan `hs_inicio − parametro.aviso_tiem` (hoy 10 min)
+    //   · manual (F4) → `viaje.hs_aviso` cargado a mano para ESE viaje
+    // Regla, literal del filtro AVISO_HORA de trafico2.scx:
+    //     aviso_efectivo = COALESCE(hs_aviso, hs_inicio − aviso_tiempo)
+    //
+    // ⚠️ El fuente en disco de `arma_grid_viaje_chequeo` (jul 2021) arma el cursor SIN el
+    // COALESCE — con esa versión el hs_aviso del F4 nunca dispararía, y la llamada que el
+    // propio F4 le hace no tendría sentido. La semántica correcta es la del filtro. Es la
+    // única pieza del plano que no se pudo verificar contra el .exe productivo.
+
+    /// <summary>Configuración global de los avisos de chequeo (tabla `parametro`). Cacheada:
+    /// cambia una vez por año y la lee el timer de 60 s.</summary>
+    public async Task<AvisoConfig> GetAvisoConfigAsync()
+    {
+        return await _cache.GetOrCreateAsync("aviso_config", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30);
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            // Columnas truncadas a 10 chars por la réplica DBF→SQL:
+            //   aviso_chequeo → aviso_cheq ('S'/'N')   ·   aviso_tiempo → aviso_tiem (datetime2)
+            // De aviso_tiem solo importa la HORA: HOUR*60 + MINUTE = minutos de antelación.
+            cmd.CommandText = "SELECT TOP 1 aviso_cheq, aviso_tiem FROM parametro";
+            using var rd = await cmd.ExecuteReaderAsync();
+            if (!await rd.ReadAsync()) return AvisoConfig.Apagado;
+
+            var activo = !rd.IsDBNull(0) && rd.GetValue(0).ToString()!.Trim().ToUpperInvariant() == "S";
+            var minutos = 10;
+            if (!rd.IsDBNull(1))
+            {
+                var t = rd.GetDateTime(1);
+                minutos = (t.Hour * 60) + t.Minute;
+            }
+            // Un parámetro en 0 dejaría el aviso pegado a la salida del servicio: no tiene
+            // sentido operativo y además haría ruido en la grilla. Piso de 1 minuto.
+            return new AvisoConfig(activo, Math.Max(1, minutos));
+        }) ?? AvisoConfig.Apagado;
+    }
+
+    /// <summary>
+    /// Servicios cuyo aviso cae dentro de la ventana [desde, hasta] — el motor de alarmas.
+    /// Réplica del Timer1 (60 s) de trafico2.scx, con dos diferencias deliberadas:
+    ///   1. <b>Ventana de gracia</b>: el FoxPro compara HH:MM EXACTO, así que si el operador no
+    ///      estaba en la pantalla ese minuto el aviso se perdía para siempre. En la web eso pega
+    ///      más fuerte (recargar, cambiar de pestaña), así que se piden los últimos N minutos y
+    ///      el llamador descarta los que ya mostró.
+    ///   2. Se comparan <b>datetimes completos</b>, no HH:MM. Esto arregla un bug heredado:
+    ///      un servicio que sale 00:01 tiene su aviso a las 23:51 del día ANTERIOR (son 1.226
+    ///      servicios en 2026 — los transfers de medianoche, no un caso de borde). El FoxPro,
+    ///      que arma el cursor con los viajes de HOY y compara solo HH:MM, le hace sonar la
+    ///      alarma a las 23:51 de HOY: 24 horas tarde. Acá el aviso suena cuando corresponde
+    ///      — por eso el rango de <c>f_reserva</c> llega hasta el día siguiente.
+    /// Los CANCELADO / FINALIZADO / FACTURADO se excluyen: avisar de un servicio que ya no sale
+    /// es ruido puro (el FoxPro no los filtra).
+    /// </summary>
+    public async Task<List<AvisoViajeRow>> GetAvisosPendientesAsync(
+        DateTime desde, DateTime hasta, int minutosDefault)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        using var cmd = conn.CreateCommand();
+        // WHERE anclado en f_reserva SIEMPRE: `viaje` NO tiene índice por id_viaje (la PK es
+        // _sync_id, de la réplica). El único índice útil es ix_viaje_f_reserva
+        // (f_reserva, _deleted, estado_via) — justo las tres columnas de este WHERE.
+        cmd.CommandText = """
+            SELECT
+                v.id_viaje                                    AS IdViaje,
+                COALESCE(v.hs_aviso, DATEADD(minute, -@def, v.hs_inicio)) AS HsAviso,
+                v.hs_aviso                                    AS HsAvisoManual,
+                v.hs_inicio                                   AS HsInicio,
+                v.cronogram2                                  AS UPr,
+                v.cronograma                                  AS UCb,
+                v.id_interno                                  AS UAs,
+                LTRIM(RTRIM(v.d_destino)) + ' a ' + LTRIM(RTRIM(v.h_destino)) AS Recorrido,
+                v.nombre_cho                                  AS Chofer,
+                v.id_cliente                                  AS Cliente,
+                v.pax                                         AS Pax,
+                v.chequeo                                     AS Chq,
+                v.estado_via                                  AS Estado
+            FROM viaje v
+            WHERE v.f_reserva >= CAST(@desde AS date)
+              AND v.f_reserva <= DATEADD(day, 1, CAST(@hasta AS date))
+              AND v._deleted = 0
+              AND v.estado_via NOT IN ('CANCELADO', 'FINALIZADO', 'FACTURADO')
+              AND COALESCE(v.hs_aviso, DATEADD(minute, -@def, v.hs_inicio)) >= @desde
+              AND COALESCE(v.hs_aviso, DATEADD(minute, -@def, v.hs_inicio)) <= @hasta
+            ORDER BY v.hs_inicio, v.id_viaje
+            """;
+        AgregarParam(cmd, "@def", minutosDefault);
+        AgregarParam(cmd, "@desde", desde);
+        AgregarParam(cmd, "@hasta", hasta);
+
+        var lista = new List<AvisoViajeRow>();
+        using var rd = await cmd.ExecuteReaderAsync();
+        string S(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? "" : rd.GetValue(i).ToString()!.Trim(); }
+        DateTime? DT(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? null : rd.GetDateTime(i); }
+        int I(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? 0 : Convert.ToInt32(rd.GetValue(i)); }
+        while (await rd.ReadAsync())
+        {
+            lista.Add(new AvisoViajeRow(
+                I("IdViaje"), DT("HsAviso") ?? DateTime.MinValue, DT("HsAvisoManual") is not null,
+                DT("HsInicio"), S("UPr"), S("UCb"), S("UAs"), S("Recorrido"),
+                S("Chofer"), S("Cliente"), I("Pax"), I("Chq"), S("Estado")));
+        }
+        return lista;
+    }
+
+    /// <summary>Datos del viaje para el diálogo del F4 (réplica del Init de trafico_hs_aviso.scx:
+    /// código de reserva + fecha/hora del viaje, ambos de solo lectura, y el aviso vigente).</summary>
+    public async Task<AvisoViajeDto?> GetAvisoViajeAsync(int idViaje, DateOnly fReserva)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT TOP 1
+                v.id_viaje    AS IdViaje,
+                v.hs_inicio   AS HsInicio,
+                v.hs_aviso    AS HsAviso,
+                LTRIM(RTRIM(v.d_destino)) + ' a ' + LTRIM(RTRIM(v.h_destino)) AS Recorrido,
+                v.id_cliente  AS Cliente,
+                v.estado_via  AS Estado
+            FROM viaje v
+            WHERE v.f_reserva = @dia AND v.id_viaje = @id AND v._deleted = 0
+            """;
+        AgregarParam(cmd, "@dia", fReserva.ToDateTime(TimeOnly.MinValue));
+        AgregarParam(cmd, "@id", idViaje);
+
+        using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return null;
+        string S(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? "" : rd.GetValue(i).ToString()!.Trim(); }
+        DateTime? DT(string c) { var i = rd.GetOrdinal(c); return rd.IsDBNull(i) ? null : rd.GetDateTime(i); }
+        return new AvisoViajeDto(
+            Convert.ToInt32(rd["IdViaje"]), fReserva, DT("HsInicio"), DT("HsAviso"),
+            S("Recorrido"), S("Cliente"), S("Estado"));
+    }
+
+    // Helper local: parámetro tipado sin depender del proveedor concreto del comando.
+    private static void AgregarParam(System.Data.Common.DbCommand cmd, string nombre, object valor)
+    {
+        var p = cmd.CreateParameter();
+        p.ParameterName = nombre;
+        p.Value = valor;
+        cmd.Parameters.Add(p);
     }
 
     // ───────────────────────────────────────────────────────────────────────────
@@ -4358,7 +5540,7 @@ public record SesionRow(
     string Ip, string Hostname, int Terminal, string MotivoFin);
 
 /// <summary>Una fila de la bitácora de accesos (tabla usuarios_logs): un evento
-/// (LOGIN/LOGOUT/EXPIRADA/VENCIDA/LOGIN_FALLIDO) con su session_id, usuario y origen.</summary>
+/// (LOGIN/LOGOUT/DESCONECTADO/EXPIRADA/VENCIDA/LOGIN_FALLIDO) con su session_id, usuario y origen.</summary>
 public record AccesoLogRow(
     int Id, Guid? SessionId, string Evento, DateTime FEvento,
     int? IdUsuario, string Usuario, string Nivel, string Acceso,
@@ -4595,40 +5777,82 @@ public class ChoferDetalleDto
     }
 }
 
-public record BandaHorariaRow(DateOnly Fecha, string TipoVehiculo, string Banda, int Reservas, int Pax);
+// Una fila agregada del informe de banda horaria. Lleva la BANDA y la HORA de inicio a la vez
+// (la UI alterna entre las dos agrupaciones en memoria) y la CATEGORÍA de servicio
+// (Empresa / Turismo / Interno), que es filtro y a la vez dimensión de cross-filter.
+public record BandaHorariaRow(
+    DateOnly Fecha, string TipoVehiculo, string Categoria, string Banda, int Hora, int Reservas, int Pax);
 
-// Una fila de detalle del informe de banda horaria (drill-down). Lleva la banda y el tipo de
-// vehículo para poder filtrar en memoria; el resto reusa el DTO del informe de fecha/servicio
-// para reusar ReservasFsDetalleDialog + Zoom del Viaje.
-public record BandaHorariaDetalleRow(string Banda, string TipoVehiculo, ReservaFsDetalleRow Reserva);
+// Una fila de detalle del informe de banda horaria (drill-down). Lleva banda, hora, categoría y
+// tipo de vehículo para poder filtrar en memoria igual que el agregado; el resto reusa el DTO
+// del informe de fecha/servicio para reusar ReservasFsDetalleDialog + Zoom del Viaje.
+public record BandaHorariaDetalleRow(
+    string Banda, string TipoVehiculo, string Categoria, int Hora, ReservaFsDetalleRow Reserva);
 
 /// <summary>Un motivo de cancelación del catálogo viaje_motivo_cancela.</summary>
 public record MotivoCancelaDto(int Id, string Motivo);
 
 /// <summary>
-/// Una fila agregada del informe "Reservas por cliente": mes × cliente × tipo de unidad
-/// (PROPIO / CONTRATADO / SIN REALIZAR), con viajes y pax para el toggle de métrica.
+/// Una fila agregada del informe "Reservas por cliente": mes × cliente × tipo de unidad ×
+/// motivo, con viajes y pax para el toggle de métrica.
+/// <para>
+/// Trae las DOS clasificaciones de unidad (<c>TipoUso</c> por <c>vehiculo.uso</c> y
+/// <c>TipoFletero</c> por el dueño de la unidad) para que el selector de criterio del informe
+/// recalcule en memoria sin volver a SQL. <c>IdMotivo</c> = 0 en las reservas activas.
+/// </para>
 /// </summary>
-public record ReservaClienteRow(string Mes, string IdCliente, string Cliente, string Tipo, int Viajes, int Pax);
-
-// Una fila de detalle del informe por cliente (drill-down + Excel). Mes/IdCliente/Tipo para
-// filtrar en memoria; Motivo para la hoja Viajes en modo canceladas; el resto reusa el DTO
-// del informe de fecha/servicio para reusar ReservasFsDetalleDialog + Zoom del Viaje.
-public record ReservaClienteDetalleRow(string Mes, string IdCliente, string Tipo, string Motivo, ReservaFsDetalleRow Reserva);
+public record ReservaClienteRow(
+    string Mes, string IdCliente, string Cliente,
+    string TipoUso, string TipoFletero, int IdMotivo,
+    int Viajes, int Pax)
+{
+    /// <summary>El tipo de unidad según el criterio de "contratado" elegido en el informe.</summary>
+    public string TipoSegun(string criterio) =>
+        criterio == ReportService.CriterioFletero ? TipoFletero : TipoUso;
+}
 
 /// <summary>
-/// Una fila agregada del informe "Viajes por Choferes": chofer × día, con viajes, turismo
-/// (origen='T'), cabecera (origen='P'), km, primer/último horario del día y pax. La fila
-/// "franco" (día sin viajes entre el primero y último trabajado del chofer) se calcula en
-/// memoria en la página, como el form FoxPro.
+/// Una fila de detalle del informe por cliente (drill-down + Excel). Mes/IdCliente/tipos/motivo
+/// para filtrar en memoria; Dominio/Fletero/Uso para el detalle de composición del KPI
+/// "Contratados"; el resto reusa el DTO del informe de fecha/servicio para reusar
+/// ReservasFsDetalleDialog + Zoom del Viaje.
+/// </summary>
+public record ReservaClienteDetalleRow(
+    string Mes, string IdCliente,
+    string TipoUso, string TipoFletero,
+    int IdMotivo, string Motivo,
+    string Dominio, string Fletero, string Uso,
+    ReservaFsDetalleRow Reserva)
+{
+    public string TipoSegun(string criterio) =>
+        criterio == ReportService.CriterioFletero ? TipoFletero : TipoUso;
+}
+
+/// <summary>
+/// Una fila agregada del informe "Viajes por Choferes": chofer × día × <b>categoría de
+/// servicio</b> (Empresa/Turismo/Nortur — mismo esquema que Reservas por banda horaria).
+///
+/// El grano incluye la categoría (18/08/2026) para que el informe pueda filtrarse por tipo de
+/// servicio en las TRES métricas. Antes las categorías venían como 3 contadores de viajes en
+/// la misma fila, así que Km y Pax no se podían desglosar por tipo de servicio.
+///
+/// La fila "franco" (día sin viajes entre el primero y último trabajado del chofer) se calcula
+/// en memoria en la página, como el form FoxPro.
+///
+/// <c>Minutos</c> (19/08/2026, métrica "Horas"): suma de la duración real de cada viaje
+/// (hs_fin − hs_inicio, en minutos). Usa <c>hs_fin</c> (el horario real), NUNCA
+/// <c>hs_fin_apr</c> — ese campo es un default fijo de +2h en ~30% de los viajes y infla
+/// cualquier métrica de duración (ver memoria "H.Cie es un default de 2 h"). Viajes sin
+/// hs_fin cargado, o con fin anterior al inicio (dato corrupto), suman 0.
 /// </summary>
 public record ViajesChoferRow(
     string IdChofer, string Chofer, string Localidad, string Tipo, DateOnly Fecha,
-    int Viajes, int Turismo, int Cabecera, int Km, int Pax, string HoraInicio, string HoraFin);
+    string Categoria, int Viajes, int Km, int Pax, string HoraInicio, string HoraFin, int Minutos);
 
-/// <summary>Detalle uno-por-uno del informe de choferes. IdChofer/Fecha para filtrar en
-/// memoria; el resto reusa ReservaFsDetalleRow (ReservasFsDetalleDialog + Zoom del Viaje).</summary>
-public record ViajesChoferDetalleRow(string IdChofer, DateOnly Fecha, ReservaFsDetalleRow Reserva);
+/// <summary>Detalle uno-por-uno del informe de choferes. IdChofer/Fecha/Categoria para filtrar
+/// en memoria; el resto reusa ReservaFsDetalleRow (ReservasFsDetalleDialog + Zoom del Viaje).</summary>
+public record ViajesChoferDetalleRow(
+    string IdChofer, DateOnly Fecha, string Categoria, ReservaFsDetalleRow Reserva);
 
 /// <summary>
 /// Una fila del informe "Km Unidades vs Servicios": por vehículo (dominio), km de servicio
@@ -4644,13 +5868,27 @@ public record KmUnidadRow(
 /// el resto reusa ReservaFsDetalleRow (ReservasFsDetalleDialog + Zoom del Viaje).</summary>
 public record KmUnidadDetalleRow(string Dominio, int Km, ReservaFsDetalleRow Reserva);
 
+/// <summary>
+/// Una fila de la vista agregada de "Reservas por fecha y servicio": fecha × categoría del
+/// desglose elegido. <c>Cod</c>/<c>Etiqueta</c> son el código y el nombre de esa categoría —
+/// el SERVICIO o el CLIENTE, según la dimensión pedida (ver <c>GetReservasPorFechaServicioAsync</c>).
+/// </summary>
 public record ReservaFechaServicioRow(
     DateOnly Fecha,
-    string CodServicio,
-    string Servicio,
+    string Cod,
+    string Etiqueta,
     int Reservas,
     int Canceladas,
     int Pax);
+
+/// <summary>
+/// Una categoría (SERVICIO o CLIENTE, según el desglose) que tuvo viajes en el período, para el
+/// desplegable de filtros de "Reservas por fecha y servicio".
+/// </summary>
+/// <param name="Cod">id_servici o id_cliente — es lo que viaja al WHERE.</param>
+/// <param name="ModoUso">'T' turismo · 'P' transporte de personal · 'A' ambos (servicio.modo_uso).
+/// Los clientes vienen siempre como 'A': no tienen línea de negocio propia (ya filtró la query).</param>
+public record CategoriaMovimientoDto(string Cod, string Nombre, string ModoUso);
 
 /// <summary>Una reserva individual del informe "Reservas por fecha y servicio" (drill-down + Excel).</summary>
 public record ReservaFsDetalleRow(
@@ -4690,12 +5928,12 @@ public record PlanillaTraficoRow(
     int IdViaje,
     DateOnly Fecha,
     string Origen,      // 'P' = Empresa/Plantilla, 'T' = Turismo/Transportación
-    bool EsNortur,      // servicio interno de NORTUR (réplica de chkNortur)
+    bool EsNortur,      // servicio interno de NORTUR: id_cliente = 'NORTUR' (columna Cliente)
     string HPre,
     string HIni,
-    string HFin,
+    string HFin,        // columna "H. Fin" = viaje.hs_fin_apr (fin PROGRAMADO), igual que el FoxPro
     string HAvi,
-    string HCie,
+    string HCie,        // columna "H. Cie" = viaje.hs_fin (cierre REAL), igual que el FoxPro
     string UPr,
     string UCb,
     string UAs,
@@ -4728,6 +5966,10 @@ public record PlanillaTraficoRow(
     // desde/hasta en formato YYYYMMDDHHMMSS (Ttoc(...,1) en FoxPro). hs_fin vacío → ahora.
     DateTime? HsInicio,
     DateTime? HsFin,
+    // Fin programado (viaje.hs_fin_apr) COMPLETO, con fecha. HFin trae lo mismo pero
+    // recortado a "HH:mm", que no alcanza para el Tablero de ocupación: sin la fecha no se
+    // puede distinguir "cierra 01:00 de mañana" de "cierra 01:00 de hoy" (dato corrupto).
+    DateTime? HsCierre,
     // ── Claves para "Ver Datos Extras" (réplica del submenú de trafico2.scx) ──
     // Códigos completos que esperan los diálogos de ficha (ChoferDetalleDialog,
     // VehiculoDetalleDialog). El cliente usa el campo Cliente (= id_cliente). Estos NO se
@@ -4761,6 +6003,56 @@ public record PlanillaTraficoRow(
         Estado == "ASIGNADO"   && HsInicio is { } hi && hi <= DateTime.Now ? "CURSO"
       : Estado == "SIN ASIGNAR" && (Chq ?? 0) > 0                          ? "CHEQUEO"
       : Estado;
+
+    /// <summary>
+    /// Unidad con la que el servicio entra al Tablero de ocupación. <b>Prioridad
+    /// U/As → U/Cb → U/Pr</b> (regla del usuario, 19/08/2026): manda la unidad que
+    /// REALMENTE hizo el servicio.
+    /// <list type="number">
+    /// <item><b>U/As</b> (<c>id_interno</c>) — unidad asignada. Es el dato más fuerte: sale
+    ///       vacío mientras el servicio no se asigna, y cuando viene siempre es un interno.</item>
+    /// <item><b>U/Cb</b> (<c>cronograma</c>) — unidad de cabecera / cambiada.</item>
+    /// <item><b>U/Pr</b> (<c>cronogram2</c>) — unidad programada, el último recurso.</item>
+    /// </list>
+    /// <para>
+    /// Antes de mirar el orden se prefiere el primer campo que tenga <b>forma de interno</b>
+    /// (<c>XXnnnn</c>: 2 letras + 4 dígitos — NT0020, NU0022), recorriendo la MISMA prioridad.
+    /// Por qué: U/Cb y U/Pr no siempre son una unidad. Cuando el servicio se manda a un
+    /// fletero que no diagrama por interno queda ahí la EMPRESA entera ("NEUQUEN",
+    /// "MVTRAVEL", "VANSQ") o el placeholder "NORTUR", y el interno real aparece en el otro
+    /// campo (medido el 19/08/2026: 332 servicios de 2026 con U/Cb = "NORTUR" y U/Pr con el
+    /// interno). Sin esa preferencia, esos servicios se apilarían todos en una fila por empresa.
+    /// </para>
+    /// Si ningún campo tiene forma de interno se devuelve el primer valor no vacío en el mismo
+    /// orden — puede ser el placeholder de flota propia ("NORTUR", que SÍ se grafica como fila
+    /// propia) o "S/C"/vacío (sin cronograma, que va a la fila-pool del tablero).
+    /// </summary>
+    public string UnidadCronograma
+    {
+        get
+        {
+            var uas = UAs.Trim();
+            var ucb = UCb.Trim();
+            var upr = UPr.Trim();
+            if (EsInterno(uas)) return uas;
+            if (EsInterno(ucb)) return ucb;
+            if (EsInterno(upr)) return upr;
+            if (uas.Length > 0) return uas;
+            return ucb.Length > 0 ? ucb : upr;
+        }
+    }
+
+    /// <summary>Servicio sin cronograma: queda fuera del Tablero de ocupación (se cuenta y se avisa).</summary>
+    public bool SinCronograma => UnidadCronograma is "" or "S/C";
+
+    /// <summary>¿El texto tiene forma de interno del cronograma (2 letras + 4 dígitos)?</summary>
+    private static bool EsInterno(string s)
+    {
+        if (s.Length != 6 || !char.IsLetter(s[0]) || !char.IsLetter(s[1])) return false;
+        for (var i = 2; i < 6; i++)
+            if (!char.IsDigit(s[i])) return false;
+        return true;
+    }
 }
 
 /// <summary>
@@ -4840,7 +6132,15 @@ public record PanelBusRow(
     string Nextel,
     int? Pax,
     string Vehiculo,
-    DateTime? HsInicio);
+    DateTime? HsInicio,
+    // ── Campos que la grilla NO muestra pero que el menú contextual necesita ──
+    // El FoxPro los tiene "gratis" porque cursorVehiculoTrafico es `SELECT vehiculo.*`;
+    // acá se agregan explícitos. Ver docs/PlanoFoxPro/trafico/TRAFICO_BUSES_MENU.md.
+    int Id,                 // vehiculo.id — clave de los UPDATE del circuito (Where Id = nId)
+    string NombreChofer,    // vehiculo.nombre_cho — para los carteles de confirmación
+    int? IdViajeInt,        // vehiculo.id_viaje_i — ≠0 ⇒ el viaje es un tramo de RUTA
+    string Uso,             // PROPIO / CONTRATADO — condiciona controla_vencimiento()
+    string Cronograma);     // vehiculo.cronograma — por acá busca la unidad "Liberar unidad"
 
 /// <summary>
 /// Una fila de la vista de servicios CANCELADOS del día (botón "Cxl" del FoxPro).
@@ -5119,6 +6419,77 @@ public class HistorialViajeDto
 /// </summary>
 public record NovedadViajeRow(
     int Id, DateTime? FCarga, string Asunto, string Mensaje, string UsuarioCarga, bool Finalizo);
+
+// ── Menú contextual del panel BUSES ──  (plano: docs/PlanoFoxPro/trafico/TRAFICO_BUSES_MENU.md)
+
+/// <summary>Un movimiento de stock de adicionales entregado a una unidad (<c>adicional_stock</c>).</summary>
+public record AdicionalStockUnidadRow(
+    int Id, DateOnly? Fecha, string Hora, string IdAdicional, string Adicional,
+    string Movimiento, int Cantidad, string Dominio, string IdChofer,
+    string NombreChofer, string Cliente, string Comentario);
+
+/// <summary>Una orden de trabajo del taller para una unidad (<c>taller_service</c>).</summary>
+public record OrdenTrabajoUnidadRow(
+    int Id, int Orden, string Tipo, DateTime? FCreacion, DateTime? FechaIni, DateTime? FechaFin,
+    int Interno, long Odometro, string Urgencia, string IdChofer, string Comentario,
+    string Novedad, string Usuario, int Items);
+
+/// <summary>
+/// Ficha "Tarjetas" de una unidad (form <c>vehiculo_tarjeta.scx</c>, solo consulta): tarjetas de
+/// combustible YPF/ESSO de la UNIDAD + los PIN personales del CONDUCTOR logoneado.
+/// </summary>
+public record TarjetasUnidadDto(
+    int Interno, string IdVehiculo, string Dominio, string NombreChofer,
+    string Nextel, string TelepaseOeste,
+    string YpfTarjeta, DateOnly? YpfVence, string YpfPin,
+    string EssoTarjeta, DateOnly? EssoVence, string EssoPin,
+    string YpfPinConductor, string EssoPinConductor, string ConductorNombre);
+
+/// <summary>Un chofer elegible para logonear en una unidad (combo de <c>trafico_logonear.scx</c>).</summary>
+public record ChoferLogoneoRow(string IdChofer, string Nombre, bool TieneFrancoHoy);
+
+/// <summary>Una zona (<c>zona</c>). <paramref name="IdZona"/> es lo que guarda <c>vehiculo.id_zona</c>.</summary>
+public record ZonaRow(string IdZona, string Nombre);
+
+// ── F6-F9 · Cambio de cronograma ──  (plano: docs/PlanoFoxPro/trafico/TRAFICO_CRONOGRAMA.md)
+
+/// <summary>
+/// Un fletero como lo necesita el diálogo de cronograma.
+/// <paramref name="Prefijo"/> = <c>fletero.cronograma</c>, las 2 letras que se pegan al interno
+/// (NT + 0049 = <c>NT0049</c>). <paramref name="Diagrama"/> = esa empresa se diagrama POR INTERNO
+/// (hoy solo NT y TS de 22); si es false, el cronograma es la empresa entera
+/// (<paramref name="IdContratado"/>: TEDESCHI, VANSQ, MERCO…).
+/// </summary>
+public record FleteroCronogramaRow(string Prefijo, string Nombre, string IdContratado, bool Diagrama);
+
+// ── F4 · Aviso sobre el viaje ──  (plano: docs/PlanoFoxPro/trafico/TRAFICO_F4_AVISO.md)
+
+/// <summary>
+/// Configuración global de los avisos de chequeo, de la tabla `parametro`.
+/// <paramref name="Activo"/> = `aviso_cheq` es 'S' (hoy sí);
+/// <paramref name="MinutosDefault"/> = minutos de antelación del aviso automático, de la HORA
+/// de `aviso_tiem` (hoy 00:10 → 10 minutos).
+/// </summary>
+public record AvisoConfig(bool Activo, int MinutosDefault)
+{
+    public static readonly AvisoConfig Apagado = new(false, 10);
+}
+
+/// <summary>
+/// Un servicio que está avisando — una fila del popup de alarma. Espeja las 7 columnas que
+/// el autor del Metrocar quiso mostrar en `trafico_aviso.scx` (form que quedó muerto: el .exe
+/// productivo solo muestra el cartel "Inicio de N servicios" de `formInicioServicio`).
+/// <paramref name="AvisoManual"/> distingue el aviso cargado con F4 del automático.
+/// </summary>
+public record AvisoViajeRow(
+    int IdViaje, DateTime HsAviso, bool AvisoManual, DateTime? HsInicio,
+    string UPr, string UCb, string UAs, string Recorrido,
+    string Chofer, string Cliente, int Pax, int Chq, string Estado);
+
+/// <summary>Datos del viaje para el diálogo del F4 (`trafico_hs_aviso.scx`).</summary>
+public record AvisoViajeDto(
+    int IdViaje, DateOnly FReserva, DateTime? HsInicio, DateTime? HsAviso,
+    string Recorrido, string Cliente, string Estado);
 
 /// <summary>Un pasajero de la planilla CNRT (`viaje_pasajero_detalle`).</summary>
 public record PasajeroRow(
@@ -7151,6 +8522,308 @@ public partial class ReportService
             if (!rd.IsDBNull(0)) result.Add(DateOnly.FromDateTime(rd.GetDateTime(0)));
         return result;
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  SISTEMA — Parámetros Empresa y Generales (parametro_empresa.scx + parametro.scx)
+    //  La tabla `parametro` tiene UNA fila y 72 columnas. Estas dos pantallas leen ~50
+    //  de ellas; las otras son contadores VIVOS del circuito (id_viaje_i, lote_plant,
+    //  lote_sobre, stock_movi) que FoxPro incrementa todo el día.
+    //  🔴 Por eso jamás se hace SELECT * + reescritura de fila: se leen y escriben
+    //     SOLO las columnas de la pantalla. Ver docs/PlanoFoxPro/sistema/PARAMETROS.md
+    //     y skill modulo-sistema.
+    //  ⚠ Casi todos los "números" son bigint en la réplica → CAST en el SELECT.
+    //  Sin caché: son pantallas de configuración que se abren de a una y hay que verlas
+    //  frescas (además el valor recién grabado tiene que verse al instante).
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Lee los 15 campos de Parámetros Empresa (Init de parametro_empresa.scx).
+    /// Nombres truncados por la réplica: empresa_nom→empresa_no, smtp_password→smtp_passw, etc.
+    /// </summary>
+    public async Task<ParametrosEmpresaEdit> GetParametrosEmpresaAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT TOP 1
+                RTRIM(ISNULL(empresa_no, ''))          AS Nombre,
+                RTRIM(ISNULL(empresa_di, ''))          AS Direccion,
+                RTRIM(ISNULL(empresa_cu, ''))          AS Cuit,
+                CAST(ISNULL(piva, 0) AS decimal(18,2)) AS Piva,
+                RTRIM(ISNULL(empresa_te, ''))          AS Telefono,
+                CAST(ISNULL(empresa_ha, 0) AS int)     AS RegNac,
+                empresa_vt                             AS VtoCircuito,
+                RTRIM(ISNULL(empresa_ci, ''))          AS CircuitoCerrado,
+                RTRIM(ISNULL(logo, ''))                AS Logo,
+                RTRIM(ISNULL(smtp_nombr, ''))          AS SmtpNombre,
+                RTRIM(ISNULL(smtp_serve, ''))          AS SmtpServidor,
+                RTRIM(ISNULL(smtp_usuar, ''))          AS SmtpUsuario,
+                RTRIM(ISNULL(smtp_passw, ''))          AS SmtpPassword,
+                CAST(ISNULL(smtp_puert, 0) AS int)     AS SmtpPuerto,
+                RTRIM(ISNULL(smtp_firma, ''))          AS SmtpFirma
+            FROM parametro
+            """;
+        using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return new ParametrosEmpresaEdit();
+        return new ParametrosEmpresaEdit
+        {
+            Nombre           = rd.GetString(0),
+            Direccion        = rd.GetString(1),
+            Cuit             = rd.GetString(2),
+            Piva             = rd.GetDecimal(3),
+            Telefono         = rd.GetString(4),
+            RegNac           = rd.GetInt32(5),
+            VtoCircuito      = rd.IsDBNull(6) ? null : rd.GetDateTime(6),
+            CircuitoCerrado  = rd.GetString(7),
+            Logo             = rd.GetString(8),
+            SmtpNombre       = rd.GetString(9),
+            SmtpServidor     = rd.GetString(10),
+            SmtpUsuario      = rd.GetString(11),
+            SmtpPassword     = rd.GetString(12),
+            SmtpPuerto       = rd.GetInt32(13),
+            SmtpFirma        = rd.GetString(14),
+        };
+    }
+
+    /// <summary>
+    /// Lee los campos de Parámetros Generales (Init de parametro.scx). Incluye los de
+    /// SOLO LECTURA (contadores vivos, flag GPS y rutas de red del FoxPro) para poder
+    /// mostrarlos sin editarlos. <c>aviso_tiem</c> se parte en hora/minuto (la fecha
+    /// que guarda el FoxPro —1999-12-01— es basura, solo importa la hora).
+    /// </summary>
+    public async Task<ParametrosGeneralesEdit> GetParametrosGeneralesAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT TOP 1
+                RTRIM(ISNULL(cliente_ad, ''))              AS SrvHoraExcedente,
+                RTRIM(ISNULL(chofer_adi, ''))              AS SrvHorasChofer,
+                CAST(ISNULL(fraccion_h, 0) AS int)         AS FraccionFact,
+                CAST(ISNULL(fraccion_2, 0) AS int)         AS FraccionChofer,
+                CAST(ISNULL(porc_franc, 0) AS decimal(18,2)) AS PorcFranco,
+                CAST(ISNULL(imp_franco, 0) AS decimal(18,2)) AS ImpFranco,
+                CAST(ISNULL(aviso_cho, 0) AS int)          AS AvisoChoferes,
+                CAST(ISNULL(aviso_veh, 0) AS int)          AS AvisoTecnica,
+                CAST(ISNULL(aviso_mat, 0) AS int)          AS AvisoMatafuego,
+                RTRIM(ISNULL(aviso_cheq, ''))              AS AvisoChequeo,
+                aviso_tiem                                 AS AvisoTiempo,
+                CAST(ISNULL(bruto, 0) AS decimal(18,2))    AS Bruto,
+                CAST(ISNULL(hs_extra_b, 0) AS decimal(18,2)) AS HsExtraBus,
+                CAST(ISNULL(hs_extra_m, 0) AS decimal(18,2)) AS HsExtraMinibus,
+                CAST(ISNULL(franco_mes, 0) AS int)         AS FrancosMes,
+                CAST(ISNULL(porc_vacio, 0) AS decimal(18,2)) AS PorcVacio,
+                dcombsaldo                                 AS FechaSaldoComb,
+                CAST(ISNULL(rubro_comb, 0) AS int)         AS RubroComb,
+                RTRIM(ISNULL(id_cliente, ''))              AS ClienteInternos,
+                RTRIM(ISNULL(adic_agua, ''))               AS AdicAgua,
+                RTRIM(ISNULL(adic_malet, ''))              AS AdicMaleta,
+                RTRIM(ISNULL(ley_liq_1, ''))               AS LeyLiq1,
+                RTRIM(ISNULL(ley_liq_2, ''))               AS LeyLiq2,
+                CAST(ISNULL(backup_tim, 0) AS int)         AS BackupSegundos,
+                -- ── solo lectura ──
+                RTRIM(ISNULL(empresa_ca, ''))              AS EmpresaFact,
+                RTRIM(ISNULL(lista_prec, ''))              AS ListaPrecio,
+                CAST(ISNULL(lote_plant, 0) AS bigint)      AS LotePlantillas,
+                CAST(ISNULL(lote_sobre, 0) AS bigint)      AS LoteSobre,
+                CAST(ISNULL(xml_envia, 0) AS bit)          AS XmlEnvia,
+                RTRIM(ISNULL(dir_xml, ''))                 AS DirXml,
+                RTRIM(ISNULL(dir_audito, ''))              AS DirAuditoria,
+                RTRIM(ISNULL(dir_ex_aud, ''))              AS DirAuditoriaExt,
+                RTRIM(ISNULL(dir_factur, ''))              AS DirFacturacion,
+                RTRIM(ISNULL(dir_sonido, ''))              AS DirSonido,
+                RTRIM(ISNULL(backup_dir, ''))              AS BackupDir
+            FROM parametro
+            """;
+        using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return new ParametrosGeneralesEdit();
+
+        var avisoTiempo = rd.IsDBNull(10) ? (DateTime?)null : rd.GetDateTime(10);
+        return new ParametrosGeneralesEdit
+        {
+            SrvHoraExcedente   = rd.GetString(0),
+            SrvHorasChofer     = rd.GetString(1),
+            FraccionFacturacion= rd.GetInt32(2),
+            FraccionChofer     = rd.GetInt32(3),
+            PorcFrancoTrabajado= rd.GetDecimal(4),
+            ImpFrancoTrabajado = rd.GetDecimal(5),
+            AvisoChoferes      = rd.GetInt32(6),
+            AvisoTecnica       = rd.GetInt32(7),
+            AvisoMatafuego     = rd.GetInt32(8),
+            AvisosOperadores   = rd.GetString(9).Equals("S", StringComparison.OrdinalIgnoreCase),
+            ChequeoHora        = avisoTiempo?.Hour ?? 0,
+            ChequeoMinuto      = avisoTiempo?.Minute ?? 0,
+            SueldoBruto        = rd.GetDecimal(11),
+            HsExtraBus         = rd.GetDecimal(12),
+            HsExtraMinibus     = rd.GetDecimal(13),
+            FrancosAlMes       = rd.GetInt32(14),
+            PorcVacio          = rd.GetDecimal(15),
+            FechaSaldoComb     = rd.IsDBNull(16) ? null : rd.GetDateTime(16),
+            RubroCombustible   = rd.GetInt32(17),
+            ClienteMovInternos = rd.GetString(18),
+            AdicionalAgua      = rd.GetString(19),
+            AdicionalMaleta    = rd.GetString(20),
+            LeyendaLiq1        = rd.GetString(21),
+            LeyendaLiq2        = rd.GetString(22),
+            // El FoxPro guarda segundos y muestra minutos (c_tiempo = backup_time / 60).
+            BackupMinutos      = rd.GetInt32(23) / 60,
+            EmpresaFacturacion = rd.GetString(24),
+            ListaPrecioComun   = rd.GetString(25),
+            LotePlantillas     = rd.GetInt64(26),
+            LoteSobre          = rd.GetInt64(27),
+            XmlEnvia           = rd.GetBoolean(28),
+            DirXml             = rd.GetString(29),
+            DirAuditoria       = rd.GetString(30),
+            DirAuditoriaExterna= rd.GetString(31),
+            DirFacturacion     = rd.GetString(32),
+            DirSonidoTrafico   = rd.GetString(33),
+            BackupDir          = rd.GetString(34),
+        };
+    }
+
+    /// <summary>
+    /// Opciones de los combos de Parámetros Generales (Init de parametro.scx). Se devuelven
+    /// juntas en una sola ida a la base. El valor guardado en <c>parametro</c> es el ID
+    /// (el FoxPro usa BoundColumn 1), no el nombre.
+    /// </summary>
+    public async Task<ParametrosCombos> GetParametrosCombosAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT RTRIM(ISNULL(id_servici, '')), RTRIM(ISNULL(nombre, ''))
+            FROM servicio WHERE _deleted = 0 AND f_delete IS NULL ORDER BY nombre;
+
+            SELECT RTRIM(ISNULL(id_adicion, '')), RTRIM(ISNULL(nombre, ''))
+            FROM adicional WHERE _deleted = 0 ORDER BY id_adicion;
+
+            SELECT CAST(ISNULL(id, 0) AS int), RTRIM(ISNULL(rubro, ''))
+            FROM estacion_rubro WHERE _deleted = 0 ORDER BY id;
+
+            SELECT RTRIM(ISNULL(empresa, '')), RTRIM(ISNULL(empresa, ''))
+            FROM empresa WHERE _deleted = 0 ORDER BY empresa;
+
+            SELECT RTRIM(ISNULL(id_lista_p, '')), RTRIM(ISNULL(nombre, ''))
+            FROM lista_precio_modelo WHERE _deleted = 0 AND f_delete IS NULL ORDER BY nombre;
+            """;
+        var servicios = new List<OpcionParametro>();
+        var adicionales = new List<OpcionParametro>();
+        var rubros = new List<OpcionRubro>();
+        var empresas = new List<OpcionParametro>();
+        var listasPrecio = new List<OpcionParametro>();
+
+        using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync()) servicios.Add(new(rd.GetString(0), rd.GetString(1)));
+        if (await rd.NextResultAsync())
+            while (await rd.ReadAsync()) adicionales.Add(new(rd.GetString(0), rd.GetString(1)));
+        if (await rd.NextResultAsync())
+            while (await rd.ReadAsync()) rubros.Add(new(rd.GetInt32(0), rd.GetString(1)));
+        if (await rd.NextResultAsync())
+            while (await rd.ReadAsync()) empresas.Add(new(rd.GetString(0), rd.GetString(1)));
+        if (await rd.NextResultAsync())
+            while (await rd.ReadAsync()) listasPrecio.Add(new(rd.GetString(0), rd.GetString(1)));
+
+        return new ParametrosCombos(servicios, adicionales, rubros, empresas, listasPrecio);
+    }
+
+    /// <summary>
+    /// Lee la configuración del SQL externo del GPS (Init de <c>parametro_sql_server.scx</c>).
+    /// 🔴 <b>Esta integración está VIVA en producción</b> (<c>sql_gps = 1</c>, verificado
+    /// 12/08/2026): <c>gps_xlm()</c> escribe un viaje en ese server en cada asignación,
+    /// reasignación, finalización y cancelación, para los 136 clientes con
+    /// <c>cliente.envia_gps = 1</c> (93 % de los viajes). Buslink todavía no lo replica —
+    /// entrega obligatoria antes del día D. Ver <c>docs/PlanoFoxPro/trafico/GPS_XLM.md</c>.
+    ///
+    /// ⚠ <b>No se replica el parseo Maquina/Instancia del FoxPro</b>, que tiene un bug grave:
+    /// <c>SUBSTR(sql_server, 1, AT("\", sql_server) - 1)</c> devuelve vacío cuando el server
+    /// NO tiene backslash (que es justo el caso productivo, <c>192.168.0.8</c>) y el
+    /// <c>LostFocus</c> recompone el server desde ese vacío → <b>borra la dirección</b>.
+    /// Acá el servidor se muestra entero y en solo lectura.
+    /// </summary>
+    public async Task<ParametrosGpsEdit> GetParametrosGpsAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT TOP 1
+                CAST(ISNULL(sql_gps, 0) AS bit)     AS Activo,
+                RTRIM(ISNULL(sql_server, ''))       AS Servidor,
+                RTRIM(ISNULL(sql_base, ''))         AS Base,
+                RTRIM(ISNULL(sql_usuari, ''))       AS Usuario,
+                RTRIM(ISNULL(sql_passwo, ''))       AS Password,
+                RTRIM(ISNULL(sql_tabla, ''))        AS Tabla,
+                RTRIM(ISNULL(url_gps, ''))          AS UrlGps,
+                CAST(ISNULL(xml_envia, 0) AS bit)   AS XmlEnvia,
+                RTRIM(ISNULL(dir_xml, ''))          AS DirXml
+            FROM parametro
+            """;
+        using var rd = await cmd.ExecuteReaderAsync();
+        if (!await rd.ReadAsync()) return new ParametrosGpsEdit();
+        return new ParametrosGpsEdit
+        {
+            Activo   = rd.GetBoolean(0),
+            Servidor = rd.GetString(1),
+            Base     = rd.GetString(2),
+            Usuario  = rd.GetString(3),
+            Password = rd.GetString(4),
+            Tabla    = rd.GetString(5),
+            UrlGps   = rd.GetString(6),
+            XmlEnvia = rd.GetBoolean(7),
+            DirXml   = rd.GetString(8),
+        };
+    }
+
+    /// <summary>
+    /// Cuántos clientes tienen el envío a GPS prendido y qué porción de los viajes recientes
+    /// representan. Es el dato que dimensiona el riesgo del día D: <c>gps_xlm()</c> solo
+    /// notifica viajes de clientes con <c>envia_gps = 1</c>.
+    /// </summary>
+    public async Task<GpsAlcance> GetGpsAlcanceAsync(int dias = 30)
+    {
+        return await _cache.GetOrCreateAsync($"gps-alcance|{dias}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30);
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                DECLARE @desde date = DATEADD(day, -{dias}, CAST(GETDATE() AS date));
+                DECLARE @hasta date = CAST(GETDATE() AS date);
+                SELECT
+                    (SELECT COUNT(*) FROM cliente WHERE envia_gps = 1 AND _deleted = 0),
+                    (SELECT COUNT(*) FROM viaje v INNER JOIN cliente c ON v.id_cliente = c.id_cliente
+                      WHERE v._deleted = 0 AND c.envia_gps = 1 AND v.f_reserva BETWEEN @desde AND @hasta),
+                    (SELECT COUNT(*) FROM viaje v
+                      WHERE v._deleted = 0 AND v.f_reserva BETWEEN @desde AND @hasta)
+                """;
+            using var rd = await cmd.ExecuteReaderAsync();
+            if (!await rd.ReadAsync()) return new GpsAlcance(0, 0, 0, dias);
+            return new GpsAlcance(rd.GetInt32(0), rd.GetInt32(1), rd.GetInt32(2), dias);
+        }) ?? new GpsAlcance(0, 0, 0, dias);
+    }
+
+    /// <summary>True si el código existe en <c>cliente</c> — réplica del Valid de
+    /// <c>id_cliente_prueba</c> ("Cliente Inexistente"). Vacío se considera válido.</summary>
+    public async Task<bool> ExisteClienteAsync(string idCliente)
+    {
+        if (string.IsNullOrWhiteSpace(idCliente)) return true;
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM cliente WHERE RTRIM(id_cliente) = @c AND _deleted = 0";
+        cmd.Parameters.Add(NuevoParam(cmd, "@c", idCliente.Trim()));
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync() ?? 0) > 0;
+    }
 }
 
 // ── DTOs de Fleteros ─────────────────────────────────────────────────────────────
@@ -7445,3 +9118,145 @@ public record ConsumoMensualRow(
 /// estacion_rubro; Rubro = su nombre. Para rubro 1 (combustible) son los tipos de combustible.
 /// Sin f_delete → baja física.</summary>
 public record ArticuloRubroRow(int Id, int RubroId, string Rubro, string Nombre);
+
+// ── DTOs de Parámetros del sistema (parametro_empresa.scx + parametro.scx) ───────
+// Son CLASES mutables (no records) porque la pantalla las bindea directo con @bind-Value.
+// Plano: docs/PlanoFoxPro/sistema/PARAMETROS.md · skill modulo-sistema.
+
+/// <summary>Los 15 campos de Parámetros Empresa. Se corresponden 1 a 1 con columnas de
+/// la fila única de <c>parametro</c> (nombres truncados a 10 chars en la réplica).</summary>
+public class ParametrosEmpresaEdit
+{
+    public string Nombre { get; set; } = "";              // empresa_no
+    public string Direccion { get; set; } = "";           // empresa_di
+    public string Cuit { get; set; } = "";                // empresa_cu
+    public decimal Piva { get; set; }                     // piva
+    public string Telefono { get; set; } = "";            // empresa_te
+    public int RegNac { get; set; }                       // empresa_ha (int)
+    public DateTime? VtoCircuito { get; set; }            // empresa_vt
+    public string CircuitoCerrado { get; set; } = "";     // empresa_ci
+    public string Logo { get; set; } = "";                // logo
+    public string SmtpNombre { get; set; } = "";          // smtp_nombr
+    public string SmtpServidor { get; set; } = "";        // smtp_serve
+    public string SmtpUsuario { get; set; } = "";         // smtp_usuar
+    public string SmtpPassword { get; set; } = "";        // smtp_passw (⚠ texto plano)
+    public int SmtpPuerto { get; set; }                   // smtp_puert
+    public string SmtpFirma { get; set; } = "";           // smtp_firma
+
+    /// <summary>Copia para poder descartar cambios (el Cancelar del FoxPro).</summary>
+    public ParametrosEmpresaEdit Clonar() => (ParametrosEmpresaEdit)MemberwiseClone();
+}
+
+/// <summary>
+/// Campos de Parámetros Generales. Los del bloque final son de SOLO LECTURA en Buslink
+/// (contadores vivos del circuito, interruptor del GPS y rutas de red del FoxPro) —
+/// se leen para mostrarlos, nunca se escriben. Ver §3.5 del plano.
+/// </summary>
+public class ParametrosGeneralesEdit
+{
+    // ── Editables ──
+    public string SrvHoraExcedente { get; set; } = "";    // cliente_ad
+    public string SrvHorasChofer { get; set; } = "";      // chofer_adi
+    public int FraccionFacturacion { get; set; }          // fraccion_h
+    public int FraccionChofer { get; set; }               // fraccion_2
+    public decimal PorcFrancoTrabajado { get; set; }      // porc_franc
+    public decimal ImpFrancoTrabajado { get; set; }       // imp_franco
+    public int AvisoChoferes { get; set; }                // aviso_cho
+    public int AvisoTecnica { get; set; }                 // aviso_veh
+    public int AvisoMatafuego { get; set; }               // aviso_mat  ← 🐛 el FoxPro NO lo graba
+    public bool AvisosOperadores { get; set; }            // aviso_cheq ("S"/"N")
+    public int ChequeoHora { get; set; }                  // aviso_tiem (hora)
+    public int ChequeoMinuto { get; set; }                // aviso_tiem (minuto)
+    public decimal SueldoBruto { get; set; }              // bruto
+    public decimal HsExtraBus { get; set; }               // hs_extra_b
+    public decimal HsExtraMinibus { get; set; }           // hs_extra_m
+    public int FrancosAlMes { get; set; }                 // franco_mes
+    public decimal PorcVacio { get; set; }                // porc_vacio
+    public DateTime? FechaSaldoComb { get; set; }         // dcombsaldo
+    public int RubroCombustible { get; set; }             // rubro_comb
+    public string ClienteMovInternos { get; set; } = "";  // id_cliente
+    public string AdicionalAgua { get; set; } = "";       // adic_agua
+    public string AdicionalMaleta { get; set; } = "";     // adic_malet
+    public string LeyendaLiq1 { get; set; } = "";         // ley_liq_1
+    public string LeyendaLiq2 { get; set; } = "";         // ley_liq_2
+    public int BackupMinutos { get; set; }                // backup_tim (se guarda en SEGUNDOS)
+
+    // ── Solo lectura (§3.5 del plano: contadores vivos, GPS y rutas de red) ──
+    public string EmpresaFacturacion { get; set; } = "";  // empresa_ca
+    public string ListaPrecioComun { get; set; } = "";    // lista_prec
+    public long LotePlantillas { get; set; }              // lote_plant  ⚠ contador vivo
+    public long LoteSobre { get; set; }                   // lote_sobre  ⚠ contador vivo
+    public bool XmlEnvia { get; set; }                    // xml_envia   ⚠ interruptor del GPS
+    public string DirXml { get; set; } = "";
+    public string DirAuditoria { get; set; } = "";
+    public string DirAuditoriaExterna { get; set; } = "";
+    public string DirFacturacion { get; set; } = "";
+    public string DirSonidoTrafico { get; set; } = "";
+    public string BackupDir { get; set; } = "";
+
+    /// <summary>Hora de chequeo formateada "HH:mm" (lo que el FoxPro arma con 2 combos).</summary>
+    public string ChequeoTexto => $"{ChequeoHora:D2}:{ChequeoMinuto:D2}";
+
+    public ParametrosGeneralesEdit Clonar() => (ParametrosGeneralesEdit)MemberwiseClone();
+}
+
+/// <summary>Opción de un combo de Parámetros: el valor guardado es el <paramref name="Id"/>.</summary>
+public record OpcionParametro(string Id, string Nombre)
+{
+    /// <summary>Texto del combo: "CODIGO — Nombre" (o solo el código si coinciden).</summary>
+    public string Etiqueta => string.IsNullOrWhiteSpace(Nombre) || Nombre == Id ? Id : $"{Id} — {Nombre}";
+}
+
+/// <summary>Rubro de consumo (estacion_rubro): el parámetro guarda el id numérico.</summary>
+public record OpcionRubro(int Id, string Nombre);
+
+/// <summary>Las listas que alimentan los combos de Parámetros Generales.</summary>
+public record ParametrosCombos(
+    List<OpcionParametro> Servicios,
+    List<OpcionParametro> Adicionales,
+    List<OpcionRubro> Rubros,
+    List<OpcionParametro> Empresas,
+    List<OpcionParametro> ListasPrecio)
+{
+    /// <summary>
+    /// Devuelve la lista asegurando que el valor ACTUAL esté presente aunque no exista en el
+    /// catálogo. Sin esto, un valor huérfano (p. ej. <c>lista_prec = 'AGENCIAUS'</c>, que ya no
+    /// está en <c>lista_precio_modelo</c>) haría que el combo arranque vacío y que un Grabar
+    /// inocente lo <b>borre en silencio</b>.
+    /// </summary>
+    public static List<OpcionParametro> ConValorActual(List<OpcionParametro> opciones, string? actual)
+    {
+        actual = (actual ?? "").Trim();
+        if (actual.Length == 0 || opciones.Any(o => o.Id == actual)) return opciones;
+        return new List<OpcionParametro> { new(actual, "⚠ valor actual, ya no está en el catálogo") }
+            .Concat(opciones).ToList();
+    }
+}
+
+/// <summary>
+/// Configuración del SQL externo del GPS (<c>parametro_sql_server.scx</c>). Todo SOLO LECTURA
+/// en Buslink: es el interruptor de una integración VIVA que Buslink todavía no replica.
+/// </summary>
+public class ParametrosGpsEdit
+{
+    public bool Activo { get; set; }                  // sql_gps  🔴 = 1 en producción
+    public string Servidor { get; set; } = "";        // sql_server
+    public string Base { get; set; } = "";            // sql_base
+    public string Usuario { get; set; } = "";         // sql_usuari
+    public string Password { get; set; } = "";        // sql_passwo (⚠ texto plano)
+    public string Tabla { get; set; } = "";           // sql_tabla
+    public string UrlGps { get; set; } = "";          // url_gps (lo usa el mapa, no gps_xlm)
+    public bool XmlEnvia { get; set; }                // xml_envia — la vía XML, hoy apagada
+    public string DirXml { get; set; } = "";          // dir_xml
+
+    public ParametrosGpsEdit Clonar() => (ParametrosGpsEdit)MemberwiseClone();
+}
+
+/// <summary>Alcance del feed de GPS: cuántos clientes lo tienen prendido y qué porción de los
+/// viajes del período representan (<c>gps_xlm()</c> filtra por <c>cliente.envia_gps</c>).</summary>
+public record GpsAlcance(int ClientesConGps, int ViajesConGps, int ViajesTotales, int Dias)
+{
+    /// <summary>Porcentaje de los viajes del período que dispararían el envío a GPS.</summary>
+    public decimal PorcentajeViajes =>
+        ViajesTotales == 0 ? 0 : Math.Round(ViajesConGps * 100m / ViajesTotales, 1);
+}

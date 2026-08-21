@@ -1,0 +1,94 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   Ayuda → Novedades (07/08/2026).
+
+   Bitácora de cambios EN IDIOMA DEL USUARIO — no un changelog técnico. Lo que la
+   mesa de tráfico necesita saber es "ahora la leyenda filtra", no "refactor de
+   TraficoFilaRow". Sirve además como prueba visible de que el sistema avanza,
+   que es lo que el cliente mira.
+
+   Para agregar una novedad: sumar un registro arriba de la lista `Novedades`.
+   El primero se muestra abierto; el resto arrancan colapsados.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog ayuda-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.AutoAwesome" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Novedades de Buslink</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <div class="ayuda-intro">Lo último que se agregó al sistema, de más nuevo a más viejo.</div>
+
+        <div class="ayuda-novedades">
+            @foreach (var n in Novedades)
+            {
+                var abierta = _abierta == n.Fecha + n.Titulo;
+                <div class="ayuda-nov @(abierta ? "ayuda-nov--on" : "")">
+                    <button type="button" class="ayuda-nov__head"
+                            @onclick="@(() => Alternar(n.Fecha + n.Titulo))" aria-expanded="@abierta">
+                        <span class="ayuda-nov__fecha">@n.Fecha</span>
+                        <span class="ayuda-nov__tit">@n.Titulo</span>
+                        <span class="ayuda-nov__modulo">@n.Modulo</span>
+                        <MudIcon Icon="@(abierta ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                 Size="Size.Small" Style="margin-left:auto; opacity:.5;" />
+                    </button>
+                    @if (abierta)
+                    {
+                        <div class="ayuda-nov__cuerpo">@n.Detalle</div>
+                    }
+                </div>
+            }
+        </div>
+    </DialogContent>
+
+    <DialogActions>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private string? _abierta;
+
+    private void Alternar(string clave) => _abierta = _abierta == clave ? null : clave;
+    private void Cerrar() => MudDialog.Close();
+
+    private record Novedad(string Fecha, string Modulo, string Titulo, string Detalle);
+
+    private static readonly List<Novedad> Novedades = new()
+    {
+        new("19/08/2026", "Tráfico", "Libro de novedades a un clic",
+            "El libro de guardia tiene botón propio en la franja de la planilla, al lado de Ocupación: " +
+            "abre las novedades sueltas (las que no cuelgan de una reserva) de los últimos 7 días. " +
+            "Las novedades de un viaje puntual siguen con F2 o con el clic derecho sobre la fila."),
+
+        new("07/08/2026", "Sistema", "Botón de Ayuda en la barra superior",
+            "Desde el botón «Ayuda» de arriba a la derecha se llega a la ayuda online, a los manuales en PDF, " +
+            "a la tabla de atajos de teclado y a los datos de soporte."),
+
+        new("04/08/2026", "Tráfico", "Cambio de unidad prevista con F6 a F9",
+            "Las teclas del Metrocar para cambiar el cronograma ya funcionan en Buslink: sin unidad (F6), " +
+            "empresa (F7), fletero (F8), flota propia (F9) y copiar la del diagramador (Ctrl+F8). " +
+            "F1 abre la ayuda de atajos, F2 carga una novedad y F3 actualiza la planilla."),
+
+        new("31/07/2026", "Tráfico", "Tablero de ocupación de la flota",
+            "Botón «Ocupación» al lado de Buses: muestra en una línea de tiempo qué hace cada unidad " +
+            "durante el día y dónde quedan los huecos, con los solapes marcados."),
+
+        new("20/07/2026", "Tráfico", "Leyenda de estados que filtra la planilla",
+            "Los botones del pie de la planilla ahora filtran la grilla por estado y se acumulan: " +
+            "un clic suma el estado, otro lo saca."),
+
+        new("15/07/2026", "Informes", "Comparación mes contra mes en los informes",
+            "En Reservas por cliente se puede comparar contra el mes anterior, contra N meses atrás o " +
+            "contra el año pasado, con la variación y la tendencia en la misma tabla."),
+    };
+}

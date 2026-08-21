@@ -43,11 +43,14 @@
 </MudPaper>
 
 @* ── KPIs ── *@
-<div class="d-flex flex-wrap mb-3" style="gap:12px;">
-    <div style="flex:1 1 0; min-width:180px;"><KpiCard Label="Guardias" Value="@_items.Count.ToString("N0")" /></div>
-    <div style="flex:1 1 0; min-width:180px;"><KpiCard Label="Choferes" Value="@_items.Select(g => g.IdChofer).Distinct().Count().ToString("N0")" /></div>
-    <div style="flex:1 1 0; min-width:180px;"><KpiCard Label="En franco" Value="@_items.Count(g => g.Franco).ToString("N0")" Color="@NorturColors.Naranja" /></div>
-    <div style="flex:1 1 0; min-width:180px;"><KpiCard Label="Pagadas" Value="@_items.Count(g => g.Pagada).ToString("N0")" Color="@NorturColors.Verde" /></div>
+@* rfs-kpis (grid) en vez del d-flex con anchos inline: es el contrato de responsividad
+   del proyecto (skill `responsive-nortur`). Los wrappers con `flex:1 1 0; min-width:180px`
+   se sacan a propósito — dejaban que la última tarjeta se quedara con todo el sobrante. *@
+<div class="rfs-kpis mb-3">
+    <KpiCard Label="Guardias" Value="@_items.Count.ToString("N0")" />
+    <KpiCard Label="Choferes" Value="@_items.Select(g => g.IdChofer).Distinct().Count().ToString("N0")" />
+    <KpiCard Label="En franco" Value="@_items.Count(g => g.Franco).ToString("N0")" Color="@NorturColors.Naranja" />
+    <KpiCard Label="Pagadas" Value="@_items.Count(g => g.Pagada).ToString("N0")" Color="@NorturColors.Verde" />
 </div>
 
 @if (_cargando)

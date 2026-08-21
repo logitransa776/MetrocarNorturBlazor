@@ -1,0 +1,176 @@
+@inject IJSRuntime JS
+@implements IDisposable
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   El POPUP de la alarma de Tráfico — lo que aparece cuando llega la hora de aviso de uno o
+   más servicios. Lo dispara el timer de 60 s de PlanillaTrafico.
+
+   Plano: docs/PlanoFoxPro/trafico/TRAFICO_F4_AVISO.md §3.3
+
+   Qué muestra el Metrocar hoy: `formInicioServicio` (funcion.prg:2272) — un cartel grande que
+   dice "Inicio de 3 servicios", un beep y auto-cierre a los 10 segundos. No dice CUÁLES.
+   Qué quiso el autor: `trafico_aviso.scx` ("Aviso de Chequeo"), con la grilla de los servicios
+   que están avisando y un botón Chequeo. Ese form quedó MUERTO (no aparece nunca en el
+   error.txt del .exe productivo, donde FORMINICIOSERVICIO sí figura).
+   → Buslink implementa lo que el autor quiso: la lista.
+
+   El botón "Chequeo" de aquel form (chequeo+1 + viaje_log) NO se migra todavía: es otra
+   escritura del circuito (T1 en ESCRITURA_CIRCUITO.md) y va con el día D. Por ahora doble clic
+   sobre una fila abre el Zoom del Viaje, que es donde el operador va a mirar.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog avisos-dialog">
+    <TitleContent>
+        @* Banda roja, como el Text1 de trafico_aviso.scx (DisabledBackColor = 255,0,0). *@
+        <div class="avisos-titlebar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.NotificationsActive" Class="me-2" />
+            <span class="avisos-titlebar__text">
+                Atención — aviso de las @Hora
+            </span>
+            <span class="avisos-titlebar__chip">@Avisos.Count servicio@(Avisos.Count == 1 ? "" : "s")</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.9); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @* Al pasar el mouse por encima se cancela el auto-cierre: si el operador está leyendo
+           la lista, la ventana no se le escapa. *@
+        <div class="avisos-wrap" @onmouseenter="Fijar">
+            <table class="avisos-tabla">
+                <thead>
+                    <tr>
+                        <th>Reserva</th>
+                        <th>H.Ini</th>
+                        <th>Avisa</th>
+                        <th>U/Pr</th>
+                        <th>U/As</th>
+                        <th>Recorrido</th>
+                        <th>Chofer</th>
+                        <th class="c">Pax</th>
+                        <th class="c">Chq</th>
+                        <th>Estado</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var a in Avisos)
+                    {
+                        <tr @ondblclick="@(() => AbrirViaje(a))"
+                            class="@(a.Chq > 0 ? "avisos-fila--chq" : "")"
+                            title="Doble clic para abrir el Zoom del Viaje">
+                            <td class="nro">@a.IdViaje</td>
+                            <td class="hora">@(a.HsInicio?.ToString("HH:mm") ?? "—")</td>
+                            @* Si el aviso no es de ESTE minuto, llegó por la ventana de gracia:
+                               se pasó mientras nadie miraba la pantalla. El operador tiene que
+                               notarlo, así que la hora va en naranja y se dice cuánto se atrasó. *@
+                            <td class="hora @(EsAtrasado(a) ? "avisos-tarde" : "")"
+                                title="@(EsAtrasado(a) ? $"Este aviso era de las {a.HsAviso:HH:mm} y se muestra ahora" : "")">
+                                @a.HsAviso.ToString("HH:mm")
+                                @if (EsAtrasado(a))
+                                {
+                                    <span class="avisos-tarde__badge">atrasado</span>
+                                }
+                                @if (a.AvisoManual)
+                                {
+                                    @* El aviso lo cargó alguien con F4; el resto son el automático. *@
+                                    <span class="avisos-manual" title="Aviso cargado a mano (F4)">M</span>
+                                }
+                            </td>
+                            <td>@Guion(a.UPr)</td>
+                            <td>@Guion(a.UAs)</td>
+                            <td class="rec" title="@a.Recorrido">@Guion(a.Recorrido)</td>
+                            <td title="@a.Chofer">@Guion(a.Chofer)</td>
+                            <td class="c">@(a.Pax > 0 ? a.Pax.ToString() : "")</td>
+                            <td class="c">@(a.Chq > 0 ? a.Chq.ToString() : "")</td>
+                            <td><span class="avisos-estado">@a.Estado</span></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </DialogContent>
+
+    <DialogActions>
+        <MudText Typo="Typo.caption" Class="avisos-nota">
+            @if (_fijado)
+            {
+                <span>Doble clic en un servicio para abrir el Zoom del Viaje.</span>
+            }
+            else
+            {
+                <span>Este aviso se cierra solo en @_restan segundos · pasá el mouse por encima para que quede fijo.</span>
+            }
+        </MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Los servicios que están avisando en este minuto (ya deduplicados por el llamador).</summary>
+    [Parameter] public List<AvisoViajeRow> Avisos { get; set; } = new();
+    /// <summary>HH:mm del disparo, para la banda roja.</summary>
+    [Parameter] public string Hora { get; set; } = "";
+
+    // Auto-cierre: el FoxPro cierra a los 10 s, pero ahí el cartel es una línea. Acá hay una
+    // lista para leer, así que damos 20 s y cualquier interacción lo cancela.
+    private const int SegundosAutoCierre = 20;
+    private int _restan = SegundosAutoCierre;
+    private bool _fijado;
+    private CancellationTokenSource? _cts;
+
+    protected override async Task OnAfterRenderAsync(bool primerRender)
+    {
+        if (!primerRender) return;
+        // Campanita (equivale al ?Chr(7) de formInicioServicio / ringin.wav de trafico_aviso).
+        // Se genera con WebAudio, sin archivo: ver traficoBeep en descarga.js. Si el navegador
+        // todavía no permite audio (política de autoplay), no pasa nada — el JS lo traga.
+        try { await JS.InvokeVoidAsync("traficoBeep"); } catch { /* audio bloqueado */ }
+        _ = CuentaRegresiva();
+    }
+
+    private async Task CuentaRegresiva()
+    {
+        _cts = new CancellationTokenSource();
+        try
+        {
+            while (_restan > 0 && !_fijado)
+            {
+                await Task.Delay(1000, _cts.Token);
+                if (_fijado) return;
+                _restan--;
+                await InvokeAsync(StateHasChanged);
+            }
+            if (!_fijado) MudDialog.Close();
+        }
+        catch (OperationCanceledException) { /* cerrado a mano */ }
+    }
+
+    private void Fijar()
+    {
+        if (_fijado) return;
+        _fijado = true;
+        _cts?.Cancel();
+    }
+
+    // Devuelve el viaje elegido: la planilla abre el Zoom con eso.
+    private void AbrirViaje(AvisoViajeRow a) => MudDialog.Close(DialogResult.Ok(a));
+
+    private void Cerrar() => MudDialog.Close();
+
+    private static string Guion(string s) => string.IsNullOrWhiteSpace(s) ? "—" : s.Trim();
+
+    /// <summary>El aviso es de un minuto anterior al del disparo → entró por la ventana de
+    /// gracia (nadie estaba en la pantalla cuando le tocaba).</summary>
+    private bool EsAtrasado(AvisoViajeRow a) => a.HsAviso.ToString("HH:mm") != Hora;
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

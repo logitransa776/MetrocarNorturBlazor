@@ -50,7 +50,8 @@ El orden de concatenación en `usuario_abm.scx` es: `S R T C D V L F A E U B H X
 | `E` | Estadísticas | ⚠️ **Flag muerto** — checkbox existe, ningún menú ni form lo chequea en el fuente |
 | `U` | Utilitarios | Menú Utilitarios |
 | `B` | Back-Up | Al login abre directo el form Backup (usuario de servicio) |
-| `H` | Scheduler | Utilitarios → Scheduler + lo abre al login si no tiene `B` |
+| `H` | Scheduler | (FoxPro) Utilitarios → Scheduler. ⚠️ **RETIRADO en Blazor** (sin uso) — su posición se reutilizó para `I` (ver abajo) |
+| `I` | **Acceso por Internet** | 🆕 **Solo Blazor/Buslink** (no existe en FoxPro). Habilita el ingreso desde FUERA de la red interna (Internet). Sin `I`, el usuario solo entra desde la LAN. Se evalúa en el login contra `RedInterna` (appsettings). Ver `[[acceso-por-internet-usuarios]]` |
 | `X` | Tablero de Control | Sistema → Tablero de Control. Solo SUPERVISOR puede otorgarlo |
 | `N` | Cuentas Corrientes | Facturación → Cuentas Corrientes (menú variante `_C_CC`) |
 | `M` | Combustible | Menú Combustible (**letra `M`, no `C`** — `C` es avisos de chequeo) |
@@ -162,7 +163,7 @@ En cualquier componente que muestre importes/precios:
 
 Mientras Blazor conviva con FoxPro, el string `acceso` lo sigue escribiendo `usuario_abm.scx`.
 Si se agrega una letra nueva desde Blazor, FoxPro no la conoce y la pierde al próximo `UPDATE`.
-Las letras disponibles no usadas en el fuente: `E` (estadísticas, muerto), `P`, `G`, `I`, `J`, `K`, `O`, `Q`, `W`, `Y`, `Z` — **no asignar hasta migrar el ABM de usuarios a Blazor**.
+Las letras disponibles no usadas en el fuente: `E` (estadísticas, muerto), `P`, `G`, `J`, `K`, `O`, `Q`, `W`, `Y`, `Z`. La letra `I` **ya se asignó en Blazor** = Acceso por Internet (24/07/2026), reutilizando la posición del retirado `H` (Scheduler) en `PermisosCatalogo` — nuevo orden del catálogo Blazor: `S R T C D V L F A E U B I X N M`. `H` quedó libre.
 
 ---
 

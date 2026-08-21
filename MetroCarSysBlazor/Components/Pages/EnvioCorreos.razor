@@ -1,0 +1,270 @@
+@page "/envio-correos"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject CorreoNovedadesService Correos
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@rendermode InteractiveServer
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   "Envío de correos" (Tráfico → Libro de Novedades → 2º ítem).
+   Réplica de libro_novedad_envia_correo.scx: el batch diario que manda a la lista interna
+   lo que todavía no salió y estampa f_envio.
+
+   🔒 ANDAMIAJE: con AbmFeatureFlags.EnvioCorreosActivo en false esta pantalla es un
+   PREVISUALIZADOR: arma el correo exacto que saldría y muestra a quiénes, pero no abre el
+   SMTP ni toca f_envio. El Metrocar sigue siendo el que manda.
+
+   De los 4 bloques del FoxPro se migraron los dos de texto puro (Novedades y Siniestros);
+   Combustible y Taller (con adjunto) quedaron para una segunda tanda.
+   Plano: docs/PlanoFoxPro/trafico/LIBRO_NOVEDADES.md
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<PageTitle>BusLink</PageTitle>
+
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Envío de correos</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Tráfico · Libro de Novedades — qué se le manda hoy a la lista interna
+    </MudText>
+</div>
+
+<MudPaper Class="pa-2 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #F99410;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">
+            @(_tanda?.Destinatarios.Count ?? 0) destinatarios
+        </MudChip>
+        <span style="flex:1 1 auto;"></span>
+        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.MarkEmailRead" Href="/correos-destinatarios">Destinatarios</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">Actualizar</MudButton>
+    </div>
+</MudPaper>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else if (_tanda is not null)
+{
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="Novedades pendientes" Value="@_tanda.Novedades.Count.ToString("N0")"
+                 Color="@(_tanda.Novedades.Count > 0 ? NorturColors.Naranja : NorturColors.Azul)" />
+        <KpiCard Label="Siniestros pendientes" Value="@_tanda.Siniestros.Count.ToString("N0")"
+                 Color="@(_tanda.Siniestros.Count > 0 ? NorturColors.Naranja : NorturColors.Azul)" />
+        <KpiCard Label="Reciben novedades" Value="@_tanda.DeNovedades.Count.ToString("N0")" />
+        <KpiCard Label="Reciben siniestros" Value="@_tanda.DeSiniestros.Count.ToString("N0")" />
+        <KpiCard Label="Últ. envío Comb./Taller"
+                 Value="@(_tanda.Smtp.UltimoEnvio?.ToString("dd/MM/yyyy") ?? "—")" />
+    </div>
+
+    @* El candado del andamiaje, arriba de todo: es lo primero que tiene que quedar claro. *@
+    @if (!_envioActivo)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Icon="@Icons.Material.Filled.Lock">
+            <b>Vista previa.</b> Buslink arma acá el correo exacto que saldría y a quiénes, pero
+            <b>todavía no lo manda</b>: el envío se sigue haciendo desde el Metrocar. Si los dos
+            mandaran, cada destinatario recibiría todo duplicado.
+        </MudAlert>
+    }
+
+    @if (_tanda.Bloqueo is string bloqueo)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">@bloqueo</MudAlert>
+    }
+
+    @if (_tanda.SiniestrosSinChofer > 0)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+            <b>@_tanda.SiniestrosSinChofer siniestro(s) pendientes quedan afuera de la tanda</b>
+            porque su chofer ya no está en el padrón. Es el comportamiento del Metrocar (usa un
+            INNER JOIN a <code>chofer</code>), pero allá no se ve: esos partes no se envían nunca.
+        </MudAlert>
+    }
+
+    <MudPaper Class="pa-3 mb-3" Elevation="1" Style="border-radius:14px;">
+        <MudText Typo="Typo.subtitle2" Style="font-weight:800; color:#112F5B;">Qué mandar</MudText>
+        <div class="d-flex flex-wrap align-center mt-2" style="gap:6px 26px;">
+            <MudCheckBox T="bool" @bind-Value="_enviarNovedades" Dense="true" Size="Size.Small" Color="Color.Primary"
+                         Disabled="@(_tanda.Novedades.Count == 0)"
+                         Label="@($"Novedades ({_tanda.Novedades.Count})")" />
+            <MudCheckBox T="bool" @bind-Value="_enviarSiniestros" Dense="true" Size="Size.Small" Color="Color.Primary"
+                         Disabled="@(_tanda.Siniestros.Count == 0)"
+                         Label="@($"Siniestros ({_tanda.Siniestros.Count})")" />
+            @* Los dos bloques que faltan migrar, visibles pero apagados: que se sepa que existen. *@
+            <MudCheckBox T="bool" Value="false" Dense="true" Size="Size.Small" Disabled="true"
+                         Label="Combustible (sigue en el Metrocar)" />
+            <MudCheckBox T="bool" Value="false" Dense="true" Size="Size.Small" Disabled="true"
+                         Label="Taller (sigue en el Metrocar)" />
+            <span style="flex:1 1 auto;"></span>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Medium"
+                       StartIcon="@Icons.Material.Filled.Send" OnClick="EnviarAsync"
+                       Disabled="@(!_envioActivo || _enviando || _tanda.Bloqueo is not null
+                                   || (!_enviarNovedades && !_enviarSiniestros))">
+                @(_enviando ? "Enviando…" : "Enviar")
+            </MudButton>
+        </div>
+        <MudText Typo="Typo.caption" Style="color:#7A90AD; display:block; margin-top:8px;">
+            Servidor: <b>@(_tanda.Smtp.Configurado ? $"{_tanda.Smtp.Servidor}:{_tanda.Smtp.Puerto}" : "sin configurar")</b>
+            · Remitente: <b>@(_tanda.Smtp.Remitente.Length > 0 ? _tanda.Smtp.Remitente : "—")</b>
+            — se configura en Parámetros → Empresa.
+        </MudText>
+    </MudPaper>
+
+    @if (_resultado is not null)
+    {
+        <MudPaper Class="pa-3 mb-3" Elevation="1" Style="border-radius:14px;">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:800; color:#112F5B;">Resultado del proceso</MudText>
+            <div class="env-log mt-2">
+                @foreach (var l in _resultado.Log)
+                {
+                    <div class="env-log__linea @(l.EsError ? "env-log__linea--err" : "") @(l.EsTitulo ? "env-log__linea--tit" : "")">@l.Texto</div>
+                }
+            </div>
+            @if (!_resultado.Bloqueado)
+            {
+                <MudText Typo="Typo.caption" Style="color:#7A90AD; display:block; margin-top:8px;">
+                    @_resultado.Enviados correo(s) enviado(s) · @_resultado.Fallidos con problemas ·
+                    @_resultado.NovedadesMarcadas novedad(es) y @_resultado.SiniestrosMarcados siniestro(s) marcados como enviados.
+                </MudText>
+            }
+        </MudPaper>
+    }
+
+    @* ── Vista previa: el correo EXACTO que saldría ── *@
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true">
+            <MudTabPanel Text="@(_tanda.NovedadesEsEjemplo ? "Novedades (ejemplo)" : $"Novedades ({_tanda.Novedades.Count})")"
+                         Disabled="@(_tanda.CuerpoNovedades.Length == 0)" Class="pa-3">
+                @if (_tanda.NovedadesEsEjemplo)
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                        No hay novedades pendientes. Esto es un <b>ejemplo</b> armado con las
+                        últimas 10 novedades ya enviadas, para ver el formato del correo — no se
+                        manda nada.
+                    </MudAlert>
+                }
+                @Previsualizacion(_tanda.AsuntoNovedades, _tanda.CuerpoNovedades, _tanda.DeNovedades)
+            </MudTabPanel>
+            <MudTabPanel Text="@($"Siniestros ({_tanda.Siniestros.Count})")" Disabled="@(_tanda.Siniestros.Count == 0)" Class="pa-3">
+                @Previsualizacion(_tanda.AsuntoSiniestros, _tanda.CuerpoSiniestros, _tanda.DeSiniestros)
+            </MudTabPanel>
+        </MudTabs>
+    </MudPaper>
+}
+
+@code {
+    private static bool _envioActivo => AbmFeatureFlags.EnvioCorreosActivo;
+
+    private CorreoNovedadesService.Tanda? _tanda;
+    private CorreoNovedadesService.ResultadoEnvio? _resultado;
+    private bool _cargando = true, _enviando;
+    private bool _enviarNovedades = true, _enviarSiniestros = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('T'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        _tanda = await Correos.PrepararAsync();
+        // Igual que el Init del FoxPro: los checkboxes arrancan tildados solo si hay tanda.
+        _enviarNovedades = _tanda.Novedades.Count > 0;
+        _enviarSiniestros = _tanda.Siniestros.Count > 0;
+        _cargando = false;
+    }
+
+    private async Task Refrescar()
+    {
+        _resultado = null;
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private async Task EnviarAsync()
+    {
+        if (_tanda is null) return;
+        _enviando = true;
+        StateHasChanged();
+        _resultado = await Correos.EnviarAsync(_tanda, _enviarNovedades, _enviarSiniestros);
+        _enviando = false;
+        // Después de enviar, la tanda cambió (los enviados ya no están pendientes).
+        if (!_resultado.Bloqueado) await CargarAsync();
+    }
+
+    /// <summary>El correo exacto: destinatarios + asunto + cuerpo en texto plano.</summary>
+    private RenderFragment Previsualizacion(
+        string asunto, string cuerpo, IReadOnlyList<DestinatarioCorreoRow> destinos) => __builder =>
+    {
+        <div class="mb-2">
+            <MudText Typo="Typo.caption" Style="color:#7A90AD; font-weight:700;">PARA (@destinos.Count)</MudText>
+            <div class="d-flex flex-wrap mt-1" style="gap:6px;">
+                @if (destinos.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Style="color:#C0392B;">
+                        Nadie tiene tildado este informe — no se manda a ninguna dirección.
+                    </MudText>
+                }
+                @foreach (var d in destinos)
+                {
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                             title="@d.Contacto">@d.Email</MudChip>
+                }
+            </div>
+        </div>
+        <div class="mb-2">
+            <MudText Typo="Typo.caption" Style="color:#7A90AD; font-weight:700;">ASUNTO</MudText>
+            <MudText Typo="Typo.body2" Style="font-weight:700;">@asunto</MudText>
+        </div>
+        <MudText Typo="Typo.caption" Style="color:#7A90AD; font-weight:700;">CUERPO</MudText>
+        <pre class="env-cuerpo">@cuerpo</pre>
+    };
+}
+
+<style>
+    /* El cuerpo del correo se muestra en monoespaciada porque el original es texto plano
+       alineado a 70 columnas (Replicate("-",70)): con fuente proporcional se desarma. */
+    .env-cuerpo {
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+        line-height: 1.45;
+        background: #F7F9FC;
+        border: 1px solid #E1E8F0;
+        border-radius: 8px;
+        padding: 10px 12px;
+        max-height: 420px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        margin: 4px 0 0;
+    }
+
+    .env-log {
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+        background: #F7F9FC;
+        border: 1px solid #E1E8F0;
+        border-radius: 8px;
+        padding: 8px 12px;
+        max-height: 240px;
+        overflow: auto;
+    }
+    .env-log__linea { padding: 1px 0; }
+    .env-log__linea--err { color: #C0392B; font-weight: 600; }
+    .env-log__linea--tit { color: #112F5B; font-weight: 800; }
+</style>

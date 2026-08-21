@@ -69,7 +69,8 @@
                         {
                             <MudTextField @bind-Value="_model.Usuario" MaxLength="15" Immediate="true"
                                           Variant="Variant.Outlined" Margin="Margin.Dense" Placeholder="NOMBRE"
-                                          Disabled="!SoloEscritura" Style="text-transform:uppercase;" />
+                                          Disabled="!SoloEscritura" Style="text-transform:uppercase;"
+                                          autocomplete="off" />
                         }
                         else
                         {
@@ -110,12 +111,25 @@
                     <div class="zoom-row pa-2">
                         <div class="zoom-field zoom-field--2">
                             <div class="zoom-field__label">Password</div>
-                            <MudTextField @bind-Value="_password" InputType="InputType.Password"
+                            <MudTextField @bind-Value="_password"
+                                          InputType="@(_verPassword ? InputType.Text : InputType.Password)"
+                                          Immediate="true"
+                                          Adornment="Adornment.End"
+                                          AdornmentIcon="@(_verPassword ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                                          OnAdornmentClick="@(() => _verPassword = !_verPassword)"
+                                          AdornmentAriaLabel="Mostrar u ocultar la contraseña"
+                                          autocomplete="new-password"
                                           MaxLength="15" Variant="Variant.Outlined" Margin="Margin.Dense" />
                         </div>
                         <div class="zoom-field zoom-field--2">
                             <div class="zoom-field__label">Repita</div>
-                            <MudTextField @bind-Value="_passwordRepite" InputType="InputType.Password"
+                            <MudTextField @bind-Value="_passwordRepite"
+                                          InputType="@(_verPassword ? InputType.Text : InputType.Password)"
+                                          Adornment="Adornment.End"
+                                          AdornmentIcon="@(_verPassword ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                                          OnAdornmentClick="@(() => _verPassword = !_verPassword)"
+                                          AdornmentAriaLabel="Mostrar u ocultar la contraseña"
+                                          autocomplete="new-password"
                                           MaxLength="15" Variant="Variant.Outlined" Margin="Margin.Dense" />
                         </div>
                         @if (EsModifica && _inhabilitado)
@@ -127,6 +141,17 @@
                             </div>
                         }
                     </div>
+                    @if (EsAlta || !string.IsNullOrEmpty(_password))
+                    {
+                        <div class="usr-pass-reqs px-3 pb-2">
+                            <span class="usr-pass-reqs__title">La contraseña debe tener:</span>
+                            <span class="usr-pass-req @(ReqLargo ? "usr-pass-req--ok" : "")">@(ReqLargo ? "✓" : "○") 8 a 15 caracteres</span>
+                            <span class="usr-pass-req @(ReqMayus ? "usr-pass-req--ok" : "")">@(ReqMayus ? "✓" : "○") una mayúscula</span>
+                            <span class="usr-pass-req @(ReqMinus ? "usr-pass-req--ok" : "")">@(ReqMinus ? "✓" : "○") una minúscula</span>
+                            <span class="usr-pass-req @(ReqDigito ? "usr-pass-req--ok" : "")">@(ReqDigito ? "✓" : "○") un número</span>
+                            <span class="usr-pass-req @(ReqEspecial ? "usr-pass-req--ok" : "")">@(ReqEspecial ? "✓" : "○") un especial (@AbmService.PasswordEspeciales)</span>
+                        </div>
+                    }
                 </div>
             }
 
@@ -152,7 +177,7 @@
                 {
                     <div class="usr-perms__hint px-2 pb-2">
                         <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
-                        <span>«Avisos de chequeos» requiere «Trafico». «Tablero de comando» solo lo otorga el SUPERVISOR.</span>
+                        <span>«Avisos de chequeos» requiere «Trafico». «Tablero de comando» solo lo otorga el SUPERVISOR. «Acceso por Internet» habilita el ingreso desde fuera de la red interna.</span>
                     </div>
                 }
             </div>
@@ -266,11 +291,19 @@
     private string _usuario = "";
     private readonly HashSet<char> _perms = new();
     private string _password = "", _passwordRepite = "";
+    private bool _verPassword;   // false = oculta por defecto; el ojo la muestra/oculta
     private bool _rehabilitar;
     private bool _cargando = true, _grabando, _noExiste, _inhabilitado;
     private string? _error;
     private bool _editorEsSupervisor;
     private string _usuarioEditor = "";
+
+    // Reglas de la política de contraseñas — para el checklist en vivo bajo el campo.
+    private bool ReqLargo    => _password.Length >= 8 && _password.Length <= 15;
+    private bool ReqMayus    => _password.Any(c => c >= 'A' && c <= 'Z');
+    private bool ReqMinus    => _password.Any(c => c >= 'a' && c <= 'z');
+    private bool ReqDigito   => _password.Any(c => c >= '0' && c <= '9');
+    private bool ReqEspecial => _password.Any(AbmService.PasswordEspeciales.Contains);
 
     private bool EsAlta => Modo == "alta";
     private bool EsModifica => Modo == "modifica";
@@ -319,7 +352,9 @@
     private static string Motivo(string m) => m switch
     {
         "LOGOUT" => "Cerró sesión",
+        "DESCONECTADO" => "Cerró el navegador",
         "EXPIRADA" => "Expirada / reingreso",
+        "VENCIDA" => "Vencida (8hs)",
         _ => "Cerrada"
     };
 
@@ -365,6 +400,13 @@
         {
             _error = "No concuerdan los password."; _grabando = false; return;
         }
+        // Política de contraseñas: solo se valida una clave NUEVA.
+        // En modifica, dejarla en blanco = no cambiar (no se valida ni se reescribe).
+        if (EsAlta || !string.IsNullOrEmpty(_password))
+        {
+            var errPass = AbmService.ValidarPasswordFuerte(_password);
+            if (errPass is not null) { _error = errPass; _grabando = false; return; }
+        }
 
         if (EsAlta)
         {
@@ -373,9 +415,8 @@
         }
         else // modifica
         {
-            // Password en blanco = no cambiar → se manda la actual.
-            var pass = string.IsNullOrEmpty(_password) ? _model.Password : _password;
-            var r = await Abm.ModificaUsuarioAsync(Id, pass, acceso, _model.Operador, _rehabilitar, _usuarioEditor);
+            // Password en blanco = no cambiar (el service no toca la columna en ese caso).
+            var r = await Abm.ModificaUsuarioAsync(Id, _password, acceso, _model.Operador, _rehabilitar, _usuarioEditor);
             Finalizar(r);
         }
     }

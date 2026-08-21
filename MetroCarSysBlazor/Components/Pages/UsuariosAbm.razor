@@ -49,7 +49,7 @@ else
 {
     <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
         <MudTable Items="Filtrados" Dense="true" Hover="true" Striped="true"
-                  FixedHeader="true" Height="calc(100vh - 300px)"
+                  FixedHeader="true" Height="calc(100vh - 355px)"
                   Bordered="false" Class="cli-grid grid-compacta"
                   RowClass="cli-grid__row" RowClassFunc="@RowClass"
                   OnRowClick="@OnRowClick" T="UsuarioListaRow">
@@ -169,6 +169,7 @@ else
         if (_sel is not null)
             _sel = _usuarios.FirstOrDefault(u => u.Id == _sel.Id);
         _cargando = false;
+        StateHasChanged();   // red de seguridad: si el llamador no re-renderiza, la grilla vuelve igual
     }
 
     private async Task Refrescar()
@@ -181,11 +182,17 @@ else
         (u.FInhabilitacion is not null ? "cli-grid__row--egresado " : "")
         + (_sel is not null && _sel.Id == u.Id ? "cli-grid__row--sel" : "");
 
-    private void OnRowClick(TableRowClickEventArgs<UsuarioListaRow> args)
+    // Clic simple = seleccionar. Doble clic = VER la ficha (solo lectura), igual que el resto
+    // de las grillas del sistema. La modificación va únicamente por el botón «Modificar»:
+    // así no se entra en edición sin querer al hacer doble clic sobre un usuario.
+    // Ojo: este handler devuelve Task y se AWAITEA el dialog a propósito — con fire-and-forget
+    // (`_ = AbrirDialog(...)`) Blazor no re-renderiza al terminar y la grilla queda colgada
+    // en el "cargando" después de grabar.
+    private async Task OnRowClick(TableRowClickEventArgs<UsuarioListaRow> args)
     {
         _sel = args.Item;
         if (args.MouseEventArgs.Detail >= 2 && _sel is not null)
-            _ = AbrirDialog("ver", _sel.Id);
+            await AbrirDialog("ver", _sel.Id);
     }
 
     private Task Agregar() => AbrirDialog("alta", 0);

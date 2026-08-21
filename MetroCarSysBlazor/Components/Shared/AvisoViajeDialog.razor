@@ -1,0 +1,295 @@
+@inject ReportService Reports
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   F4 · Aviso sobre el viaje — réplica de trafico_hs_aviso.scx (el diálogo que abre la tecla
+   F4 sobre la grilla de Tráfico). Fija `viaje.hs_aviso`: la hora a la que el sistema le va a
+   golpear la puerta al operador para chequear ese servicio.
+
+   Plano completo: docs/PlanoFoxPro/trafico/TRAFICO_F4_AVISO.md
+
+   Regla de negocio (filtro AVISO_HORA de trafico2.scx):
+       aviso_efectivo = COALESCE(hs_aviso, hs_inicio − parametro.aviso_tiem)
+   O sea: TODOS los servicios avisan solos N minutos antes (hoy 10); este diálogo pisa ese
+   default para un viaje puntual.
+
+   ⚠ ANDAMIAJE (03/08/2026): la escritura (AbmService.GrabarAvisoViajeAsync) está construida
+   pero el botón Grabar está DESHABILITADO — `viaje` sigue con dueño FoxPro hasta el día D (si
+   escribiéramos hoy, la réplica DBF→SQL pisaría el dato). Para activarlo:
+   AbmFeatureFlags.AvisoViajeActivo = true + bloquear el F4 en FoxPro + apagar la sync.
+
+   Diferencias deliberadas con el FoxPro (justificadas con datos, ver §5.3 del plano):
+     · Chips 30/45/60 min: el 98% de los avisos manuales cae entre 16 y 60 min, y 60 es el 64%.
+     · El default precargado es hs_inicio − aviso_automático. El FoxPro precarga hs_inicio, que
+       es SIEMPRE inválido (la validación exige que el aviso sea anterior) → si apretabas Aviso
+       sin tocar nada, daba error.
+     · "No Avisar" se llama acá "Volver al aviso automático": el label del FoxPro miente, no
+       apaga nada — devuelve el viaje al default de parametro.
+     · Sin el cartel rojo "deberia de realizar un REFRESH": en Buslink el refresh es automático.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha aviso-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.NotificationsActive" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Aviso sobre el viaje</span>
+            <span class="zoom-title-bar__nro">Reserva&nbsp;#@IdViaje</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:180px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_datos is null)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">El viaje ya no existe.</MudAlert>
+        }
+        else
+        {
+            @* Cabecera de solo lectura — los dos textbox rojos deshabilitados del FoxPro
+               (id_reserva y hs_inicio), más el recorrido para no tener que ir a la grilla. *@
+            <div class="zoom-row">
+                <div class="zoom-field zoom-field--sm">
+                    <div class="zoom-field__label">Servicio sale</div>
+                    <div class="zoom-field__value aviso-salida">@SalidaTexto</div>
+                </div>
+                <div class="zoom-field">
+                    <div class="zoom-field__label">Recorrido</div>
+                    <div class="zoom-field__value" title="@_datos.Recorrido">@(string.IsNullOrWhiteSpace(_datos.Recorrido) ? "—" : _datos.Recorrido)</div>
+                </div>
+                <div class="zoom-field zoom-field--sm">
+                    <div class="zoom-field__label">Cliente</div>
+                    <div class="zoom-field__value">@(string.IsNullOrWhiteSpace(_datos.Cliente) ? "—" : _datos.Cliente)</div>
+                </div>
+            </div>
+
+            <div class="aviso-sep"></div>
+
+            @* Atajos: la antelación que realmente usan (medida sobre 9.341 avisos de 2026). *@
+            <div class="aviso-chips">
+                <span class="aviso-chips__label">Avisar</span>
+                @foreach (var m in Presets)
+                {
+                    <button type="button"
+                            class="aviso-chip @(!_auto && MinutosAntes == m ? "aviso-chip--on" : "")"
+                            disabled="@(_auto || _datos.HsInicio is null)"
+                            @onclick="@(() => AplicarPreset(m))">@m min antes</button>
+                }
+                <span class="aviso-chips__o">o una hora exacta</span>
+            </div>
+
+            <div class="aviso-hora">
+                @* Date/Time con ValueChanged (no @bind): cada cambio tiene que revalidar en
+                   vivo, para que el botón Grabar y el preview reaccionen al toque. *@
+                <MudDatePicker Date="_fecha" DateChanged="OnFechaChanged" DateFormat="dd/MM/yyyy" Disabled="_auto"
+                               PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined"
+                               Margin="Margin.Dense" Style="max-width:172px;" />
+                <MudTimePicker Time="_hora" TimeChanged="OnHoraChanged" Disabled="_auto" Variant="Variant.Outlined"
+                               Margin="Margin.Dense" Style="max-width:120px;" />
+                <span class="aviso-preview @(_error is null ? "" : "aviso-preview--mal")">@PreviewTexto</span>
+            </div>
+
+            @* El "No Avisar" del FoxPro, con el nombre que corresponde: no apaga el aviso. *@
+            <MudCheckBox T="bool" Value="_auto" ValueChanged="@((bool v) => CambiarAuto(v))"
+                         Dense="true" Color="Color.Primary" Class="aviso-auto">
+                Volver al aviso automático (@_config.MinutosDefault min antes de cada servicio)
+            </MudCheckBox>
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+            }
+            else if (_advertencia is not null)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">@_advertencia</MudAlert>
+            }
+            @if (_resultado is not null)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">@_resultado</MudAlert>
+            }
+
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@(_abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                    @(_abmActivo
+                        ? "Edición habilitada"
+                        : "Escritura preparada · se habilita con el circuito de Tráfico (día D)")
+                </div>
+                <div class="cli-footer__btns">
+                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar"
+                               Disabled="@(!_abmActivo || _grabando || _error is not null)">
+                        @(_grabando ? "Grabando…" : "Grabar")
+                    </MudButton>
+                    <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="Cerrar">Cancelar</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public int IdViaje { get; set; }
+    [Parameter] public DateOnly FReserva { get; set; }
+    /// <summary>Usuario logueado — va al viaje_log (motivo AVISO).</summary>
+    [Parameter] public string Usuario { get; set; } = "";
+
+    // Antelaciones más usadas en la operación real (top de 2026: 60 min = 64% de los avisos
+    // manuales, después 40/30/45). Ver §2.4 del plano.
+    private static readonly int[] Presets = { 30, 45, 60 };
+
+    private static bool _abmActivo => AbmFeatureFlags.AvisoViajeActivo;
+
+    private AvisoViajeDto? _datos;
+    private AvisoConfig _config = AvisoConfig.Apagado;
+    private DateTime? _fecha;
+    private TimeSpan? _hora;
+    private bool _auto;               // "No Avisar" del FoxPro = volver al aviso automático
+    private bool _cargando = true, _grabando;
+    private string? _error, _advertencia, _resultado;
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override async Task OnInitializedAsync()
+    {
+        _config = await Reports.GetAvisoConfigAsync();
+        _datos = await Reports.GetAvisoViajeAsync(IdViaje, FReserva);
+
+        if (_datos?.HsAviso is DateTime ya)
+        {
+            // Ya tenía aviso manual: se edita ese (igual que el Init del FoxPro).
+            _fecha = ya.Date;
+            _hora = ya.TimeOfDay;
+        }
+        else if (_datos?.HsInicio is DateTime ini)
+        {
+            // Sin aviso manual: precargar el AUTOMÁTICO. El FoxPro precarga hs_inicio, que
+            // nunca pasa la validación — acá arrancamos con un valor válido y realista.
+            var sug = ini.AddMinutes(-_config.MinutosDefault);
+            _fecha = sug.Date;
+            _hora = sug.TimeOfDay;
+        }
+        _cargando = false;
+        Revalidar();
+    }
+
+    // ── Estado derivado ──
+
+    private DateTime? AvisoElegido =>
+        _fecha is DateTime f && _hora is TimeSpan h ? f.Date + h : null;
+
+    private int? MinutosAntes =>
+        AvisoElegido is DateTime a && _datos?.HsInicio is DateTime ini
+            ? (int)Math.Round((ini - a).TotalMinutes)
+            : null;
+
+    private string SalidaTexto =>
+        _datos?.HsInicio is DateTime ini ? ini.ToString("ddd dd/MM/yyyy HH:mm", _ar) : "—";
+
+    private string PreviewTexto
+    {
+        get
+        {
+            if (_auto)
+            {
+                if (_datos?.HsInicio is DateTime ini)
+                    return $"→ Avisa a las {ini.AddMinutes(-_config.MinutosDefault):HH:mm} (automático)";
+                return "→ Aviso automático";
+            }
+            if (AvisoElegido is not DateTime a) return "";
+            var min = MinutosAntes;
+            return min is null
+                ? $"→ Avisa el {a:dd/MM} a las {a:HH:mm}"
+                : $"→ Avisa a las {a:HH:mm}, {min} min antes del servicio";
+        }
+    }
+
+    // ── Interacción ──
+
+    private void AplicarPreset(int minutos)
+    {
+        if (_datos?.HsInicio is not DateTime ini) return;
+        var a = ini.AddMinutes(-minutos);
+        _fecha = a.Date;
+        _hora = a.TimeOfDay;
+        Revalidar();
+    }
+
+    private void CambiarAuto(bool v)
+    {
+        _auto = v;
+        Revalidar();
+    }
+
+    private void OnFechaChanged(DateTime? f)
+    {
+        _fecha = f;
+        Revalidar();
+    }
+
+    private void OnHoraChanged(TimeSpan? h)
+    {
+        _hora = h;
+        Revalidar();
+    }
+
+    /// <summary>Las dos validaciones del FoxPro, en vivo (allá recién saltaban al grabar).</summary>
+    private void Revalidar()
+    {
+        _error = null;
+        _advertencia = null;
+        if (_auto) return;
+
+        if (AvisoElegido is not DateTime a)
+        {
+            _error = "Falta la fecha o la hora del aviso.";
+            return;
+        }
+        // trafico_hs_aviso.scx → f_reserva.Valid
+        if (DateOnly.FromDateTime(a) < DateOnly.FromDateTime(DateTime.Today))
+        {
+            _error = "El aviso no puede quedar en una fecha anterior a hoy.";
+            return;
+        }
+        // trafico_hs_aviso.scx → Command1.Click: IF hs_inicio <= dHs_aviso → error
+        if (_datos?.HsInicio is DateTime ini && ini <= a)
+        {
+            _error = "El aviso tiene que ser anterior a la hora del servicio.";
+            return;
+        }
+        if (a <= DateTime.Now)
+            _advertencia = "Esa hora ya pasó: el aviso no va a sonar.";
+    }
+
+    private async Task Grabar()
+    {
+        Revalidar();
+        if (_error is not null) return;
+
+        _grabando = true;
+        _resultado = null;
+        var r = await Abm.GrabarAvisoViajeAsync(IdViaje, FReserva, _auto ? null : AvisoElegido, Usuario);
+        _grabando = false;
+
+        if (!r.Ok)
+        {
+            _error = r.Error;
+            return;
+        }
+        // Devuelve true para que la planilla refresque la columna H.Avi sin esperar al timer.
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cerrar() => MudDialog.Close();
+}

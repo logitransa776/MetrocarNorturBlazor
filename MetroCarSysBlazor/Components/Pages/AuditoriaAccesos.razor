@@ -92,7 +92,7 @@ else
 
     <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
         <MudTable Items="_datos" Dense="true" Hover="true" Striped="true"
-                  FixedHeader="true" Height="calc(100vh - 355px)"
+                  FixedHeader="true" Height="calc(100vh - 385px)"
                   Bordered="false" Class="cli-grid grid-compacta"
                   Virtualize="true" T="AccesoLogRow">
             <HeaderContent>
@@ -137,11 +137,16 @@ else
     private List<string> _usuarios = new();
     private bool _cargando = true;
 
-    private DateTime? _desde = DateTime.Today.AddDays(-7);
+    private DateTime? _desde = DateTime.Today;
     private DateTime? _hasta = DateTime.Today;
     private string? _usuario;
+
+    /// <summary>?u=USUARIO — prefiltra la bitácora al entrar. Lo usa "Mis accesos" del
+    /// menú de usuario del AppBar para caer directo en los eventos propios.</summary>
+    [SupplyParameterFromQuery(Name = "u")]
+    private string? UsuarioQuery { get; set; }
     private IReadOnlyCollection<string> _eventos = new HashSet<string>();   // vacío = todos
-    private readonly string[] _eventosPosibles = { "LOGIN", "LOGOUT", "EXPIRADA", "VENCIDA", "LOGIN_FALLIDO" };
+    private readonly string[] _eventosPosibles = { "LOGIN", "LOGOUT", "DESCONECTADO", "EXPIRADA", "VENCIDA", "LOGIN_FALLIDO" };
 
     private readonly System.Globalization.CultureInfo _ar =
         System.Globalization.CultureInfo.GetCultureInfo("es-AR");
@@ -166,6 +171,9 @@ else
             Nav.NavigateTo("/", forceLoad: false);
             return;
         }
+
+        if (!string.IsNullOrWhiteSpace(UsuarioQuery)) _usuario = UsuarioQuery.Trim();
+
         _usuarios = await Reports.GetUsuariosDeLogsAsync();
         await CargarAsync();
     }
@@ -180,7 +188,7 @@ else
     {
         _cargando = true;
         StateHasChanged();
-        var desde = DateOnly.FromDateTime(_desde ?? DateTime.Today.AddDays(-7));
+        var desde = DateOnly.FromDateTime(_desde ?? DateTime.Today);
         var hasta = DateOnly.FromDateTime(_hasta ?? DateTime.Today);
         _datos = await Reports.GetAuditoriaAccesosAsync(desde, hasta, _usuario, _eventos);
         _cargando = false;
@@ -207,6 +215,7 @@ else
     {
         "LOGIN" => "Ingreso",
         "LOGOUT" => "Egreso",
+        "DESCONECTADO" => "Cerró el navegador",
         "EXPIRADA" => "Expirada",
         "VENCIDA" => "Vencida (8hs)",
         "LOGIN_FALLIDO" => "Ingreso fallido",
@@ -218,6 +227,7 @@ else
     {
         "LOGIN" => "acc-ev--login",
         "LOGOUT" => "acc-ev--logout",
+        "DESCONECTADO" => "acc-ev--desconectado",
         "EXPIRADA" => "acc-ev--expirada",
         "VENCIDA" => "acc-ev--vencida",
         "LOGIN_FALLIDO" => "acc-ev--fallido",

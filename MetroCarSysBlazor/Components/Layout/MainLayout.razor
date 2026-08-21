@@ -4,6 +4,8 @@
 @inject IPermissionService Permisos
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject SesionCircuitoContexto SesionCtx
+@inject SesionCircuitoTracker SesionTracker
 
 <MudThemeProvider Theme="NorturTheme.Theme" />
 <MudPopoverProvider />
@@ -44,8 +46,10 @@
 
                 @if (Permisos.Tiene('S'))
                 {
-                @* ── SISTEMA ── (Sistema → Accesos del FoxPro: ABM de Usuarios y Permisos) *@
-                <div class="nav-section">
+                @* ── SISTEMA ── (Sistema → Accesos del FoxPro: ABM de Usuarios y Permisos)
+                   --nt-mod = el color del módulo. Entra UNA vez acá y lo heredan el ícono,
+                   el filete y el ítem activo (ver app.css § CÓDIGO DE COLOR POR MÓDULO). *@
+                <div class="nav-section" style="--nt-mod:@InformesCatalogo.Color(ModuloInforme.Sistema)">
                     <button class="nav-section__title @(_sistemaExpanded ? "nav-section__title--open" : "")"
                             @onclick="() => _sistemaExpanded = !_sistemaExpanded">
                         <MudIcon Icon="@Icons.Material.Filled.AdminPanelSettings" Size="Size.Small" Class="nav-section__icon" />
@@ -62,11 +66,14 @@
                                 <MudIcon Icon="@Icons.Material.Filled.ManageAccounts" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Usuarios y Permisos</span>
                             </a>
-                            <a href="/auditoria-accesos"
-                               class="nav-item @(Nav.Uri.Contains("auditoria-accesos") ? "nav-item--active" : "")"
+                            @* Parámetros Empresa + Generales. En el FoxPro cuelgan de «ABM del
+                               sistema» (permiso 'A'); acá van bajo Sistema ('S') porque exponen
+                               CUIT, tasa de IVA y la password del correo. Decisión 12/08/2026. *@
+                            <a href="/parametros"
+                               class="nav-item @(Nav.Uri.Contains("parametros") ? "nav-item--active" : "")"
                                @onclick="ToggleDrawer">
-                                <MudIcon Icon="@Icons.Material.Filled.History" Size="Size.Small" Class="nav-item__icon" />
-                                <span>Auditoría de accesos</span>
+                                <MudIcon Icon="@Icons.Material.Filled.Tune" Size="Size.Small" Class="nav-item__icon" />
+                                <span>Parámetros del sistema</span>
                             </a>
                         </div>
                     }
@@ -79,7 +86,7 @@
                 @if (Permisos.Tiene('R'))
                 {
                 @* ── RESERVAS ── *@
-                <div class="nav-section">
+                <div class="nav-section" style="--nt-mod:@InformesCatalogo.Color(ModuloInforme.Reservas)">
                     <button class="nav-section__title @(_reservasExpanded ? "nav-section__title--open" : "")"
                             @onclick="() => _reservasExpanded = !_reservasExpanded">
                         <MudIcon Icon="@Icons.Material.Filled.EventNote" Size="Size.Small" Class="nav-section__icon" />
@@ -151,41 +158,6 @@
                                 <MudIcon Icon="@Icons.Material.Filled.UploadFile" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Importa Reservas desde Excel</span>
                             </span>
-                            @* Informes sobre Reservas — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub @(_informesReservasExpanded ? "nav-section__title--open" : "")"
-                                    @onclick="() => _informesReservasExpanded = !_informesReservasExpanded">
-                                <MudIcon Icon="@Icons.Material.Filled.BarChart" Size="Size.Small" Class="nav-item__icon" />
-                                <span>Informes sobre Reservas</span>
-                                <MudIcon Icon="@(_informesReservasExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
-                                         Size="Size.Small" Class="nav-section__chevron" />
-                            </button>
-                            @if (_informesReservasExpanded)
-                            {
-                                <div class="nav-section__items nav-section__items--sub">
-                                    <a href="/reservas-fecha-servicio"
-                                       class="nav-item @(Nav.Uri.Contains("reservas-fecha-servicio") ? "nav-item--active" : "")"
-                                       @onclick="ToggleDrawer">
-                                        <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" Size="Size.Small" Class="nav-item__icon" />
-                                        <span>Reservas por fecha y servicio</span>
-                                    </a>
-                                    <a href="/reservas-banda-horaria"
-                                       class="nav-item @(Nav.Uri.Contains("reservas-banda-horaria") ? "nav-item--active" : "")"
-                                       @onclick="ToggleDrawer">
-                                        <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" Class="nav-item__icon" />
-                                        <span>Reservas por fecha y banda horaria</span>
-                                    </a>
-                                    <a href="/reservas-por-cliente"
-                                       class="nav-item @(Nav.Uri.Contains("reservas-por-cliente") ? "nav-item--active" : "")"
-                                       @onclick="ToggleDrawer">
-                                        <MudIcon Icon="@Icons.Material.Filled.Groups" Size="Size.Small" Class="nav-item__icon" />
-                                        <span>Reservas por cliente</span>
-                                    </a>
-                                    <span class="nav-item nav-item--disabled">
-                                        <MudIcon Icon="@Icons.Material.Filled.AccessTime" Size="Size.Small" Class="nav-item__icon" />
-                                        <span>Bandas Horarios</span>
-                                    </span>
-                                </div>
-                            }
                         </div>
                     }
                 </div>
@@ -197,7 +169,7 @@
                 @if (Permisos.Tiene('T'))
                 {
                 @* ── TRÁFICO ── *@
-                <div class="nav-section">
+                <div class="nav-section" style="--nt-mod:@InformesCatalogo.Color(ModuloInforme.Trafico)">
                     <button class="nav-section__title @(_traficoExpanded ? "nav-section__title--open" : "")"
                             @onclick="() => _traficoExpanded = !_traficoExpanded">
                         <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Size="Size.Small" Class="nav-section__icon" />
@@ -212,7 +184,7 @@
                                class="nav-item @(Nav.Uri.Contains("planilla-trafico") ? "nav-item--active" : "")"
                                @onclick="ToggleDrawer">
                                 <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Small" Class="nav-item__icon" />
-                                <span>Operación de Tráfico Nueva Versión</span>
+                                <span>Operación de Tráfico</span>
                             </a>
                             <span class="nav-item nav-item--disabled">
                                 <MudIcon Icon="@Icons.Material.Filled.Flight" Size="Size.Small" Class="nav-item__icon" />
@@ -246,12 +218,6 @@
                                        @onclick="ToggleDrawer">
                                         <MudIcon Icon="@Icons.Material.Filled.EditCalendar" Size="Size.Small" Class="nav-item__icon" />
                                         <span>Mantenimiento de Francos</span>
-                                    </a>
-                                    <a href="/francos-auditoria"
-                                       class="nav-item @(Nav.Uri.Contains("francos-auditoria") ? "nav-item--active" : "")"
-                                       @onclick="ToggleDrawer">
-                                        <MudIcon Icon="@Icons.Material.Filled.ManageSearch" Size="Size.Small" Class="nav-item__icon" />
-                                        <span>Auditoría Francos</span>
                                     </a>
                                 </div>
                             }
@@ -323,12 +289,6 @@
                                     </a>
                                 </div>
                             }
-                            <a href="/lista-pasajeros"
-                               class="nav-item @(Nav.Uri.Contains("lista-pasajeros") ? "nav-item--active" : "")"
-                               @onclick="ToggleDrawer">
-                                <MudIcon Icon="@Icons.Material.Filled.PeopleAlt" Size="Size.Small" Class="nav-item__icon" />
-                                <span>Lista de pasajeros</span>
-                            </a>
                             <span class="nav-item nav-item--disabled">
                                 <MudIcon Icon="@Icons.Material.Filled.FactCheck" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Controles sobre los estados de las reservas</span>
@@ -355,7 +315,7 @@
                                 </div>
                             }
                             @* Libro de Novedades — submenú nivel 3 *@
-                            <button class="nav-section__title nav-section__title--sub nav-section__title--soon @(_libroNovedadesExpanded ? "nav-section__title--open" : "")"
+                            <button class="nav-section__title nav-section__title--sub @(_libroNovedadesExpanded ? "nav-section__title--open" : "")"
                                     @onclick="() => _libroNovedadesExpanded = !_libroNovedadesExpanded">
                                 <MudIcon Icon="@Icons.Material.Filled.MenuBook" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Libro de Novedades</span>
@@ -364,19 +324,22 @@
                             </button>
                             @if (_libroNovedadesExpanded)
                             {
+                                @* El LIBRO en sí vive en el hub /informes (es una consulta con
+                                   rango de fechas y Excel; regla del 18/08/2026: un informe tiene
+                                   una sola entrada). Acá quedan los dos ítems operativos. *@
                                 <div class="nav-section__items nav-section__items--sub">
-                                    <span class="nav-item nav-item--disabled">
-                                        <MudIcon Icon="@Icons.Material.Filled.Book" Size="Size.Small" Class="nav-item__icon" />
-                                        <span>Libro de Novedades</span>
-                                    </span>
-                                    <span class="nav-item nav-item--disabled">
+                                    <a href="/envio-correos"
+                                       class="nav-item @(Nav.Uri.Contains("envio-correos") ? "nav-item--active" : "")"
+                                       @onclick="ToggleDrawer">
                                         <MudIcon Icon="@Icons.Material.Filled.Email" Size="Size.Small" Class="nav-item__icon" />
                                         <span>Envío de correos</span>
-                                    </span>
-                                    <span class="nav-item nav-item--disabled">
+                                    </a>
+                                    <a href="/correos-destinatarios"
+                                       class="nav-item @(Nav.Uri.Contains("correos-destinatarios") ? "nav-item--active" : "")"
+                                       @onclick="ToggleDrawer">
                                         <MudIcon Icon="@Icons.Material.Filled.MarkEmailRead" Size="Size.Small" Class="nav-item__icon" />
                                         <span>Correos Electrónicos Parámetros</span>
-                                    </span>
+                                    </a>
                                 </div>
                             }
                         </div>
@@ -389,8 +352,8 @@
 
                 @if (Permisos.Tiene('V'))
                 {
-                @* ── VEHÍCULOS Y CHOFERES ── *@
-                <div class="nav-section">
+                @* ── VEHÍCULOS Y CHOFERES ── (el hub lo llama "Flota": mismo módulo, letra V) *@
+                <div class="nav-section" style="--nt-mod:@InformesCatalogo.Color(ModuloInforme.Flota)">
                     <button class="nav-section__title @(_vehiculosExpanded ? "nav-section__title--open" : "")"
                             @onclick="() => _vehiculosExpanded = !_vehiculosExpanded">
                         <MudIcon Icon="@Icons.Material.Filled.AirportShuttle" Size="Size.Small" Class="nav-section__icon" />
@@ -467,37 +430,6 @@
                                 <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Vehículos - Flota</span>
                             </a>
-                            @* Informes de Flota — submenú nivel 3 (gemelos FoxPro de Utilitarios) *@
-                            <button class="nav-section__title nav-section__title--sub @(_informesFlotaExpanded ? "nav-section__title--open" : "")"
-                                    @onclick="() => _informesFlotaExpanded = !_informesFlotaExpanded">
-                                <MudIcon Icon="@Icons.Material.Filled.BarChart" Size="Size.Small" Class="nav-item__icon" />
-                                <span>Informes de Flota</span>
-                                <MudIcon Icon="@(_informesFlotaExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
-                                         Size="Size.Small" Class="nav-section__chevron" />
-                            </button>
-                            @if (_informesFlotaExpanded)
-                            {
-                                <div class="nav-section__items nav-section__items--sub">
-                                    <a href="/viajes-por-chofer"
-                                       class="nav-item @(Nav.Uri.Contains("viajes-por-chofer") ? "nav-item--active" : "")"
-                                       @onclick="ToggleDrawer">
-                                        <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Class="nav-item__icon" />
-                                        <span>Viajes por chofer</span>
-                                    </a>
-                                    <a href="/km-unidades-servicios"
-                                       class="nav-item @(Nav.Uri.Contains("km-unidades-servicios") ? "nav-item--active" : "")"
-                                       @onclick="ToggleDrawer">
-                                        <MudIcon Icon="@Icons.Material.Filled.Speed" Size="Size.Small" Class="nav-item__icon" />
-                                        <span>Km Unidades vs Servicios</span>
-                                    </a>
-                                </div>
-                            }
-                            <a href="/agenda-vencimientos"
-                               class="nav-item @(Nav.Uri.Contains("agenda-vencimientos") ? "nav-item--active" : "")"
-                               @onclick="ToggleDrawer">
-                                <MudIcon Icon="@Icons.Material.Filled.CalendarToday" Size="Size.Small" Class="nav-item__icon" />
-                                <span>Agenda de Vencimientos</span>
-                            </a>
                             <a href="/fleteros"
                                class="nav-item @(Nav.Uri.Contains("fleteros") ? "nav-item--active" : "")"
                                @onclick="ToggleDrawer">
@@ -521,7 +453,7 @@
                 @if (Permisos.Tiene('F'))
                 {
                 @* ── FACTURACIÓN ── *@
-                <div class="nav-section">
+                <div class="nav-section" style="--nt-mod:@InformesCatalogo.Color(ModuloInforme.Facturacion)">
                     <button class="nav-section__title @(_facturacionExpanded ? "nav-section__title--open" : "")"
                             @onclick="() => _facturacionExpanded = !_facturacionExpanded">
                         <MudIcon Icon="@Icons.Material.Filled.Receipt" Size="Size.Small" Class="nav-section__icon" />
@@ -658,18 +590,6 @@
                                     </span>
                                 </div>
                             }
-                            <a href="/resumen-liquidaciones"
-                               class="nav-item @(Nav.Uri.Contains("resumen-liquidaciones") ? "nav-item--active" : "")"
-                               @onclick="ToggleDrawer">
-                                <MudIcon Icon="@Icons.Material.Filled.Summarize" Size="Size.Small" Class="nav-item__icon" />
-                                <span>Resumen de Liquidaciones</span>
-                            </a>
-                            <a href="/liquidacion-clientes"
-                               class="nav-item @(Nav.Uri.Contains("liquidacion-clientes") ? "nav-item--active" : "")"
-                               @onclick="ToggleDrawer">
-                                <MudIcon Icon="@Icons.Material.Filled.RequestPage" Size="Size.Small" Class="nav-item__icon" />
-                                <span>Liquidación a Clientes</span>
-                            </a>
                             <span class="nav-item nav-item--disabled">
                                 <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Size="Size.Small" Class="nav-item__icon" />
                                 <span>Liquidación a Fleteros</span>
@@ -844,7 +764,7 @@
                 @if (Permisos.Tiene('M'))
                 {
                 @* ── COMBUSTIBLE ── *@
-                <div class="nav-section">
+                <div class="nav-section" style="--nt-mod:@InformesCatalogo.Color(ModuloInforme.Combustible)">
                     <button class="nav-section__title @(_combustibleExpanded ? "nav-section__title--open" : "")"
                             @onclick="() => _combustibleExpanded = !_combustibleExpanded">
                         <MudIcon Icon="@Icons.Material.Filled.LocalGasStation" Size="Size.Small" Class="nav-section__icon" />
@@ -855,29 +775,11 @@
                     @if (_combustibleExpanded)
                     {
                         <div class="nav-section__items">
-                            <a href="/promedio-consumos"
-                               class="nav-item @(Nav.Uri.Contains("promedio-consumos") ? "nav-item--active" : "")"
-                               @onclick="ToggleDrawer">
-                                <MudIcon Icon="@Icons.Material.Filled.BarChart" Size="Size.Small" Class="nav-item__icon" />
-                                <span>Promedio de Consumos</span>
-                            </a>
-                            <a href="/consumo-mensual"
-                               class="nav-item @(Nav.Uri.Contains("consumo-mensual") ? "nav-item--active" : "")"
-                               @onclick="ToggleDrawer">
-                                <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" Size="Size.Small" Class="nav-item__icon" />
-                                <span>Consumo Mensual</span>
-                            </a>
                             <a href="/combustible-conciliacion"
                                class="nav-item @(Nav.Uri.Contains("combustible-conciliacion") ? "nav-item--active" : "")"
                                @onclick="ToggleDrawer">
                                 <MudIcon Icon="@Icons.Material.Filled.Sync" Size="Size.Small" Class="nav-item__icon" />
                                 <span>ABM y Conciliación cargas</span>
-                            </a>
-                            <a href="/control-cargas"
-                               class="nav-item @(Nav.Uri.Contains("control-cargas") ? "nav-item--active" : "")"
-                               @onclick="ToggleDrawer">
-                                <MudIcon Icon="@Icons.Material.Filled.EventBusy" Size="Size.Small" Class="nav-item__icon" />
-                                <span>Control de cargas</span>
                             </a>
                             <a href="/saldos-estaciones"
                                class="nav-item @(Nav.Uri.Contains("saldos-estaciones") ? "nav-item--active" : "")"
@@ -1019,14 +921,35 @@
                             @if (_parametrosExpanded)
                             {
                                 <div class="nav-section__items nav-section__items--sub">
-                                    <span class="nav-item nav-item--disabled">
-                                        <MudIcon Icon="@Icons.Material.Filled.Settings" Size="Size.Small" Class="nav-item__icon" />
-                                        <span>Parámetros Generales</span>
-                                    </span>
-                                    <span class="nav-item nav-item--disabled">
-                                        <MudIcon Icon="@Icons.Material.Filled.Business" Size="Size.Small" Class="nav-item__icon" />
-                                        <span>Parámetros Empresa</span>
-                                    </span>
+                                    @* Generales y Empresa YA están migrados, pero viven bajo
+                                       Sistema (permiso 'S', no 'A') porque exponen CUIT, IVA y la
+                                       password del correo. Se dejan acá con el nombre del Metrocar
+                                       para que el usuario los encuentre — habilitados solo si
+                                       además tiene 'S', que es lo que la página exige. *@
+                                    @if (Permisos.Tiene('S'))
+                                    {
+                                        <a href="/parametros" class="nav-item @(Nav.Uri.Contains("parametros") ? "nav-item--active" : "")"
+                                           @onclick="ToggleDrawer">
+                                            <MudIcon Icon="@Icons.Material.Filled.Settings" Size="Size.Small" Class="nav-item__icon" />
+                                            <span>Parámetros Generales</span>
+                                        </a>
+                                        <a href="/parametros" class="nav-item @(Nav.Uri.Contains("parametros") ? "nav-item--active" : "")"
+                                           @onclick="ToggleDrawer">
+                                            <MudIcon Icon="@Icons.Material.Filled.Business" Size="Size.Small" Class="nav-item__icon" />
+                                            <span>Parámetros Empresa</span>
+                                        </a>
+                                    }
+                                    else
+                                    {
+                                        <span class="nav-item nav-item--disabled">
+                                            <MudIcon Icon="@Icons.Material.Filled.Settings" Size="Size.Small" Class="nav-item__icon" />
+                                            <span>Parámetros Generales</span>
+                                        </span>
+                                        <span class="nav-item nav-item--disabled">
+                                            <MudIcon Icon="@Icons.Material.Filled.Business" Size="Size.Small" Class="nav-item__icon" />
+                                            <span>Parámetros Empresa</span>
+                                        </span>
+                                    }
                                     <span class="nav-item nav-item--disabled">
                                         <MudIcon Icon="@Icons.Material.Filled.DesktopWindows" Size="Size.Small" Class="nav-item__icon" />
                                         <span>Parámetros Pantalla Tráfico</span>
@@ -1222,6 +1145,79 @@
                 </div>
                 }
 
+                @* ── INFORMES ── (10/08/2026, único lugar desde 18/08/2026)
+                   Sección transversal: junta TODOS los informes del sistema en un solo
+                   lugar, agrupados por módulo. Es la ÚNICA entrada para un informe —
+                   los links que antes vivían duplicados dentro de cada módulo (Reservas,
+                   Tráfico, Flota, Facturación, Combustible, Sistema) se sacaron a
+                   propósito el 18/08/2026 para no tener el mismo informe en dos lados.
+                   Un informe nuevo se da de alta acá y solo acá.
+
+                   El contenido NO se escribe a mano: sale de InformesCatalogo (fuente
+                   única). Cada informe se muestra solo si el usuario tiene la letra de
+                   `acceso` de su módulo, igual que el resto del drawer. Los pendientes
+                   de migrar quedan fuera del drawer (se ven en /informes como
+                   "Próximamente"), coherente con la regla de ocultar lo no migrado. *@
+                @if (InformesCatalogo.TieneAlguno(Permisos))
+                {
+                    <div class="nav-divider"></div>
+
+                    @* Informes va NEUTRO: no es un módulo del negocio, es la sección
+                       transversal donde viven los seis módulos con su propio color. *@
+                    <div class="nav-section" style="--nt-mod:@InformesCatalogo.ColorNeutro">
+                        <button class="nav-section__title @(_informesExpanded ? "nav-section__title--open" : "")"
+                                @onclick="() => _informesExpanded = !_informesExpanded">
+                            <MudIcon Icon="@Icons.Material.Filled.Assessment" Size="Size.Small" Class="nav-section__icon" />
+                            <span>Informes</span>
+                            <MudIcon Icon="@(_informesExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                     Size="Size.Small" Class="nav-section__chevron" />
+                        </button>
+                        @if (_informesExpanded)
+                        {
+                            <div class="nav-section__items">
+                                <a href="/informes"
+                                   class="nav-item @(Nav.Uri.Contains("/informes") ? "nav-item--active" : "")"
+                                   @onclick="ToggleDrawer">
+                                    <MudIcon Icon="@Icons.Material.Filled.GridView" Size="Size.Small" Class="nav-item__icon" />
+                                    <span>Todos los informes</span>
+                                </a>
+
+                                @foreach (var grupo in InformesCatalogo.PorModulo(Permisos, incluirProximamente: false))
+                                {
+                                    var abierto = _informesModulosAbiertos.Contains(grupo.Modulo.Modulo);
+                                    @* Cada submódulo redefine --nt-mod con SU color: acá es donde
+                                       el usuario ve que el mismo naranja de la sección Tráfico
+                                       reaparece en los informes de Tráfico y significa lo mismo. *@
+                                    <div style="--nt-mod:@grupo.Modulo.Color">
+                                    <button class="nav-section__title nav-section__title--sub @(abierto ? "nav-section__title--open" : "")"
+                                            @onclick="() => AlternarModuloInformes(grupo.Modulo.Modulo)">
+                                        <MudIcon Icon="@grupo.Modulo.Icono" Size="Size.Small" Class="nav-section__icon" />
+                                        <span>@grupo.Modulo.Nombre</span>
+                                        <MudIcon Icon="@(abierto ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                                 Size="Size.Small" Class="nav-section__chevron" />
+                                    </button>
+                                    @if (abierto)
+                                    {
+                                        <div class="nav-section__items nav-section__items--sub">
+                                            @foreach (var informe in grupo.Informes)
+                                            {
+                                                <a href="@informe.Href()"
+                                                   class="nav-item @(Nav.Uri.Contains(informe.Ruta) ? "nav-item--active" : "")"
+                                                   title="@informe.Pregunta"
+                                                   @onclick="ToggleDrawer">
+                                                    <MudIcon Icon="@informe.Icono" Size="Size.Small" Class="nav-item__icon" />
+                                                    <span>@informe.Titulo</span>
+                                                </a>
+                                            }
+                                        </div>
+                                    }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+
             </nav>
 
             <div class="nav-drawer__footer">
@@ -1232,8 +1228,11 @@
 
         @* ── Layout principal ── *@
         <MudLayout>
-            <MudAppBar Elevation="2" Dense="true"
-                       Style="@($"background:linear-gradient(90deg,{NorturColors.AzulNoche} 0%,{NorturColors.Azul} 100%);")">
+            @* El filete de 3px del pie de la barra lleva el color del módulo de la pantalla
+               abierta (ver app.css § .nt-appbar::after). Es lo que hace que el código de
+               color se aprenda: se ve todo el tiempo, no solo con el menú desplegado. *@
+            <MudAppBar Elevation="2" Dense="true" Class="nt-appbar"
+                       Style="@($"background:linear-gradient(90deg,{NorturColors.AzulNoche} 0%,{NorturColors.Azul} 100%);--nt-mod:{ColorModuloActual()};")">
 
                 <MudIconButton Icon="@Icons.Material.Filled.Menu"
                                Color="Color.Inherit"
@@ -1254,32 +1253,29 @@
 
                 <MudSpacer />
 
-                @* Switcher de theme: NORTUR clásico ↔ Compacto gris (persiste en localStorage) *@
-                <MudTooltip Text="@(_themeGris ? "Theme: Compacto gris — click para NORTUR clásico" : "Theme: NORTUR clásico — click para Compacto gris")">
-                    <MudIconButton Icon="@Icons.Material.Filled.Palette"
-                                   Color="Color.Inherit" Size="Size.Small"
-                                   Class="mr-2" OnClick="CambiarTheme" />
-                </MudTooltip>
+                @* Reloj de cabecera (03/08/2026) — fecha + hora del servidor, refresca cada 30s. *@
+                <div class="appbar-clock" title="Hora del servidor">
+                    <span class="appbar-clock__dot"></span>
+                    <span class="appbar-clock__fecha">@_relojFecha</span>
+                    <span class="appbar-clock__hora">@_relojHora</span>
+                </div>
 
-                <MudText Typo="Typo.body2" Style="color:#C7D6EC;" Class="mr-3">
-                    <strong style="color:#fff;">Usuario:</strong> @AuthState.UsuarioActual
-                </MudText>
-                <form method="post" action="/auth/logout" style="margin:0;">
-                    <AntiforgeryToken />
-                    <MudButton Variant="Variant.Filled" Color="Color.Secondary"
-                               ButtonType="ButtonType.Submit" Size="Size.Small"
-                               Style="text-transform:none;">
-                        Cerrar sesión
-                    </MudButton>
-                </form>
+                @* Vencimientos (11/08/2026): los 7 números que antes ocupaban una franja
+                   entera debajo de la barra, ahora en un modal. El permiso 'V' (Vehículos)
+                   lo chequea el propio componente — con un @if acá no aparecería en el
+                   primer render (ver el comentario rojo de VencimientosMenu.razor). *@
+                <VencimientosMenu />
+
+                @* Centro de ayuda (07/08/2026): ayuda online, manuales, atajos F1-F9, novedades *@
+                <AyudaMenu />
+
+                @* Menú de usuario (07/08/2026): ficha, mis accesos, theme y cerrar sesión.
+                   Reemplaza el texto "Usuario: X", el botón naranja de salir y el ícono
+                   suelto de paleta — los tres pasaron a vivir adentro del desplegable. *@
+                <UsuarioMenu ThemeGris="_themeGris" OnCambiarTheme="CambiarTheme" />
             </MudAppBar>
 
             <MudMainContent>
-                @* Vencimientos solo con módulo Vehículos — como el chequeo post-login del FoxPro *@
-                @if (Permisos.Tiene('V'))
-                {
-                    <TableroAlertas />
-                }
                 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="mt-4 mb-8">
                     @Body
                 </MudContainer>
@@ -1311,10 +1307,20 @@
     private bool _abmExpanded = false;
     private bool _utilitariosExpanded = false;
     private bool _sistemaExpanded = true;   // Sistema va primero y arranca abierta (Usuarios y Permisos a la vista)
+    private bool _informesExpanded = false; // Informes — sección transversal, al pie del drawer
+
+    // Submódulos abiertos dentro de Informes (Reservas, Tráfico, Flota…) — se generan
+    // desde InformesCatalogo, así que el estado no puede ser un bool por sección.
+    private readonly HashSet<ModuloInforme> _informesModulosAbiertos = new();
+
+    private void AlternarModuloInformes(ModuloInforme modulo)
+    {
+        if (!_informesModulosAbiertos.Remove(modulo))
+            _informesModulosAbiertos.Add(modulo);
+    }
 
     // Submenús nivel 3 — Reservas
     private bool _plantillasExpanded = false;
-    private bool _informesReservasExpanded = false;
 
     // Submenús nivel 3 — Tráfico
     private bool _francosExpanded = false;
@@ -1326,7 +1332,6 @@
     // Submenús nivel 3 — Vehículos y Choferes
     private bool _apercibimientosExpanded = false;
     private bool _capacitacionesExpanded = false;
-    private bool _informesFlotaExpanded = false;
 
     // Submenús nivel 3 — Facturación
     private bool _factuCliExpanded = false;
@@ -1355,80 +1360,131 @@
     // ── Título dinámico del AppBar: nombre de la pantalla actual ──
     // El layout NO se re-renderiza solo al navegar → suscripción a LocationChanged
     // (y desuscripción en Dispose para no fugar el circuito SignalR).
-    protected override void OnInitialized() => Nav.LocationChanged += OnLocationChanged;
+    protected override void OnInitialized()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+
+        ActualizarReloj();
+        _relojTimer = new System.Threading.Timer(
+            _ => InvokeAsync(() => { ActualizarReloj(); StateHasChanged(); }),
+            null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+    }
 
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
         => InvokeAsync(StateHasChanged);
 
-    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+    // ── Reloj de cabecera — fecha corta (día abreviado) + hora 24hs sin segundos ──
+    private static readonly string[] DiasAbrev = { "dom.", "lun.", "mar.", "mié.", "jue.", "vie.", "sáb." };
+    private string _relojFecha = "";
+    private string _relojHora = "";
+    private System.Threading.Timer? _relojTimer;
+
+    private void ActualizarReloj()
+    {
+        var ahora = DateTime.Now;
+        _relojFecha = $"{DiasAbrev[(int)ahora.DayOfWeek]} {ahora:dd/MM/yyyy}";
+        _relojHora = ahora.ToString("HH:mm");
+    }
+
+    public void Dispose()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+        _relojTimer?.Dispose();
+    }
 
     // Mapa ruta → nombre de pantalla (mismos textos que el drawer). En Home (o
     // ruta desconocida) se muestra el texto institucional de siempre.
-    private static readonly Dictionary<string, string> _titulosPorRuta = new()
+    // Títulos de las pantallas OPERATIVAS (ABMs, catálogos, operación). Los títulos de
+    // los INFORMES no se repiten acá: salen de InformesCatalogo.TitulosPorRuta, que es
+    // la fuente única (mismo nombre en la barra, en el drawer y en el hub /informes).
+    /// <summary>
+    /// Las pantallas operativas (las que NO son informes): su título para la barra y el
+    /// módulo al que pertenecen. El módulo alimenta el filete de color de la barra —
+    /// por eso va acá y no en un segundo diccionario: una ruta, un solo lugar donde
+    /// declararla. Los informes NO se repiten acá: los resuelve InformesCatalogo, que
+    /// ya sabe el título y el módulo de cada uno.
+    /// <c>null</c> en el módulo = pantalla transversal, sin color de módulo (el hub).
+    /// </summary>
+    private sealed record Pantalla(string Titulo, ModuloInforme? Modulo);
+
+    private static readonly Dictionary<string, Pantalla> _pantallasPorRuta = new()
     {
         // Sistema
-        ["usuarios-abm"] = "Usuarios y Permisos",
-        ["auditoria-accesos"] = "Auditoría de accesos",
+        ["informes"] = new("Informes", null),   // el hub es transversal: va con el neutro
+        ["usuarios-abm"] = new("Usuarios y Permisos", ModuloInforme.Sistema),
         // Reservas
-        ["reservas-especiales"] = "Reservas Especiales",
-        ["reservas-por-plantillas"] = "Reservas por Plantillas",
-        ["operadores"] = "Operadores",
-        ["grupos"] = "Grupos",
-        ["destinos"] = "Destinos",
-        ["plantillas-mantenimiento"] = "Mantenimiento de Plantillas",
-        ["reservas-fecha-servicio"] = "Reservas por fecha y servicio",
-        ["reservas-banda-horaria"] = "Reservas por banda horaria",
-        ["reservas-por-cliente"] = "Reservas por cliente",
+        ["reservas-especiales"] = new("Reservas Especiales", ModuloInforme.Reservas),
+        ["reservas-por-plantillas"] = new("Reservas por Plantillas", ModuloInforme.Reservas),
+        ["operadores"] = new("Operadores", ModuloInforme.Reservas),
+        ["grupos"] = new("Grupos", ModuloInforme.Reservas),
+        ["destinos"] = new("Destinos", ModuloInforme.Reservas),
+        ["plantillas-mantenimiento"] = new("Mantenimiento de Plantillas", ModuloInforme.Reservas),
         // Tráfico
-        ["planilla-trafico"] = "Planilla de Tráfico",
-        ["cabeceras-recorridos"] = "Cabeceras - Recorridos",
-        ["francos-ingreso"] = "Ingreso de Francos",
-        ["francos-auditoria"] = "Auditoría de Francos",
-        ["francos"] = "Mantenimiento de Francos",
-        ["viaticos-motivo"] = "Motivos de Viático",
-        ["viaticos-forma-liquidacion"] = "Formas de Liquidación de Viático",
-        ["viaticos"] = "Viáticos",
-        ["voucher-recepcion"] = "Voucher Recepción",
-        ["guardias"] = "Guardia",
-        ["rubros-contacto"] = "Rubros de contactos",
-        ["contactos"] = "Contactos y Proveedores",
-        ["lista-pasajeros"] = "Lista de pasajeros",
-        // Vehículos y Choferes
-        ["choferes"] = "Choferes",
-        ["odometros"] = "Odómetros",
-        ["siniestros"] = "Siniestros",
-        ["vehiculos"] = "Vehículos - Flota",
-        ["viajes-por-chofer"] = "Viajes por chofer",
-        ["km-unidades-servicios"] = "Km Unidades vs Servicios",
-        ["agenda-vencimientos"] = "Agenda de Vencimientos",
-        ["fleteros"] = "Fleteros",
-        ["tipos-vehiculo"] = "Tipo de Vehículos",
+        ["planilla-trafico"] = new("Planilla de Tráfico", ModuloInforme.Trafico),
+        ["cabeceras-recorridos"] = new("Cabeceras - Recorridos", ModuloInforme.Trafico),
+        ["francos-ingreso"] = new("Ingreso de Francos", ModuloInforme.Trafico),
+        ["francos"] = new("Mantenimiento de Francos", ModuloInforme.Trafico),
+        ["viaticos-motivo"] = new("Motivos de Viático", ModuloInforme.Trafico),
+        ["viaticos-forma-liquidacion"] = new("Formas de Liquidación de Viático", ModuloInforme.Trafico),
+        ["viaticos"] = new("Viáticos", ModuloInforme.Trafico),
+        ["voucher-recepcion"] = new("Voucher Recepción", ModuloInforme.Trafico),
+        ["guardias"] = new("Guardia", ModuloInforme.Trafico),
+        ["libro-novedades"] = new("Libro de Novedades", ModuloInforme.Trafico),
+        ["envio-correos"] = new("Envío de correos", ModuloInforme.Trafico),
+        ["correos-destinatarios"] = new("Correos electrónicos · destinatarios", ModuloInforme.Trafico),
+        ["rubros-contacto"] = new("Rubros de contactos", ModuloInforme.Trafico),
+        ["contactos"] = new("Contactos y Proveedores", ModuloInforme.Trafico),
+        // Vehículos y Choferes (el hub lo llama "Flota")
+        ["choferes"] = new("Choferes", ModuloInforme.Flota),
+        ["odometros"] = new("Odómetros", ModuloInforme.Flota),
+        ["siniestros"] = new("Siniestros", ModuloInforme.Flota),
+        ["vehiculos"] = new("Vehículos - Flota", ModuloInforme.Flota),
+        ["fleteros"] = new("Fleteros", ModuloInforme.Flota),
+        ["tipos-vehiculo"] = new("Tipo de Vehículos", ModuloInforme.Flota),
         // Facturación
-        ["clientes-abm"] = "ABM - Clientes",
-        ["resumen-liquidaciones"] = "Resumen de Liquidaciones",
-        ["liquidacion-clientes"] = "Liquidación a Clientes",
-        ["facturacion-estimada"] = "Liquidaciones estimadas",
+        ["clientes-abm"] = new("ABM - Clientes", ModuloInforme.Facturacion),
         // Combustible
-        ["promedio-consumos"] = "Promedio de Consumos",
-        ["consumo-mensual"] = "Consumo Mensual",
-        ["combustible-conciliacion"] = "ABM y Conciliación cargas",
-        ["control-cargas"] = "Control de cargas",
-        ["saldos-estaciones"] = "Saldos de Estaciones",
-        ["depositos-estacion"] = "Carga de Depósitos",
-        ["depositos-mantenimiento"] = "Mantenimiento de Depósitos",
-        ["articulos-rubro"] = "Artículos por Rubro de Consumo",
+        ["combustible-conciliacion"] = new("ABM y Conciliación cargas", ModuloInforme.Combustible),
+        ["saldos-estaciones"] = new("Saldos de Estaciones", ModuloInforme.Combustible),
+        ["depositos-estacion"] = new("Carga de Depósitos", ModuloInforme.Combustible),
+        ["depositos-mantenimiento"] = new("Mantenimiento de Depósitos", ModuloInforme.Combustible),
+        ["articulos-rubro"] = new("Artículos por Rubro de Consumo", ModuloInforme.Combustible),
     };
+
+    /// <summary>Primer segmento del path ("/siniestros?x=1" → "siniestros").</summary>
+    private string RutaActual()
+    {
+        var path = Nav.ToBaseRelativePath(Nav.Uri);
+        var corte = path.IndexOfAny(new[] { '/', '?', '#' });
+        return corte >= 0 ? path[..corte] : path;
+    }
 
     private string TituloPantallaActual()
     {
-        // Primer segmento del path ("/siniestros?x=1" → "siniestros")
-        var path = Nav.ToBaseRelativePath(Nav.Uri);
-        var corte = path.IndexOfAny(new[] { '/', '?', '#' });
-        if (corte >= 0) path = path[..corte];
+        var path = RutaActual();
 
-        return _titulosPorRuta.TryGetValue(path, out var titulo)
-            ? titulo
-            : "Informes y Reportes · Sistema de gestión";
+        if (_pantallasPorRuta.TryGetValue(path, out var pantalla))
+            return pantalla.Titulo;
+
+        if (InformesCatalogo.TitulosPorRuta.TryGetValue(path, out var tituloInforme))
+            return tituloInforme;
+
+        return "Informes y Reportes · Sistema de gestión";
+    }
+
+    /// <summary>
+    /// Color del filete de la barra: el del módulo de la pantalla abierta. Las pantallas
+    /// sin módulo (login, ayuda, el hub de informes) caen en el neutro — no se les inventa
+    /// un color de módulo que después le enseñaría al usuario algo falso.
+    /// </summary>
+    private string ColorModuloActual()
+    {
+        var path = RutaActual();
+
+        if (_pantallasPorRuta.TryGetValue(path, out var pantalla))
+            return InformesCatalogo.Color(pantalla.Modulo);
+
+        return InformesCatalogo.Color(InformesCatalogo.ModuloDeRuta(path));
     }
 
     // ── Theme switcher (clases CSS en app.css; theme.js aplica y persiste) ──
@@ -1438,6 +1494,11 @@
     {
         if (firstRender)
         {
+            // Registra este circuito como "sesión en uso". Si el usuario cierra el navegador,
+            // el circuito se cae y SesionCircuitoTracker cierra la sesión tras la gracia.
+            // Va acá (y no en el CircuitHandler) porque recién ahora el usuario está resuelto.
+            await RegistrarCircuitoAsync();
+
             // Sincroniza el ícono con el theme guardado en el navegador.
             var theme = await JS.InvokeAsync<string>("norturTheme.get");
             if (theme == "gris" && !_themeGris)
@@ -1446,6 +1507,20 @@
                 StateHasChanged();
             }
         }
+    }
+
+    // ── Seguimiento de la sesión del circuito (cierre al cerrar el navegador) ──
+    private async Task RegistrarCircuitoAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var usuario = state.User.Identity?.Name;
+        var sid = state.User.FindFirst(NorturClaims.Sesion)?.Value;
+
+        if (string.IsNullOrWhiteSpace(usuario) || !Guid.TryParse(sid, out var sessionId)) return;
+
+        SesionCtx.SessionId = sessionId;
+        SesionCtx.Usuario = usuario;
+        SesionTracker.Conectar(sessionId, usuario, SesionCtx.CircuitId);
     }
 
     private async Task CambiarTheme()

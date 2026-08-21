@@ -1,0 +1,557 @@
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+
+@* ─────────────────────────────────────────────────────────────────────────────
+   Salud del padrón de clientes — vista 2 del Panel de Clientes.
+
+   No mide el negocio: mide la BASE. Contesta "qué hay para limpiar y a quién le
+   falta un dato", con la lista lista para mandar a corregir.
+
+   Criterio de diseño (lo que hace útil a esta vista): cada problema se muestra
+   con DOS números — cuántos registros lo tienen y cuántos de esos son clientes
+   que operan hoy. No es lo mismo que le falte el teléfono a un cliente muerto
+   hace 8 años que a uno que viaja todas las semanas.
+
+   Trabaja sobre el padrón que ya trajo la página (414 filas): todo el filtrado
+   y los conteos son en memoria.
+   ───────────────────────────────────────────────────────────────────────────── *@
+
+<div class="rfs-kpis mb-3">
+    <KpiCard Label="Padrón" Value="@Fmt(_total)" Sub="clientes cargados" Color="@NorturColors.Azul" />
+    <KpiCard Label="Operan hoy" Value="@Fmt(_activos)" Sub="@($"{Pct(_activos, _total):0} % del padrón")" Color="@NorturColors.Verde" />
+    <KpiCard Label="Nunca operaron" Value="@Fmt(_nunca)" Sub="sin una sola reserva" Color="#B45309" />
+    <KpiCard Label="Para revisar" Value="@Fmt(_candidatosBaja)" Sub="candidatos a dar de baja" Color="@NorturColors.Naranja" />
+    <KpiCard Label="Incompletos" Value="@Fmt(_incompletos)" Sub="@($"{_incompletosActivos} operan hoy")" Color="@NorturColors.Rojo" />
+    <KpiCard Label="Dados de baja" Value="@Fmt(_egresados)" Sub="@(_egresados == 0 ? "nunca se usó la baja" : "con fecha de inhabilitación")" Color="#7C3AED" />
+</div>
+
+@if (_egresados == 0 && _candidatosBaja > 0)
+{
+    @* El dato que explica todo lo demás: el ABM tiene baja lógica y nadie la usó nunca,
+       así que el padrón solo crece. *@
+    <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Style="border-radius:12px;"
+              Icon="@Icons.Material.Filled.CleaningServices">
+        <b>Ningún cliente fue dado de baja jamás</b> (el ABM del Metrocar tiene la baja por fecha de
+        inhabilitación, pero está sin usar). Por eso conviven @Fmt(_total) fichas cuando
+        <b>@Fmt(_activos) operan hoy</b>: dar de baja las @Fmt(_candidatosBaja) marcadas para revisar deja
+        el padrón en @Fmt(_total - _candidatosBaja) y acorta todos los buscadores del sistema.
+    </MudAlert>
+}
+
+<MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
+
+    @* ── Qué hay para corregir: tarjetas clickeables que filtran la tabla ── *@
+    <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
+        <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+            <div class="mb-2">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                    Qué hay para corregir
+                    <AyudaReporte Ruta="panel-clientes" Bloque="padron" Chico="true" />
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                    Click en un problema para ver solo esos clientes en la tabla · la columna
+                    <b>operan hoy</b> es la urgencia real
+                </MudText>
+            </div>
+
+            <div class="pad-problemas">
+                @foreach (var p in _problemas)
+                {
+                    var activo = _problemaSel == p.Clave;
+                    <button type="button" class="pad-prob @(activo ? "pad-prob--on" : "")"
+                            title="@p.Detalle"
+                            @onclick="() => TogglearProblema(p.Clave)">
+                        <span class="pad-prob__n" style="@($"color:{p.Color};")">@Fmt(p.Total)</span>
+                        <span class="pad-prob__txt">
+                            <span class="pad-prob__tit">@p.Titulo</span>
+                            <span class="pad-prob__sub">
+                                @if (p.Activos > 0)
+                                {
+                                    <b style="color:#DC2626;">@Fmt(p.Activos)</b>
+                                    <span> operan hoy</span>
+                                }
+                                else
+                                {
+                                    <span>ninguno opera hoy</span>
+                                }
+                            </span>
+                        </span>
+                    </button>
+                }
+            </div>
+        </MudPaper>
+    </MudItem>
+
+    @* ── Reparto por segmento de actividad ── *@
+    <MudItem xs="12" md="5" Style="display:flex; flex-direction:column;">
+        <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+            <div class="mb-2">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                    El padrón por antigüedad de uso
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                    Medido contra el último día con datos (@Corte.ToString("dd/MM/yyyy"))
+                </MudText>
+            </div>
+            <ApexChart @key="_chartKey" TItem="SegItem" Options="_optsSeg" Height="300">
+                <ApexPointSeries TItem="SegItem" Items="_segItems" Name="Clientes"
+                                 SeriesType="SeriesType.Bar"
+                                 XValue="@(x => x.Segmento)" YValue="@(x => x.Cantidad)"
+                                 ShowDataLabels="true" />
+            </ApexChart>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@* ── Grupos que comparten CUIT (no son duplicados: son centros de facturación) ── *@
+@if (_grupos.Count > 0)
+{
+    <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
+        <div class="mb-2">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                Clientes que comparten CUIT — el mismo grupo con varios códigos
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                <b>No son fichas duplicadas</b>: la operación separa a propósito regular, especiales y eventuales.
+                Importa saberlo porque el ranking de facturación los cuenta por separado y el grupo pesa más de lo que parece.
+                (Los CUIT genéricos del exterior 55-… y 51-… quedan afuera: se repiten por diseño.)
+            </MudText>
+        </div>
+        <div class="pad-grupos">
+            @foreach (var g in _grupos)
+            {
+                <div class="pad-grupo">
+                    <div class="pad-grupo__cuit">@FormatoCuit(g.Cuit) · @g.Miembros.Count códigos</div>
+                    <div class="pad-grupo__items">
+                        @foreach (var m in g.Miembros)
+                        {
+                            <button type="button" class="pad-chip" title="@($"Abrir la ficha de {m.Display}")"
+                                    @onclick="() => AbrirFicha.InvokeAsync(m.IdCliente)">
+                                <b>@m.IdCliente</b> · @m.Display
+                            </button>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </MudPaper>
+}
+
+@* ── Tabla del padrón ── *@
+<MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
+    <div class="d-flex justify-space-between align-center flex-wrap mb-3" style="gap:8px;">
+        <div>
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                Padrón de clientes
+                @if (_problemaSel is not null)
+                {
+                    <span style="color:#DC2626; font-weight:600;">· @TituloProblema(_problemaSel)</span>
+                }
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                @Fmt(_filtrados.Count) de @Fmt(_total) clientes · click en el nombre para abrir la ficha
+            </MudText>
+        </div>
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+            <MudTextField T="string" Value="_busca" ValueChanged="CambiarBusca" Immediate="true"
+                          Placeholder="Buscar por código o nombre" Clearable="true"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                          Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:250px;" />
+            <MudSelect T="string" Value="_segmentoSel" ValueChanged="CambiarSegmento" Label="Segmento"
+                       Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:150px;">
+                <MudSelectItem T="string" Value="@TodosSeg">Todos</MudSelectItem>
+                @foreach (var s in _segmentosOrden)
+                {
+                    <MudSelectItem T="string" Value="@s">@s</MudSelectItem>
+                }
+            </MudSelect>
+            @if (_problemaSel is not null || _segmentoSel != TodosSeg || !string.IsNullOrWhiteSpace(_busca))
+            {
+                <MudButton Variant="Variant.Outlined" Color="MudColor.Default" OnClick="LimpiarFiltros"
+                           StartIcon="@Icons.Material.Filled.FilterAltOff"
+                           Style="border-radius:8px; height:40px; text-transform:none;">
+                    Quitar filtros
+                </MudButton>
+            }
+        </div>
+    </div>
+
+    <div class="rfs-tabla-wrap">
+        <table class="rfs-tabla">
+            <thead>
+                <tr>
+                    <th class="rfs-col-fecha" style="min-width:230px;">Cliente</th>
+                    <th class="rfs-th-serv">Código</th>
+                    <th class="rfs-th-serv">Segmento</th>
+                    <th class="rfs-th-serv" title="Última reserva ya ocurrida">Última</th>
+                    <th class="rfs-num" title="Viajes de toda la historia del cliente">Viajes</th>
+                    <th class="rfs-th-serv">Tipo fiscal</th>
+                    <th class="rfs-th-serv" title="Lista de precios o tarifario propio">Precios</th>
+                    <th class="rfs-th-serv">Provincia</th>
+                    <th class="rfs-th-serv" style="min-width:210px;">Qué le falta</th>
+                </tr>
+            </thead>
+            <tbody>
+                <Virtualize Items="_filtrados" Context="c" ItemSize="30" OverscanCount="12" SpacerElement="tr">
+                    @{
+                        var faltantes = c.Faltantes();
+                        var candidato = c.CandidatoBaja(Corte);
+                    }
+                    <tr>
+                        <td class="rfs-col-fecha rfs-click"
+                            style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+                            title="@($"{c.Display} ({c.IdCliente}) · abrir la ficha")"
+                            @onclick="() => AbrirFicha.InvokeAsync(c.IdCliente)">@c.Display</td>
+                        <td class="rfs-th-serv" style="font-weight:600;">@c.IdCliente</td>
+                        <td class="rfs-th-serv @(candidato ? "pfl-alerta" : "")">
+                            <span class="pad-punto" style="@($"background:{ColorSegmento(c.Segmento(Corte))};")"></span>@c.Segmento(Corte)
+                        </td>
+                        <td class="rfs-th-serv">@(c.UltimaReserva is null ? "nunca" : c.UltimaReserva.Value.ToString("MM/yyyy"))</td>
+                        <td class="rfs-num">@(c.ViajesHistoricos > 0 ? Fmt(c.ViajesHistoricos) : "·")</td>
+                        <td class="rfs-th-serv @(string.IsNullOrWhiteSpace(c.TipoResp) ? "pfl-alerta" : "")">
+                            @(string.IsNullOrWhiteSpace(c.TipoResp) ? "sin tipo" : c.TipoResp)
+                        </td>
+                        <td class="rfs-th-serv @(c.SinPrecio ? "pfl-alerta" : "")">@TextoPrecios(c)</td>
+                        <td class="rfs-th-serv @(ProvinciaSospechosa(c.Provincia) ? "pfl-alerta" : "")"
+                            title="@(ProvinciaSospechosa(c.Provincia) ? $"'{c.Provincia}' parece un error de tipeo de '{ProvinciaCorrecta(c.Provincia)}'" : "")">
+                            @(string.IsNullOrWhiteSpace(c.Provincia) ? "·" : c.Provincia)
+                        </td>
+                        <td class="rfs-th-serv">
+                            @if (faltantes.Count == 0)
+                            {
+                                <span style="color:#16A34A;">completo</span>
+                            }
+                            else
+                            {
+                                <span style="color:#B45309;">@string.Join(" · ", faltantes)</span>
+                            }
+                        </td>
+                    </tr>
+                </Virtualize>
+            </tbody>
+        </table>
+    </div>
+</MudPaper>
+
+@code {
+    /// <summary>El padrón completo, tal como lo trajo la página (414 filas).</summary>
+    [Parameter, EditorRequired] public List<ClientePadronRow> Padron { get; set; } = new();
+
+    /// <summary>Último día con datos: la referencia de recencia de los segmentos.</summary>
+    [Parameter, EditorRequired] public DateOnly Corte { get; set; }
+
+    /// <summary>Abre la ficha de un cliente (la resuelve la página).</summary>
+    [Parameter] public EventCallback<string> AbrirFicha { get; set; }
+
+    /// <summary>La lista visible, para que el Excel exporte exactamente lo que se ve.</summary>
+    public List<ClientePadronRow> Visibles => _filtrados;
+
+    private const string TodosSeg = "TODOS";
+
+    private static readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    private static readonly string[] _segmentosOrden =
+    {
+        ClientePadronRow.SegActivo, ClientePadronRow.SegTibio, ClientePadronRow.SegDormido,
+        ClientePadronRow.SegInactivo, ClientePadronRow.SegNunca
+    };
+
+    // ── Filtros de la tabla ──
+    private string? _problemaSel;
+    private string _segmentoSel = TodosSeg;
+    private string _busca = "";
+    private List<ClientePadronRow> _filtrados = new();
+
+    // ── Conteos ──
+    private int _total, _activos, _nunca, _candidatosBaja, _incompletos, _incompletosActivos, _egresados;
+
+    private record ProblemaCard(string Clave, string Titulo, string Detalle, string Color,
+                                int Total, int Activos, Func<ClientePadronRow, bool> Predicado);
+    private List<ProblemaCard> _problemas = new();
+
+    private record GrupoCuit(string Cuit, List<ClientePadronRow> Miembros);
+    private List<GrupoCuit> _grupos = new();
+
+    private record SegItem(string Segmento, int Cantidad);
+    private List<SegItem> _segItems = new();
+    private Guid _chartKey = Guid.NewGuid();
+
+    // Provincias mal tipeadas: valor sospechoso → valor correcto sugerido.
+    private Dictionary<string, string> _provinciaSugerida = new(StringComparer.OrdinalIgnoreCase);
+
+    private ApexChartOptions<SegItem> _optsSeg = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        PlotOptions = new()
+        {
+            Bar = new()
+            {
+                Horizontal = true, BorderRadius = 4,
+                BorderRadiusApplication = BorderRadiusApplication.End, Distributed = true,
+                DataLabels = new() { Position = BarDataLabelPosition.Top }
+            }
+        },
+        Legend = new() { Show = false },
+        DataLabels = new()
+        {
+            Enabled = true, TextAnchor = TextAnchor.Start, OffsetX = 30,
+            Style = new() { FontSize = "11px", FontWeight = "600", Colors = new List<string> { "#334155" } },
+        },
+        Colors = new List<string> { "#16A34A", "#65A30D", "#F99410", "#DC2626", "#94A3B8" },
+        Xaxis = new() { Labels = new() { Style = new() { FontSize = "11px" } } },
+        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px" }, MaxWidth = 110 } } },
+        Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
+        Theme = new() { Mode = Mode.Light },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
+    protected override void OnParametersSet() => Recalcular();
+
+    private void Recalcular()
+    {
+        _total = Padron.Count;
+        if (_total == 0) { _filtrados = new(); _problemas = new(); return; }
+
+        _activos = Padron.Count(c => c.Segmento(Corte) == ClientePadronRow.SegActivo);
+        _nunca = Padron.Count(c => c.NuncaOpero);
+        _candidatosBaja = Padron.Count(c => c.CandidatoBaja(Corte));
+        _egresados = Padron.Count(c => c.EsEgresado);
+        _incompletos = Padron.Count(c => c.Faltantes().Count > 0);
+        _incompletosActivos = Padron.Count(c => c.Faltantes().Count > 0 && EsActivo(c));
+
+        DetectarProvinciasSospechosas();
+        ArmarProblemas();
+        ArmarGrupos();
+
+        _segItems = _segmentosOrden
+            .Select(s => new SegItem(s, Padron.Count(c => c.Segmento(Corte) == s)))
+            .Where(x => x.Cantidad > 0)
+            .ToList();
+        AplicarTotalSeg();
+        _chartKey = Guid.NewGuid();
+
+        Filtrar();
+    }
+
+    private bool EsActivo(ClientePadronRow c) => c.Segmento(Corte) == ClientePadronRow.SegActivo;
+
+    private void ArmarProblemas()
+    {
+        ProblemaCard Card(string clave, string titulo, string detalle, string color,
+                          Func<ClientePadronRow, bool> pred)
+        {
+            var los = Padron.Where(pred).ToList();
+            return new ProblemaCard(clave, titulo, detalle, color, los.Count, los.Count(EsActivo), pred);
+        }
+
+        _problemas = new List<ProblemaCard>
+        {
+            Card("contacto", "Sin persona de contacto",
+                 "El campo Contacto del ABM está vacío: no hay a quién llamar cuando surge un problema con un servicio.",
+                 "#DC2626", c => string.IsNullOrWhiteSpace(c.Contacto)),
+
+            Card("telefono", "Sin teléfono",
+                 "Sin teléfono ni celular cargados en la ficha.",
+                 "#EA580C", c => string.IsNullOrWhiteSpace(c.Telefono)),
+
+            Card("email", "Sin e-mail",
+                 "Sin correo: no se le puede mandar el voucher ni la liquidación por mail.",
+                 "#B45309", c => string.IsNullOrWhiteSpace(c.Email)),
+
+            Card("precios", "Sin precios configurados",
+                 "No tiene lista de precios ni tarifario propio cargado: al facturarlo no hay de dónde sacar el importe.",
+                 "#DC2626", c => c.SinPrecio),
+
+            Card("fiscal", "Sin tipo fiscal",
+                 "Falta el tipo de responsable (RI, monotributo, consumidor final, exterior): afecta cómo se factura.",
+                 "#7C3AED", c => string.IsNullOrWhiteSpace(c.TipoResp)),
+
+            Card("cuit", "Sin CUIT",
+                 "Sin CUIT cargado en la ficha.",
+                 "#0891B2", c => string.IsNullOrWhiteSpace(c.Cuit)),
+
+            Card("provincia", "Provincia mal escrita",
+                 "El texto de la provincia difiere por poco de otro mucho más frecuente: casi seguro es un error de tipeo.",
+                 "#DB2777", c => ProvinciaSospechosa(c.Provincia)),
+
+            Card("nunca", "Nunca operaron",
+                 "Fichas creadas que jamás tuvieron una reserva. Son el primer candidato a depurar.",
+                 "#94A3B8", c => c.NuncaOpero),
+
+            Card("baja", "Candidatos a dar de baja",
+                 "Nunca operaron, o hace más de dos años que no piden un servicio. Revisar antes de inhabilitar.",
+                 "#F99410", c => c.CandidatoBaja(Corte)),
+        }
+        .Where(p => p.Total > 0)
+        .OrderByDescending(p => p.Activos)
+        .ThenByDescending(p => p.Total)
+        .ToList();
+    }
+
+    /// <summary>
+    /// Detecta valores de provincia que son casi iguales a otro mucho más frecuente
+    /// (CAPTIAL FEDERAL vs CAPITAL FEDERAL). Con 414 filas la comparación de a pares es
+    /// instantánea y no hace falta ninguna lista fija de provincias argentinas.
+    /// </summary>
+    private void DetectarProvinciasSospechosas()
+    {
+        _provinciaSugerida = new(StringComparer.OrdinalIgnoreCase);
+        var conteo = Padron
+            .Select(c => c.Provincia.Trim())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .GroupBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (valor, n) in conteo)
+        {
+            foreach (var (otro, m) in conteo)
+            {
+                // Sospechoso = se parece muchísimo a un valor bastante más usado.
+                if (string.Equals(valor, otro, StringComparison.OrdinalIgnoreCase)) continue;
+                if (m <= n * 2) continue;
+                if (Distancia(valor.ToUpperInvariant(), otro.ToUpperInvariant()) > 2) continue;
+                _provinciaSugerida[valor] = otro;
+                break;
+            }
+        }
+    }
+
+    private bool ProvinciaSospechosa(string prov) =>
+        !string.IsNullOrWhiteSpace(prov) && _provinciaSugerida.ContainsKey(prov.Trim());
+
+    private string ProvinciaCorrecta(string prov) =>
+        _provinciaSugerida.TryGetValue(prov.Trim(), out var v) ? v : prov;
+
+    /// <summary>Distancia de edición (Levenshtein) — cuántos tipeos separan dos textos.</summary>
+    private static int Distancia(string a, string b)
+    {
+        if (a.Length == 0) return b.Length;
+        if (b.Length == 0) return a.Length;
+        var fila = new int[b.Length + 1];
+        for (var j = 0; j <= b.Length; j++) fila[j] = j;
+        for (var i = 1; i <= a.Length; i++)
+        {
+            var previo = fila[0];
+            fila[0] = i;
+            for (var j = 1; j <= b.Length; j++)
+            {
+                var tmp = fila[j];
+                fila[j] = Math.Min(Math.Min(fila[j] + 1, fila[j - 1] + 1),
+                                   previo + (a[i - 1] == b[j - 1] ? 0 : 1));
+                previo = tmp;
+            }
+        }
+        return fila[b.Length];
+    }
+
+    /// <summary>
+    /// Códigos distintos que comparten un mismo CUIT real. NO son duplicados: la operación
+    /// separa regular / especiales / eventuales por centro de facturación. Los CUIT genéricos
+    /// del exterior quedan afuera porque se repiten por diseño.
+    /// </summary>
+    private void ArmarGrupos()
+    {
+        _grupos = Padron
+            .Where(c => !string.IsNullOrWhiteSpace(c.Cuit) && !c.CuitGenericoExterior)
+            .GroupBy(c => c.Cuit.Trim())
+            .Where(g => g.Count() > 1)
+            .Select(g => new GrupoCuit(g.Key, g.OrderBy(c => c.IdCliente).ToList()))
+            .OrderByDescending(g => g.Miembros.Count)
+            .ThenBy(g => g.Miembros[0].Display)
+            .ToList();
+    }
+
+    private void AplicarTotalSeg()
+    {
+        var total = _segItems.Sum(s => s.Cantidad);
+        var max = _segItems.Count > 0 ? _segItems.Max(s => s.Cantidad) : 0;
+        if (_optsSeg.Xaxis is not null)
+        {
+            _optsSeg.Xaxis.Min = 0;
+            _optsSeg.Xaxis.Max = max > 0 ? max * 1.3 : 1;
+        }
+        if (_optsSeg.DataLabels is not null)
+            // Número invariante dentro del literal JS (con la coma de es-AR el chart no parsea).
+            _optsSeg.DataLabels.Formatter =
+                "function(val){ var t = " + total.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                "; var p = t > 0 ? Math.round(val * 100 / t) : 0; return val.toLocaleString('es-AR') + ' (' + p + '%)'; }";
+    }
+
+    private void TogglearProblema(string clave)
+    {
+        _problemaSel = _problemaSel == clave ? null : clave;
+        Filtrar();
+    }
+
+    private void CambiarSegmento(string s) { _segmentoSel = s; Filtrar(); }
+    private void CambiarBusca(string s) { _busca = s ?? ""; Filtrar(); }
+
+    private void LimpiarFiltros()
+    {
+        _problemaSel = null;
+        _segmentoSel = TodosSeg;
+        _busca = "";
+        Filtrar();
+    }
+
+    private void Filtrar()
+    {
+        IEnumerable<ClientePadronRow> q = Padron;
+
+        if (_problemaSel is not null)
+        {
+            var p = _problemas.FirstOrDefault(x => x.Clave == _problemaSel);
+            if (p is not null) q = q.Where(p.Predicado);
+        }
+
+        if (_segmentoSel != TodosSeg)
+            q = q.Where(c => c.Segmento(Corte) == _segmentoSel);
+
+        if (!string.IsNullOrWhiteSpace(_busca))
+        {
+            var aguja = _busca.Trim();
+            q = q.Where(c => c.Display.Contains(aguja, StringComparison.OrdinalIgnoreCase)
+                          || c.IdCliente.Contains(aguja, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // Los que operan hoy primero: si la lista es para mandar a corregir, arriba tiene que
+        // estar lo que urge.
+        _filtrados = q
+            .OrderBy(c => ClientePadronRow.OrdenSegmento(c.Segmento(Corte)))
+            .ThenByDescending(c => c.ViajesHistoricos)
+            .ThenBy(c => c.Display)
+            .ToList();
+    }
+
+    private string TituloProblema(string clave) =>
+        _problemas.FirstOrDefault(p => p.Clave == clave)?.Titulo ?? "";
+
+    private string TextoPrecios(ClientePadronRow c)
+    {
+        if (c.ObPrecio.Equals("CLIENTE", StringComparison.OrdinalIgnoreCase))
+            return c.TieneTarifaPropia ? "tarifario propio" : "sin tarifario";
+        return string.IsNullOrWhiteSpace(c.ListaPrecio) ? "sin lista" : c.ListaPrecio;
+    }
+
+    private static string ColorSegmento(string seg) => seg switch
+    {
+        ClientePadronRow.SegActivo => "#16A34A",
+        ClientePadronRow.SegTibio => "#65A30D",
+        ClientePadronRow.SegDormido => "#F99410",
+        ClientePadronRow.SegInactivo => "#DC2626",
+        _ => "#94A3B8",
+    };
+
+    /// <summary>CUIT plano a formato 30-64140555-4.</summary>
+    private static string FormatoCuit(string cuit) =>
+        cuit.Length == 11 ? $"{cuit[..2]}-{cuit.Substring(2, 8)}-{cuit[10]}" : cuit;
+
+    private static string Fmt(int n) => n.ToString("#,0", _ar);
+    private static double Pct(int parte, int total) => total > 0 ? parte * 100.0 / total : 0;
+}

@@ -25,6 +25,41 @@ La réplica actual es **unidireccional**: FoxPro escribe DBF → un proceso sinc
    feriado, motivos de cancelación/cambio/tarde) antes de tocar maestros grandes
    (cliente, chofer, vehiculo) o transaccionales (viaje — ese es workflow, no CRUD).
 
+## 📋 Registro de tablas que YA cambiaron de dueño
+
+**Consultar esto antes de encender cualquier flag de `AbmFeatureFlags`.** Una tabla está acá
+solo cuando el cliente confirmó que la desconectó del watcher (sync DBF→SQL apagada).
+
+| Tabla | Desde | Pantalla Buslink | Notas |
+| --- | --- | --- | --- |
+| `usuario` | 01/07/2026 | `/usuarios-abm` | 1er ABM de escritura. Sin contadores compartidos → corte limpio |
+| `parametro` | **12/08/2026** | `/parametros` (3 solapas) | ⚠️ **deja deuda, ver abajo** |
+
+### ⚠️ La deuda que dejó `parametro` — resincronizar en el día D
+
+`parametro` es **1 fila con 72 columnas** donde conviven la configuración con los **contadores
+vivos del circuito**: `id_viaje_i`, `lote_plant`, `lote_sobre`, `stock_movi`.
+
+Con el watcher apagado, FoxPro **sigue incrementándolos en su DBF** y esos incrementos ya no
+llegan a SQL. Las dos copias divergen desde el 12/08/2026. Hoy no molesta (Buslink todavía no
+genera lotes ni viajes), pero **el día D hay que resincronizar esos 4 números antes de habilitar
+las escrituras del circuito**, o el primer lote/viaje que arme Buslink saldrá repetido.
+
+> Lección general: al desconectar una tabla del watcher, preguntarse **qué columnas de esa fila
+> sigue escribiendo FoxPro**. Si hay contadores o campos que el circuito viejo toca, el corte no
+> es limpio: deja divergencia que hay que reconciliar.
+
+### Checklist para encender un flag
+
+1. Confirmar con el cliente que el **watcher está apagado para esa tabla** (no alcanza con
+   suponerlo: es lo único que evita que la sync pise lo que escriba Buslink).
+2. Identificar **qué columnas de esa tabla sigue escribiendo FoxPro** → divergencia a reconciliar.
+3. Bloquear el ABM en FoxPro (permisos 2/3/4 o quitar la barra del menú).
+4. Poner el flag en `true` y quitar el `Disabled` de la botonera.
+5. Validar con el **protocolo de dos señales** (skill `testing-nortur`): UI + `SELECT`, con datos
+   `ZZTEST` reversibles y **sobre el server local**.
+6. Revisar los **smoke tests**: los que afirmaban "el botón está deshabilitado" ahora fallan.
+
 ## El patrón FoxPro (los 73 `*_abm.scx` son TODOS iguales)
 
 Dos forms por entidad — extraer siempre el real con la skill `foxpro-extract` y documentarlo

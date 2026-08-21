@@ -1,4 +1,4 @@
-@page "/reservas-fecha-servicio"
+﻿@page "/reservas-fecha-servicio"
 @using ApexCharts
 @using MudColor = MudBlazor.Color
 @using MudSize = MudBlazor.Size
@@ -9,6 +9,7 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject IDialogService DialogService
+@inject ISnackbar Snackbar
 @rendermode InteractiveServer
 
 <PageTitle>BusLink</PageTitle>
@@ -19,7 +20,7 @@
         Reservas por fecha y servicio
     </MudText>
     <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
-        Metrocar Nortur · datos en vivo desde replicaVPF
+        Nortur · datos en vivo desde replicaVPF
     </MudText>
 </div>
 
@@ -29,27 +30,63 @@
 
     @* Desde/Hasta juntos como un par (gap chico), separados del resto de los filtros *@
     <div class="rfs-fechas">
-        <MudDatePicker Label="Desde" @bind-Date="_desde"
+        <MudDatePicker Label="Desde" Date="_desde" DateChanged="@(d => { _desde = d; })"
                        MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
                        PickerVariant="PickerVariant.Dialog" Editable="true"
                        Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
-        <MudDatePicker Label="Hasta" @bind-Date="_hasta"
+        <MudDatePicker Label="Hasta" Date="_hasta" DateChanged="@(d => { _hasta = d; })"
                        MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
                        PickerVariant="PickerVariant.Dialog" Editable="true"
                        Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
     </div>
 
-    <MudSelect T="string" Label="Servicios" MultiSelection="true" @bind-SelectedValues="_serviciosSel"
+    @* Línea de negocio (30/07/2026, pedido del frente final). Sale de `servicio.modo_uso`, que
+       en el ABM del FoxPro es el radio "Uso": Ambos / Especial / Transporte de Personal. Antes
+       este informe mostraba de hecho SOLO Turismo — no por un filtro, sino porque el Transporte
+       de Personal viaja entero bajo CABECERA_KM/SERV y las cabeceras se excluyen siempre.
+       "Internos" (cliente propio NORTUR) reemplazó al viejo switch y se aplica AL INSTANTE. *@
+    @* El texto de ayuda va como `title` nativo y NO envuelto en MudTooltip: el popover del
+       tooltip pelea con el desplegable del select (posicionamiento y clics). *@
+    <MudSelect T="string" Label="Tipo de servicio" MultiSelection="true"
+               SelectedValues="_tiposSel" SelectedValuesChanged="CambiarTipos"
                SelectAll="true" SelectAllText="Todos" Dense="true"
-               Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:225px;"
-               MultiSelectionTextFunc="@(s => s.Count == _servicios.Count ? "Todos" : $"{s.Count} de {_servicios.Count}")">
-        @foreach (var s in _servicios)
+               Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:215px;"
+               title="Turismo = servicios especiales (city tours, traslados, cenas). Transporte de Personal = las cabeceras de empresas (AEROLINEAS, YPF, CONUAR) y las guardias. Internos = viajes del propio NORTUR (taller, engrase, movimientos). Se aplica al instante."
+               MultiSelectionTextFunc="@(s => s.Count == ReportService.TiposServicio.Count ? "Todos" : string.Join(", ", s.Select(EtiquetaTipoCorta)))">
+        @foreach (var t in ReportService.TiposServicio)
         {
-            <MudSelectItem T="string" Value="@s.IdServici">@s.Nombre</MudSelectItem>
+            <MudSelectItem T="string" Value="@t">@EtiquetaTipo(t)</MudSelectItem>
         }
     </MudSelect>
 
-    <MudSelect T="string" Label="Estados" MultiSelection="true" @bind-SelectedValues="_estadosSel"
+    @* Dimensión del desglose. Por CLIENTE es lo único que hace legible el Transporte de Personal:
+       ahí el servicio es siempre "CABECERA POR KILOMETRO" y el dato útil es la empresa. *@
+    <MudSelect T="string" Label="Desglosar por" Value="_dimension" ValueChanged="CambiarDimension"
+               Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:150px;"
+               title="Con qué abrir el informe: por servicio (city tours, EZEIZA…) o por cliente (AEROLINEAS, YPF, CONUAR…). Para Transporte de Personal conviene por cliente: el servicio siempre es CABECERA. Se aplica al instante.">
+        <MudSelectItem T="string" Value="@ReportService.DimServicio">Servicio</MudSelectItem>
+        <MudSelectItem T="string" Value="@ReportService.DimCliente">Cliente</MudSelectItem>
+    </MudSelect>
+
+    @* Este desplegable ACOMPAÑA al desglose (30/07/2026): con "Desglosar por = Servicio" lista
+       servicios; con "= Cliente", los clientes del período. Antes seguía ofreciendo servicios
+       aunque el informe ya estuviera abierto por cliente — filtrar por una cosa y leer otra.
+       En los dos casos solo lo que TUVO viajes en el período (el catálogo entero traía 22
+       códigos muertos: ATOMICA, CONUAR*, AR.EZEIZA*…). *@
+    <MudSelect T="string" Label="Servicios/Clientes" MultiSelection="true"
+               SelectedValues="_catSel" SelectedValuesChanged="v => _catSel = v.ToHashSet()"
+               SelectAll="true" SelectAllText="Todos" Dense="true"
+               Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:225px;"
+               title="Qué servicios (o qué clientes, si el informe está desglosado por cliente) entran en el informe. Solo aparecen los que tuvieron viajes en el período. Se aplica con el botón Aplicar filtros."
+               MultiSelectionTextFunc="@(s => s.Count == _catVisibles.Count ? "Todos" : $"{s.Count} de {_catVisibles.Count}")">
+        @foreach (var c in _catVisibles)
+        {
+            <MudSelectItem T="string" Value="@c.Cod">@c.Nombre</MudSelectItem>
+        }
+    </MudSelect>
+
+    <MudSelect T="string" Label="Estados" MultiSelection="true"
+               SelectedValues="_estadosSel" SelectedValuesChanged="v => _estadosSel = v.ToHashSet()"
                SelectAll="true" SelectAllText="Todos" Dense="true"
                Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:190px;"
                MultiSelectionTextFunc="@(s => s.Count == ReportService.EstadosViaje.Count ? "Todos" : $"{s.Count} de {ReportService.EstadosViaje.Count}")">
@@ -58,11 +95,6 @@
             <MudSelectItem T="string" Value="@e">@e</MudSelectItem>
         }
     </MudSelect>
-
-    <MudTooltip Text="Sumar los viajes internos (cliente NORTUR: guardias, movimientos propios). Los informes del FoxPro los excluyen siempre.">
-        <MudSwitch T="bool" @bind-Value="_incluirInternos" Color="MudColor.Primary" Size="MudSize.Small"
-                   Label="Internos" />
-    </MudTooltip>
 
     <div class="rfs-metrica">
         <MudRadioGroup T="string" Value="_metrica" ValueChanged="CambiarMetrica">
@@ -73,12 +105,25 @@
 
     <span style="flex:1 1 auto;"></span>
 
-    <MudButton Variant="Variant.Filled" Color="MudColor.Primary"
-               OnClick="Cargar" Disabled="_cargando" StartIcon="@Icons.Material.Filled.Search"
+    @* El botón avisa cuándo hay filtros tocados y NO aplicados: la clienta tildaba "Internos"
+       y creía que el informe estaba roto porque nada cambiaba hasta apretar acá (30/07/2026). *@
+    <MudButton Variant="Variant.Filled" Color="@(_pendientes > 0 ? MudColor.Warning : MudColor.Primary)"
+               OnClick="Cargar" Disabled="_cargando"
+               StartIcon="@(_pendientes > 0 ? Icons.Material.Filled.PriorityHigh : Icons.Material.Filled.Search)"
+               Class="@(_pendientes > 0 ? "rfs-btn-pendiente" : "")"
                Style="border-radius:8px; height:40px; text-transform:none; flex-shrink:0;">
-        @(_cargando ? "Cargando..." : "Aplicar filtros")
+        @(_cargando ? "Cargando..." : _pendientes > 0 ? $"Aplicar filtros ({_pendientes})" : "Aplicar filtros")
     </MudButton>
 </MudPaper>
+
+@if (_pendientes > 0 && !_cargando)
+{
+    <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3" Style="border-radius:12px;"
+              Icon="@Icons.Material.Filled.Update">
+        Lo que se ve abajo <b>todavía no incluye</b> @(_pendientes == 1 ? "el filtro que cambiaste" : $"los {_pendientes} filtros que cambiaste") —
+        apretá <b>Aplicar filtros</b> para actualizar.
+    </MudAlert>
+}
 
 @if (_cargando)
 {
@@ -90,6 +135,10 @@ else if (_detalle.Count == 0)
 }
 else
 {
+    @* Todo el tablero se atenúa mientras haya filtros sin aplicar: refuerza el aviso de arriba
+       (los números que se ven son los del último Aplicar, no los de los filtros en pantalla). *@
+    <div class="@(_pendientes > 0 ? "rfs-desactualizado" : "")">
+
     @* ── KPIs ── (flex: las tarjetas se reparten parejo, sean 4 o 5) *@
     <div class="rfs-kpis mb-3">
         <KpiCard Label="Total reservas" Value="@Fmt(_totalRes)" Sub="@PeriodoCortoTxt" Color="@NorturColors.Azul" />
@@ -97,7 +146,7 @@ else
         <KpiCard Label="Canceladas" Value="@(CanceladasEnFiltro ? Fmt(_totalCan) : "—")"
                  Sub="@(CanceladasEnFiltro ? $"{_pctCan:0.0}% del total" : "fuera del filtro")"
                  Color="@NorturColors.Rojo" />
-        <KpiCard Label="Servicios distintos" Value="@_nServicios.ToString()" Sub="en el período" Color="@NorturColors.Naranja" />
+        <KpiCard Label="@($"{DimPluralTit} distintos")" Value="@_nServicios.ToString()" Sub="en el período" Color="@NorturColors.Naranja" />
         @if (_mostrarKpiCabecera)
         {
             @* Volumen de las cabeceras que quedaron afuera — transparencia sin ensuciar el desglose. *@
@@ -130,7 +179,7 @@ else
                        izquierda, y el chip de foco (cross-filter) a la derecha. *@
                     <div class="rfs-bar-head mb-2">
                         <div class="rfs-bar-title">
-                            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@($"{_metrica} por servicio — {TituloTopN}")</MudText>
+                            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@($"{_metrica} por {DimSingular} — {TituloTopN}")</MudText>
                             @* Selector compacto: cuántos servicios mostrar en las barras (Top 10/15/20/Todos). *@
                             <MudSelect T="int" Value="_topN" ValueChanged="CambiarTopN"
                                        Label="Mostrar" Dense="true" Margin="Margin.Dense"
@@ -147,13 +196,13 @@ else
                                 <span class="rfs-focus__lbl">Filtrado:</span>
                                 <span class="rfs-focus__val" style="@($"background:{ColorDe(_servicioFocus)};")">@_servicioFocus</span>
                                 <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
-                                               OnClick="LimpiarFoco" Title="Quitar filtro"
+                                               OnClick="LimpiarFoco" title="Quitar filtro"
                                                Style="color:#64748B; padding:2px;" />
                             </div>
                         }
                         else
                         {
-                            <span class="rfs-focus-hint">💡 Clic en un servicio para enfocar el tablero</span>
+                            <span class="rfs-focus-hint">💡 Clic en un @DimSingular para enfocar el tablero</span>
                         }
                     </div>
                     <ApexChart TItem="BarItem" Options="_optsBar" Height="@_altoBarras" @ref="_barChart"
@@ -196,7 +245,7 @@ else
             <div class="d-flex align-center flex-wrap" style="gap:16px;">
                 <div>
                     <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
-                        Detalle: @_metrica.ToLower() por fecha y servicio
+                        Detalle: @_metrica.ToLower() por fecha y @DimSingular
                     </MudText>
                     <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
                         Click en una celda para ver las reservas una por una
@@ -276,6 +325,8 @@ else
             </table>
         </div>
     </MudPaper>
+
+    </div>   @* /rfs-desactualizado *@
 }
 
 @code {
@@ -285,11 +336,38 @@ else
     // ── Filtros en edición ──
     private DateTime? _desde = DateTime.Today.AddMonths(-2);
     private DateTime? _hasta = DateTime.Today;
-    private IReadOnlyCollection<string> _serviciosSel = new HashSet<string>();
+    // Selección del desplegable de categorías: son códigos de SERVICIO o de CLIENTE según
+    // el desglose vigente (por eso se resetea a "todos" cuando el desglose cambia).
+    private IReadOnlyCollection<string> _catSel = new HashSet<string>();
     private IReadOnlyCollection<string> _estadosSel = new HashSet<string>(ReportService.EstadosViaje);
-    private bool _incluirInternos;            // default: excluidos (como los informes FoxPro)
+    // Línea de negocio. Default = Turismo + Transporte de Personal, SIN internos: reproduce
+    // exactamente lo que mostraba el informe antes del cambio del 30/07/2026 (el viejo switch
+    // "Internos" apagado), así la clienta no ve saltar los números de un día para el otro.
+    private IReadOnlyCollection<string> _tiposSel =
+        new HashSet<string> { ReportService.TipoTurismo, ReportService.TipoPersonal };
+    private string _dimension = ReportService.DimServicio;
     private string _metrica = "Reservas";
-    private bool _todosServicios => _servicios.Count > 0 && _serviciosSel.Count == _servicios.Count;
+    private bool _todasCategorias => _catVisibles.Count > 0 && _catSel.Count == _catVisibles.Count;
+
+    // ── Textos que dependen del desglose elegido ──
+    private bool EsPorCliente => _dimAp == ReportService.DimCliente;
+    private string DimSingular => EsPorCliente ? "cliente" : "servicio";
+    private string DimPluralTit => EsPorCliente ? "Clientes" : "Servicios";
+
+    private static string EtiquetaTipo(string tipo) => tipo switch
+    {
+        ReportService.TipoPersonal => "Transporte de Personal",
+        ReportService.TipoInternos => "Internos (NORTUR)",
+        _ => "Turismo"
+    };
+
+    // Versión corta para el resumen del desplegable (donde entran 2-3 juntas).
+    private static string EtiquetaTipoCorta(string tipo) => tipo switch
+    {
+        ReportService.TipoPersonal => "Personal",
+        ReportService.TipoInternos => "Internos",
+        _ => "Turismo"
+    };
 
     // ── Foco / cross-filter (estilo Power BI) ──
     // Servicio "enfocado": KPIs, evolución diaria y tabla se recalculan a ese servicio; los
@@ -301,12 +379,54 @@ else
     // ── Filtros APLICADOS (snapshot al tocar "Aplicar"): el drill-down y el Excel
     //    tienen que corresponder a lo que se está viendo, no a lo editado a medias ──
     private DateOnly _fDesdeAp, _fHastaAp;
-    private List<string> _servAp = new();
+    private List<string> _catAp = new();
     private List<string> _estAp = new();
-    private bool _exclIntAp = true;
+    private List<string> _tiposAp = new();
+    private string _dimAp = ReportService.DimServicio;
     private bool _exclCabAp = true;
 
-    private List<ServicioDto> _servicios = new();
+    // ── Filtros tocados y todavía NO aplicados ──
+    // El "Tipo de servicio", el desglose y la métrica se aplican solos (un clic, query cacheada),
+    // así que nunca cuentan acá. Las fechas y los multiselect de Servicios/Estados sí esperan el
+    // botón: sin este aviso, tildar algo y no ver ningún cambio parece un informe roto.
+    private int _pendientes
+    {
+        get
+        {
+            if (_detalle.Count == 0 && !_cargando) return 0;   // todavía no hay nada aplicado
+            var n = 0;
+            if (_desde is not null && DateOnly.FromDateTime(_desde.Value) != _fDesdeAp) n++;
+            if (_hasta is not null && DateOnly.FromDateTime(_hasta.Value) != _fHastaAp) n++;
+            var catAhora = _todasCategorias ? new List<string>() : _catSel.ToList();
+            if (!catAhora.OrderBy(x => x).SequenceEqual(_catAp.OrderBy(x => x))) n++;
+            var estAhora = _estadosSel.Count == ReportService.EstadosViaje.Count ? new List<string>() : _estadosSel.ToList();
+            if (!estAhora.OrderBy(x => x).SequenceEqual(_estAp.OrderBy(x => x))) n++;
+            return n;
+        }
+    }
+
+    // Categorías (servicios O clientes, según el desglose) con movimiento en el período aplicado:
+    // el desplegable ya no ofrece el catálogo entero — ATOMICA y los 21 códigos muertos no tienen
+    // un solo viaje desde 2021.
+    private List<CategoriaMovimientoDto> _categorias = new();
+
+    // …y de esas, las de la línea de negocio filtrada. Solo recorta SERVICIOS (modo_uso 'A'
+    // = Ambos cae en las dos líneas); la lista de clientes ya viene filtrada por la query.
+    private List<CategoriaMovimientoDto> _catVisibles = new();
+
+    // Desglose con el que se armó _categorias: si cambió, la selección anterior ya no aplica
+    // (son códigos de otra cosa) y se vuelve a "todos".
+    private string _dimCategorias = ReportService.DimServicio;
+
+    private List<CategoriaMovimientoDto> FiltrarPorTipo(List<CategoriaMovimientoDto> servicios)
+    {
+        var letras = new HashSet<string>();
+        if (_tiposSel.Contains(ReportService.TipoTurismo)) { letras.Add("T"); letras.Add("A"); }
+        if (_tiposSel.Contains(ReportService.TipoPersonal)) { letras.Add("P"); letras.Add("A"); }
+        // Solo "Internos": no es una línea de servicios, se muestran todos los del período.
+        if (letras.Count == 0) return servicios;
+        return servicios.Where(s => letras.Contains(s.ModoUso)).ToList();
+    }
     private List<ReservaFechaServicioRow> _detalle = new();
     private List<ReservaFsDetalleRow>? _detalleReservas;   // lazy: se trae al primer drill-down/Excel
     private bool _cargando;
@@ -381,13 +501,13 @@ else
                     <span class="rfs-focus__lbl">Filtrado:</span>
                     <span class="rfs-focus__val" style="@($"background:{ColorDe(_servicioFocus)};")">@_servicioFocus</span>
                     <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
-                                   OnClick="LimpiarFoco" Title="Quitar filtro"
+                                   OnClick="LimpiarFoco" title="Quitar filtro"
                                    Style="color:#64748B; padding:2px;" />
                 </div>
             }
             else
             {
-                <span class="rfs-focus-hint">💡 Clic en un servicio para enfocar el tablero</span>
+                <span class="rfs-focus-hint">💡 Clic en un @DimSingular para enfocar el tablero</span>
             }
         </div>
     };
@@ -519,40 +639,88 @@ else
             Nav.NavigateTo("/", forceLoad: false);
             return;
         }
-        // El dropdown de Servicios NO ofrece las cabeceras: no son servicios reales y su
-        // inclusión/exclusión se maneja con el switch "Cabeceras", no con el multiselect.
-        _servicios = (await Reports.GetServiciosAsync())
-            .Where(s => !ReportService.ServiciosCabecera.Contains(s.IdServici))
-            .ToList();
-        _serviciosSel = new HashSet<string>(_servicios.Select(s => s.IdServici));
         await Cargar();
     }
+
+    // El período Desde–Hasta no puede superar este ancho: rangos más largos pegan contra
+    // millones de filas de viaje y afectan la performance del servidor (pedido del usuario, 30/07/2026).
+    private const int RangoMaximoDias = 400;
 
     private async Task Cargar()
     {
         if (_desde is null || _hasta is null) return;
+
+        var dias = (_hasta.Value.Date - _desde.Value.Date).TotalDays;
+        if (dias > RangoMaximoDias)
+        {
+            // Cartel "Contorno" — estándar del proyecto para validaciones bloqueantes (ver app.css § nt-toast-contorno).
+            Snackbar.Add(
+                $"El rango Desde–Hasta no puede superar los {RangoMaximoDias} días (elegiste {(int)dias}). Achicá el período e intentá de nuevo.",
+                Severity.Error,
+                config =>
+                {
+                    config.SnackbarVariant = Variant.Outlined;
+                    config.SnackbarTypeClass = "nt-toast-contorno";
+                });
+            return;
+        }
+
         _cargando = true;
         StateHasChanged();
 
         // Snapshot de filtros aplicados (convención del service: lista vacía = todos)
         _fDesdeAp = DateOnly.FromDateTime(_desde.Value);
         _fHastaAp = DateOnly.FromDateTime(_hasta.Value);
-        // Si están TODOS los servicios reales seleccionados, mandamos lista vacía (= sin filtro
-        // de servicio); la exclusión de cabeceras la maneja aparte el flag _exclCabAp.
-        _servAp = _todosServicios ? new List<string>() : _serviciosSel.ToList();
+
+        // El desplegable se rearma con las categorías REALES del período, en la dimensión del
+        // desglose: servicios (sin las cabeceras, que no son servicios y se manejan con la regla
+        // de abajo) o clientes. Si el usuario tenía una selección parcial se conserva la
+        // intersección; si queda vacía —o si cambió el desglose, donde los códigos son de otra
+        // cosa— vuelve a todos.
+        var cambioDim = _dimCategorias != _dimension;
+        var antes = _catVisibles;
+
+        if (_dimension == ReportService.DimCliente)
+        {
+            _categorias = await Reports.GetClientesConMovimientoAsync(_fDesdeAp, _fHastaAp, _tiposSel.ToList());
+            _catVisibles = _categorias;   // los clientes ya vienen filtrados por línea de negocio
+        }
+        else
+        {
+            _categorias = (await Reports.GetServiciosConMovimientoAsync(_fDesdeAp, _fHastaAp))
+                .Where(s => !ReportService.ServiciosCabecera.Contains(s.Cod))
+                .ToList();
+            _catVisibles = FiltrarPorTipo(_categorias);
+        }
+        _dimCategorias = _dimension;
+
+        var eranTodos = antes.Count == 0 || _catSel.Count == antes.Count;
+        var vigentes = _catSel.Where(s => _catVisibles.Any(x => x.Cod == s)).ToHashSet();
+        _catSel = (cambioDim || eranTodos || vigentes.Count == 0)
+            ? _catVisibles.Select(s => s.Cod).ToHashSet()
+            : vigentes;
+
+        _catAp = _todasCategorias ? new List<string>() : _catSel.ToList();
         _estAp = _estadosSel.Count == ReportService.EstadosViaje.Count ? new List<string>() : _estadosSel.ToList();
-        _exclIntAp = !_incluirInternos;
-        // CABECERA_KM/SERV son modos de facturación (~90% del volumen), no servicios reales:
-        // se excluyen SIEMPRE del informe por servicio (su volumen se muestra en el KPI aparte).
-        _exclCabAp = true;
+        _tiposAp = _tiposSel.ToList();
+        _dimAp = _dimension;
+
+        // CABECERA_KM/SERV son modos de facturación (~90% del volumen), no servicios reales.
+        // Se excluyen mientras aplastarían el análisis — es decir, al desglosar POR SERVICIO con
+        // Turismo en juego (su volumen queda a la vista en el KPI gris). Al desglosar por CLIENTE
+        // entran, porque ahí sí informan: son los viajes de AEROLINEAS, YPF, CONUAR… Y si se pide
+        // solo Transporte de Personal, sin ellas no quedaría prácticamente nada.
+        _exclCabAp = _dimAp == ReportService.DimServicio && _tiposAp.Contains(ReportService.TipoTurismo);
+
         _detalleReservas = null;
         _servicioFocus = null;   // un nuevo conjunto de filtros descarta el foco anterior
 
-        _detalle = await Reports.GetReservasPorFechaServicioAsync(_fDesdeAp, _fHastaAp, _servAp, _estAp, _exclIntAp, _exclCabAp);
+        _detalle = await Reports.GetReservasPorFechaServicioAsync(
+            _fDesdeAp, _fHastaAp, _catAp, _estAp, _tiposAp, _exclCabAp, _dimAp);
 
         // Volumen de las cabeceras excluidas (para el KPI). Solo se consulta si están excluidas.
         if (_exclCabAp)
-            (_cabRes, _cabPax) = await Reports.GetVolumenCabecerasAsync(_fDesdeAp, _fHastaAp, _estAp, _exclIntAp);
+            (_cabRes, _cabPax) = await Reports.GetVolumenCabecerasAsync(_fDesdeAp, _fHastaAp, _estAp, _tiposAp);
         else
             (_cabRes, _cabPax) = (0, 0);
 
@@ -560,6 +728,20 @@ else
         _chartsKey = Guid.NewGuid();   // datos nuevos → remontar los charts (el key fuerza el remount)
 
         _cargando = false;
+    }
+
+    // Tipo de servicio y desglose se aplican AL INSTANTE (un clic, sin botón de por medio):
+    // eran justamente los cambios que el usuario esperaba ver reflejados solos.
+    private async Task CambiarTipos(IEnumerable<string> tipos)
+    {
+        _tiposSel = tipos.ToHashSet();
+        await Cargar();
+    }
+
+    private async Task CambiarDimension(string dimension)
+    {
+        _dimension = dimension;
+        await Cargar();
     }
 
     // Cambio de métrica: recálculo en memoria, sin nueva query. Cambia la forma de los gráficos
@@ -578,11 +760,11 @@ else
     {
         Func<ReservaFechaServicioRow, int> val = _metrica == "Pax" ? r => r.Pax : r => r.Reservas;
 
-        // ── Ranking, colores y gráficos DE SERVICIO: siempre sobre el dataset COMPLETO ──
-        // (no dependen del foco: barras/donut muestran todos los servicios para poder cambiar
-        //  de foco; el foco se expresa como resaltado, atenuando los no enfocados).
+        // ── Ranking, colores y gráficos DE LA CATEGORÍA (servicio o cliente, según el desglose):
+        // siempre sobre el dataset COMPLETO ── (no dependen del foco: barras/donut muestran todas
+        // las categorías para poder cambiar de foco; el foco se expresa atenuando las demás).
         var ranking = _detalle
-            .GroupBy(d => d.Servicio)
+            .GroupBy(d => d.Etiqueta)
             .Select(g => new { Servicio = g.Key, Valor = g.Sum(val) })
             .OrderByDescending(x => x.Valor)
             .ToList();
@@ -640,12 +822,12 @@ else
         // ── KPIs, evolución diaria y tabla: sobre el dataset CON FOCO aplicado ──
         var datos = _servicioFocus is null
             ? _detalle
-            : _detalle.Where(d => d.Servicio == _servicioFocus).ToList();
+            : _detalle.Where(d => d.Etiqueta == _servicioFocus).ToList();
 
         _totalRes = datos.Sum(d => d.Reservas);
         _totalPax = datos.Sum(d => d.Pax);
         _totalCan = datos.Sum(d => d.Canceladas);
-        _nServicios = datos.Select(d => d.Servicio).Distinct().Count();
+        _nServicios = datos.Select(d => d.Etiqueta).Distinct().Count();
         _pctCan = _totalRes > 0 ? _totalCan * 100.0 / _totalRes : 0;
 
         _serieDias = datos
@@ -657,9 +839,9 @@ else
         // La tabla mantiene TODAS las columnas de servicio (para poder cambiar de foco), pero
         // las no enfocadas se atenúan por CSS. Los valores se calculan sobre el dataset completo.
         _pivFechas = datos.Select(d => d.Fecha).Distinct().OrderBy(f => f).ToList();
-        _pivMap = _detalle.ToDictionary(d => (d.Fecha, d.Servicio), val);
+        _pivMap = _detalle.ToDictionary(d => (d.Fecha, d.Etiqueta), val);
         _pivTotFila = datos.GroupBy(d => d.Fecha).ToDictionary(g => g.Key, g => g.Sum(val));
-        _pivTotCol = _detalle.GroupBy(d => d.Servicio).ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivTotCol = _detalle.GroupBy(d => d.Etiqueta).ToDictionary(g => g.Key, g => g.Sum(val));
         _granTotal = datos.Sum(val);
 
         OrdenarPivServicios();   // orden de columnas según el selector (usa _pivTotCol)
@@ -694,7 +876,7 @@ else
     // Alfabético (A–Z) o Por total (mayor primero, desempate alfabético). Usa _pivTotCol.
     private void OrdenarPivServicios()
     {
-        var servicios = _detalle.Select(d => d.Servicio).Distinct();
+        var servicios = _detalle.Select(d => d.Etiqueta).Distinct();
         _pivServicios = _ordenColumnas == "PorTotal"
             ? servicios.OrderByDescending(s => PivTotCol(s)).ThenBy(s => s).ToList()
             : servicios.OrderBy(s => s).ToList();
@@ -782,20 +964,25 @@ else
             _cargandoDet = true;
             StateHasChanged();
             _detalleReservas = await Reports.GetReservasFechaServicioDetalleAsync(
-                _fDesdeAp, _fHastaAp, _servAp, _estAp, _exclIntAp, _exclCabAp);
+                _fDesdeAp, _fHastaAp, _catAp, _estAp, _tiposAp, _exclCabAp, _dimAp);
             _cargandoDet = false;
         }
         return _detalleReservas;
     }
 
-    private Task AbrirDetalleCelda(DateOnly f, string servicio) =>
-        AbrirDetalle(r => r.Fecha == f && r.Servicio == servicio, $"{servicio} — {FmtFecha(f)}");
+    // La categoría de una reserva del detalle según el desglose aplicado. Las expresiones SQL
+    // de Servicio/Cliente son las mismas en la vista agregada y en el detalle, así que el
+    // cruce por texto encuentra siempre las filas (ver EtiquetaServicioSql/EtiquetaClienteSql).
+    private string DimDe(ReservaFsDetalleRow r) => EsPorCliente ? r.Cliente : r.Servicio;
+
+    private Task AbrirDetalleCelda(DateOnly f, string categoria) =>
+        AbrirDetalle(r => r.Fecha == f && DimDe(r) == categoria, $"{categoria} — {FmtFecha(f)}");
 
     // El drill del total de fila respeta el foco activo: el número visible ya está filtrado
-    // al servicio enfocado, y el detalle tiene que mostrar EXACTAMENTE esas reservas.
+    // a la categoría enfocada, y el detalle tiene que mostrar EXACTAMENTE esas reservas.
     private Task AbrirDetalleDia(DateOnly f) =>
-        AbrirDetalle(r => r.Fecha == f && (_servicioFocus is null || r.Servicio == _servicioFocus),
-                     $"{_servicioFocus ?? "Todos los servicios"} — {FmtFecha(f)}");
+        AbrirDetalle(r => r.Fecha == f && (_servicioFocus is null || DimDe(r) == _servicioFocus),
+                     $"{_servicioFocus ?? $"Todos los {DimSingular}s"} — {FmtFecha(f)}");
 
     private async Task AbrirDetalle(Func<ReservaFsDetalleRow, bool> filtro, string subtitulo)
     {
@@ -822,8 +1009,8 @@ else
     private async Task DescargarExcel()
     {
         var reservas = await GetDetalleAsync();
-        var bytes = Excel.ReservasFechaServicio(_detalle, _metrica, reservas);
-        var nombre = $"reservas_{_fDesdeAp:yyyyMMdd}_{_fHastaAp:yyyyMMdd}.xlsx";
+        var bytes = Excel.ReservasFechaServicio(_detalle, _metrica, reservas, _dimAp);
+        var nombre = $"reservas_{(EsPorCliente ? "cliente" : "servicio")}_{_fDesdeAp:yyyyMMdd}_{_fHastaAp:yyyyMMdd}.xlsx";
         using var stream = new MemoryStream(bytes);
         using var streamRef = new DotNetStreamReference(stream);
         await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);

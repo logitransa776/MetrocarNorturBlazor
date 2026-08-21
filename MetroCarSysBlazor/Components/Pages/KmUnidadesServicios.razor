@@ -1,4 +1,4 @@
-@page "/km-unidades-servicios"
+﻿@page "/km-unidades-servicios"
 @using ApexCharts
 @using MudColor = MudBlazor.Color
 @using MudSize = MudBlazor.Size
@@ -19,7 +19,7 @@
         Km Unidades vs Servicios
     </MudText>
     <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
-        Metrocar Nortur · kilómetros recorridos por unidad (odómetro) vs km de servicio — km vacío y eficiencia
+        Nortur · kilómetros recorridos por unidad (odómetro) vs km de servicio — km vacío y eficiencia
     </MudText>
 </div>
 
@@ -292,7 +292,7 @@ else
                         <span class="rfs-focus__lbl">Unidad:</span>
                         <span class="rfs-focus__val" style="@($"background:{ColorUni(_uniFocus)};")">@_uniFocus</span>
                         <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
-                                       OnClick="LimpiarFocoUnidad" Title="Quitar filtro de unidad"
+                                       OnClick="LimpiarFocoUnidad" title="Quitar filtro de unidad"
                                        Style="color:#64748B; padding:2px;" />
                     </div>
                 }
@@ -302,7 +302,7 @@ else
                         <span class="rfs-focus__lbl">Tipo:</span>
                         <span class="rfs-focus__val" style="@($"background:{ColorTipo(_tipoFocus)};")">@_tipoFocus</span>
                         <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
-                                       OnClick="LimpiarFocoTipo" Title="Quitar filtro de tipo"
+                                       OnClick="LimpiarFocoTipo" title="Quitar filtro de tipo"
                                        Style="color:#64748B; padding:2px;" />
                     </div>
                 }

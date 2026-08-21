@@ -1,0 +1,142 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   Ayuda contextual de un informe (11/08/2026).
+
+   Explica la pantalla parte por parte: qué contesta, cómo se lee cada panel, de
+   dónde salen los datos y —el bloque que más importa— QUÉ NO DICE el informe.
+
+   El contenido no se escribe acá: sale de Services/InformesAyuda.cs, que es la
+   fuente única (misma idea que InformesCatalogo). Este componente solo lo pinta.
+
+   Se abre de dos maneras, las dos desde <AyudaReporte />:
+     · botón "?" del título  → arranca en el primer bloque
+     · ícono ⓘ de un panel   → arranca posicionado en el bloque de ese panel
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+@inject IJSRuntime JS
+
+<MudDialog Class="zoom-viaje-dialog ayuda-dialog ayuda-rep-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@Titulo</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (Ayuda is null)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true">
+                Todavía no se escribió la ayuda de esta pantalla.
+            </MudAlert>
+        }
+        else
+        {
+            <div class="ayuda-rep__resumen">
+                <MudIcon Icon="@Icons.Material.Filled.Lightbulb" Size="Size.Small" />
+                <span>@Ayuda.Resumen</span>
+            </div>
+
+            <div class="ayuda-rep__cuerpo">
+                @* Índice lateral: en pantallas chicas pasa arriba como fila de chips. *@
+                <nav class="ayuda-rep__nav">
+                    @foreach (var b in Ayuda.Bloques)
+                    {
+                        @* El title NO es decorativo: por debajo de 720px de alto el índice se
+                           colapsa a chips de solo ícono, y sin él no se sabe qué es cada uno. *@
+                        <button type="button" title="@b.Titulo"
+                                class="ayuda-rep__navbtn @(b.Id == _activo ? "ayuda-rep__navbtn--on" : "") @(b.Tono == AyudaTono.Limite ? "ayuda-rep__navbtn--lim" : "")"
+                                @onclick="() => Ir(b.Id)">
+                            <MudIcon Icon="@b.Icono" Size="Size.Small" />
+                            <span>@b.Titulo</span>
+                        </button>
+                    }
+                </nav>
+
+                <div class="ayuda-rep__secciones" id="ayuda-rep-scroll">
+                    @foreach (var b in Ayuda.Bloques)
+                    {
+                        <section class="ayuda-rep__sec @(b.Tono switch {
+                                     AyudaTono.Limite => "ayuda-rep__sec--lim",
+                                     AyudaTono.Datos => "ayuda-rep__sec--dat",
+                                     _ => "" })"
+                                 id="@($"ayuda-sec-{b.Id}")">
+                            <h3 class="ayuda-rep__h">
+                                <MudIcon Icon="@b.Icono" Size="Size.Small" />
+                                @b.Titulo
+                            </h3>
+
+                            @if (!string.IsNullOrWhiteSpace(b.Intro))
+                            {
+                                <p class="ayuda-rep__intro">@b.Intro</p>
+                            }
+
+                            <dl class="ayuda-rep__lista">
+                                @foreach (var it in b.Items)
+                                {
+                                    <dt>@it.Termino</dt>
+                                    <dd>@it.Explicacion</dd>
+                                }
+                            </dl>
+                        </section>
+                    }
+                </div>
+            </div>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Ruta del informe (sin barra): la clave del catálogo de ayuda.</summary>
+    [Parameter] public string Ruta { get; set; } = "";
+
+    /// <summary>Título del informe, para la barra del modal.</summary>
+    [Parameter] public string Titulo { get; set; } = "Ayuda";
+
+    /// <summary>Bloque en el que abrir. Vacío = el primero.</summary>
+    [Parameter] public string? Bloque { get; set; }
+
+    private AyudaInforme? Ayuda => InformesAyuda.De(Ruta);
+    private string _activo = "";
+
+    protected override void OnInitialized() =>
+        _activo = !string.IsNullOrWhiteSpace(Bloque) ? Bloque! : Ayuda?.Bloques.FirstOrDefault()?.Id ?? "";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Al abrir desde el ⓘ de un panel, saltar a su sección. Va en OnAfterRender porque
+        // el nodo tiene que existir en el DOM para poder scrollear hasta él.
+        if (firstRender && !string.IsNullOrWhiteSpace(_activo))
+            await ScrollA(_activo);
+    }
+
+    private async Task Ir(string id)
+    {
+        _activo = id;
+        await ScrollA(id);
+    }
+
+    private async Task ScrollA(string id)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("norturAyuda.scrollA", $"ayuda-sec-{id}");
+        }
+        catch
+        {
+            // Si el helper JS no está, el modal igual muestra todo: el salto es una comodidad,
+            // no una condición para leer la ayuda.
+        }
+    }
+
+    private void Cerrar() => MudDialog.Close();
+}

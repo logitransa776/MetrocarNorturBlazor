@@ -44,15 +44,28 @@ public class AdjuntoService
                 "La carpeta de adjuntos no está configurada en el servidor. " +
                 "Completá la ruta en appsettings.json (clave Adjuntos:BasePath) con la UNC del recurso compartido.");
 
+        return MapearRuta(rutaFoxPro, _prefijoFoxPro, _basePath, "archivo adjunto");
+    }
+
+    /// <summary>
+    /// Mapeo genérico de una ruta guardada por el FoxPro (con unidad de red mapeada, ej `O:\`)
+    /// a un archivo físico que el servidor SÍ puede leer, con validación anti path-traversal.
+    /// Compartido por los adjuntos de viaje y por el logo de la empresa
+    /// (<see cref="LogoEmpresaService"/>): las dos rutas viven en el mismo recurso compartido
+    /// y sufren el mismo problema. <paramref name="queEs"/> es el sustantivo para los mensajes
+    /// de error ("archivo adjunto", "logo de la empresa").
+    /// </summary>
+    public static Resultado MapearRuta(string rutaFoxPro, string prefijoFoxPro, string basePath, string queEs)
+    {
         var ruta = rutaFoxPro.Trim();
 
         // Reemplazo del prefijo del FoxPro por la base real. Si el prefijo configurado no
         // aparece, tomamos solo el nombre de archivo y lo colgamos de BasePath (mejor que fallar).
         string relativo;
-        if (!string.IsNullOrEmpty(_prefijoFoxPro) &&
-            ruta.StartsWith(_prefijoFoxPro, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrEmpty(prefijoFoxPro) &&
+            ruta.StartsWith(prefijoFoxPro, StringComparison.OrdinalIgnoreCase))
         {
-            relativo = ruta.Substring(_prefijoFoxPro.Length);
+            relativo = ruta.Substring(prefijoFoxPro.Length);
         }
         else
         {
@@ -68,12 +81,12 @@ public class AdjuntoService
         string baseCompleta;
         try
         {
-            baseCompleta = Path.GetFullPath(_basePath);
+            baseCompleta = Path.GetFullPath(basePath);
             fisica = Path.GetFullPath(Path.Combine(baseCompleta, relativo));
         }
         catch
         {
-            return new(false, null, null, "La ruta del archivo adjunto no es válida.");
+            return new(false, null, null, $"La ruta del {queEs} no es válida.");
         }
 
         // Anti path-traversal: el archivo resuelto DEBE quedar dentro de la carpeta base.
@@ -81,11 +94,11 @@ public class AdjuntoService
             ? baseCompleta
             : baseCompleta + Path.DirectorySeparatorChar;
         if (!fisica.StartsWith(baseConSep, StringComparison.OrdinalIgnoreCase))
-            return new(false, null, null, "La ruta del archivo adjunto está fuera de la carpeta permitida.");
+            return new(false, null, null, $"La ruta del {queEs} está fuera de la carpeta permitida.");
 
         if (!File.Exists(fisica))
             return new(false, null, null,
-                $"No se encontró el archivo adjunto en el servidor.\nRuta original: {rutaFoxPro}");
+                $"No se encontró el {queEs} en el servidor.\nRuta original: {rutaFoxPro}");
 
         return new(true, fisica, Path.GetFileName(fisica), null);
     }

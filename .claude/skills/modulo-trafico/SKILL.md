@@ -13,6 +13,9 @@ asigna unidades/choferes. Es el módulo más usado y el primero en migración.
 | Tabla | Rol | Detalle |
 | --- | --- | --- |
 | `viaje` | un servicio/reserva (512K filas) | columnas truncadas: `cronogram2` (=U/Pr), `cronograma` (=U/Cb), `id_vehicu2`, `nombre_gui` |
+| `viaje_log_chofer` | bitácora de LOGONEO/DESLOGONEO | ⛔ **NO replicada en SQL** (75.001 filas en el DBF). Cols: `id_chofer, franco, id_vehicul, interno, fecha, zona, usuario, hora, operacion, tipo_chofe`. Replicar antes del día D |
+| `adicional_stock` | stock de adicionales entregado a la unidad | tiene `interno` propio. ≠ `viaje_adicional` (facturables). Vivo: 1.768 mov. en 2026 |
+| `taller_service` (+`_item`) | órdenes de trabajo del taller | ⚠️ circuito **muerto desde 2021**. `fecha_ini` con fechas corruptas → ordenar por `d_create` |
 | `vehiculo` | **estado VIVO de cada unidad** | `estado`, `id_viaje`, `pax`, `hs_inicio`, `id_chofer`, `id_chofer2` se PISAN en cada asignación |
 | `chofer_franco` | francos por chofer y fecha (71k filas) | `codigo`, `fecha`, `motivo`, `trabajo`. **Baja física**. ✅ solo lectura + andamiaje ABM (`/francos`) |
 | `cabecera` | catálogo de cabeceras/recorridos (187 filas) | `codigo`, `nombre`, `nombre1`, `nombre2`, `recorrido`. **Baja física**. ✅ solo lectura + andamiaje ABM (`/cabeceras-recorridos`) |
@@ -89,6 +92,7 @@ botones Empresa/Turismo/Nortur de arriba). Reglas ya decididas — no re-litigar
 | Zoom del Viaje (solo lectura) | `Components/Shared/ZoomViajeDialog.razor` |
 | **Historial del viaje** (bitácora `viaje_log` + auditoría, solo lectura) | `Components/Shared/HistorialViajeDialog.razor` (+ `TextoZoomDialog.razor` = el "Zoon Motivo") · doc: `docs/PlanoFoxPro/trafico/TRAFICO_HISTORIAL.md` |
 | **Novedad sobre el viaje** (libro de novedades del viaje, solo lectura) | `Components/Shared/NovedadViajeDialog.razor` · `GetNovedadesViajeAsync` · tabla `libro_novedad` · doc: `TRAFICO2_FILTROS.md` |
+| **Libro de novedades** (novedades SUELTAS, sin reserva — botón de la franja de KPIs, al lado de Ocupación) | mismo `NovedadViajeDialog` con `IdViaje = 0` (últimos 7 días) · `AbrirNovedadSuelta()` en `PlanillaTrafico.razor` · doc: `trafico/TRAFICO_F2_NOVEDADES.md` |
 | **Lista de pasajeros** (planilla CNRT del viaje, solo lectura) | `Components/Shared/ListaPasajerosDialog.razor` · `GetPasajerosViajeAsync` · tablas `viaje_pasajero`/`viaje_pasajero_detalle` · doc: `TRAFICO2_FILTROS.md` |
 | **Menú contextual completo "Ver Datos Extras"** (los 7 ítems del popup `verdatosex`) | ver tabla abajo |
 | Export Excel (planilla, cancelados, historial) | `ExcelExportService` |
@@ -101,6 +105,58 @@ botones Empresa/Turismo/Nortur de arriba). Reglas ya decididas — no re-litigar
 | **Guardia** (ABM `viaje_guardia`, solo lectura + andamiaje) | `Guardias.razor` (`/guardias`) + `GuardiaEditorDialog` · baja física · doc: ídem |
 | **Contactos y Proveedores** (`estacion` + `estacion_rubro`) | `Contactos.razor` (`/contactos`) + `ContactoEditorDialog` · `RubrosContacto.razor` (`/rubros-contacto`) · **compartido con Combustible** · baja física · doc: ídem |
 | **Lista de pasajeros** (buscador de viaje → dialog existente) | `ListaPasajeros.razor` (`/lista-pasajeros`) reusa `ListaPasajerosDialog` · `GetViajesParaBuscadorAsync` |
+| **Menú contextual del panel BUSES** (16 acciones + 4 en Ver Datos Extras) | `PlanillaTrafico.razor` (`_menuBus`/`_busCtx`) — ver tabla abajo · doc: `trafico/TRAFICO_BUSES_MENU.md` |
+| **Libro de Novedades** (la LISTA del libro: 48.617 filas, filtros + buscador + Excel) | `LibroNovedades.razor` (`/libro-novedades`, **entra al hub /informes**) + `NovedadEditorDialog` · modificar (solo mensaje) y eliminar (baja FÍSICA) con andamiaje · doc: `trafico/LIBRO_NOVEDADES.md` |
+| **Envío de correos** (batch a la lista interna: bloques Novedades y Siniestros) | `EnvioCorreos.razor` (`/envio-correos`) + `CorreoNovedadesService` · 🔒 `EnvioCorreosActivo` = previsualiza pero NO manda · Combustible y Taller sin migrar · doc: ídem |
+| **Correos Electrónicos Parámetros** (ABM de los 12 destinatarios internos) | `CorreosDestinatarios.razor` (`/correos-destinatarios`) + `DestinatarioCorreoEditorDialog` · PK lógica `contacto`, baja física, truncado `combustibl` · doc: ídem |
+
+### Menú del panel BUSES — clic derecho sobre una UNIDAD (04/08/2026)
+
+`Grid2.RightClick → menu_viaje_vehiculo.mpr`. **Es un menú DISTINTO al de la grilla de viajes**
+(`menu_viaje_reserva.mpr`): opera sobre `vehiculo`, no sobre `viaje`, y tiene su propio popup
+`verdatosex` de 4 ítems. Todo migrado **solo lectura + andamiaje**.
+
+| Ítem FoxPro | Buslink | Estado |
+| --- | --- | --- |
+| Ubicar en GPS | usa `vehiculo.cronograma` (ya es `NT0042`) → `GpsMapaDialog` | ✅ |
+| Refresh | `InvalidarCacheTrafico` + recarga del panel | ✅ |
+| Novedad sobre la unidad | `NovedadViajeDialog` **en modo unidad** (`Interno > 0`) | ✅ + andamiaje alta |
+| Carga de combustible | reusa `CargasUnidadDialog` (Δkm y l/100km por tramo), 3 meses | ✅ |
+| Adicional al servicio | `AdicionalStockUnidadDialog` · `GetAdicionalStockUnidadAsync` | ✅ |
+| Orden de trabajo | `OrdenesTrabajoUnidadDialog` · `GetOrdenesTrabajoUnidadAsync` | ✅ historial |
+| Logonear / DesLogonear (1º y 2º) | `LogoneoDialog` (4 modos) · `LogonearAsync`/`DeslogonearAsync` | 🔒 `LogoneoAbmActivo` |
+| Viático (1º y 2º) | navega a `/viaticos?chofer=XXX` (query param nuevo) | ✅ |
+| Toma Franco | `TomaFrancoDialog` · `TomarFrancoAsync` (reusa `AltaFrancosAsync`) | 🔒 `TomaFrancoActivo` |
+| Ir al Viaje | selecciona la fila (`IrAFila`); si no está, filtra por Nº reserva / ruta | ✅ |
+| Liberar unidad | `LiberarUnidadDialog` · `LiberarUnidadAsync` | 🔒 `LiberarUnidadActivo` |
+| VDE · Logoneo/Deslogoneo | **deshabilitado** — falta replicar `viaje_log_chofer` | ⛔ |
+| VDE · Vehículo / Chofer | `VehiculoDetalleDialog` / `ChoferDetalleDialog` (ya existían) | ✅ |
+| VDE · Tarjetas | `TarjetasUnidadDialog` · `GetTarjetasUnidadAsync` | ✅ |
+
+**Trampas de este lote (no re-descubrir):**
+
+- ⛔ **`viaje_log_chofer` NO está replicada en SQL** — 75.001 filas en el DBF. Es la bitácora de
+  logoneo: sin ella, el ítem "Ver Datos Extras → Logoneo/Deslogoneo" no se puede migrar, y al
+  encender `LogoneoAbmActivo` el UPDATE de `vehiculo` grabaría **sin auditoría**.
+  `LogChoferAsync` chequea `sys.tables` y devuelve un aviso en vez de romper.
+  **Pendiente del cliente: sumarla a la réplica antes del día D.**
+- 🔴 **`libro_novedad` no tiene columna `interno`**: la novedad de unidad guarda el interno como
+  TEXTO en `asunto` (`"int: N dom: XXX chof:YYY"`) con `id_viaje = 0` (el `-1` del FoxPro no
+  llega a la base). El filtro es `asunto LIKE 'int: N %'` — **el espacio final es obligatorio**,
+  si no el interno 3 trae también 32 y 300.
+- 🔴 **"Liberar unidad: pasa a Sin Asignar" NO toca `viaje`**: todo ese bloque está comentado
+  (`*!*`) en `trafico_vehiculo_libera.scx`. Solo hace `UPDATE vehiculo`. Se replicó fiel y el
+  diálogo aclara que el servicio no cambia de estado.
+- ⚠️ **El circuito de Órdenes de Trabajo murió en 2021** (`taller_service` por año de `d_create`:
+  2019→2.544, 2020→1.020, **2021→2, después nada**). Solo se migró la consulta del historial.
+  Se busca por **dominio**, no por interno, y se ordena por `d_create` (`fecha_ini` tiene fechas
+  corruptas, MAX = año 2169).
+- ⚠️ **54 internos están repetidos entre fleteros** en la flota activa → el interno solo no
+  identifica una unidad. El dominio sí.
+- El combo de choferes para logonear tiene una regla no obvia: **solo del mismo fletero Y que no
+  estén logoneados en ninguna otra unidad** (ni como 1º ni como 2º) — `GetChoferesParaLogonearAsync`.
+- `controla_vencimiento()` existe en `trafico2.scx` pero **el menú de Buses NO lo llama**. En
+  Buslink se muestra como advertencia informativa en el diálogo de logoneo (`GetVencimientosUnidadAsync`).
 
 > **07/07/2026 — Voucher · Guardia · Contactos · Lista de pasajeros** migrados solo lectura +
 > andamiaje ABM: los 4 ítems restantes del menú Tráfico (ya no quedan placeholders). Flags nuevos
@@ -237,6 +293,12 @@ navegador re-pintaba toda la tabla detrás → 6-7s en máquinas modestas.
   de la toolbar**: Chequeo, Asig U/P, Otra Unidad, Reas, Libe, Frc — SQL exacto, validaciones,
   forms `trafico_asigna`/`trafico_reasigna`/`trafico_liberar`/`chofer_franco*`. **Leer ANTES
   de codear cualquier operación de despacho.**
+- **`docs/PlanoFoxPro/trafico/LIBRO_NOVEDADES.md`** (19/08/2026) — el submenú **Libro de
+  Novedades** completo: la lista, el **envío de correos** a la lista interna (formato exacto de
+  los dos cuerpos) y el ABM de destinatarios. Trampas: `f_envio` se estampa aunque el envío
+  falle (**no prueba que el correo llegó**), el INNER JOIN a `chofer` esconde siniestros para
+  siempre, hay DOS botones "Eliminar" y solo el de la lista funciona, y las dos tablas hacen
+  baja FÍSICA. Ninguna es del circuito `viaje` → podrían cortar antes del día D.
 - **`docs/PlanoFoxPro/trafico/GPS_XLM.md`** (02/07/2026) — la integración GPS (`gps_xlm()` en
   `procesos.prg`, llamada en ASIGNO/RE-ASIGNO/FINALIZO/CANCELO/armar plantillas): 2 vías
   (XML file-drop + SQL Server externo, tabla `Servicios`). **Hoy es NO-OP** —

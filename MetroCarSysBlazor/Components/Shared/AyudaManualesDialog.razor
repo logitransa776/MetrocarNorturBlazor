@@ -1,0 +1,104 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   Ayuda → Descarga de manuales (07/08/2026).
+
+   No hay lista hardcodeada: el dialog LEE la carpeta wwwroot/manuales del servidor.
+   Publicar un manual nuevo = copiar el PDF ahí (o subirlo con el deploy) y aparece
+   solo, con su tamaño y su fecha. Así el cliente no depende de nosotros para
+   actualizar un manual.
+
+   Convención de nombre de archivo (opcional, para que la lista quede ordenada y
+   legible):  "01 - Planilla de Tráfico.pdf"  →  se muestra "Planilla de Tráfico".
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+@inject IWebHostEnvironment Env
+
+<MudDialog Class="zoom-viaje-dialog ayuda-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.MenuBook" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Manuales de Buslink</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_manuales.Count == 0)
+        {
+            <div class="ayuda-vacio">
+                <MudIcon Icon="@Icons.Material.Outlined.FolderOff" Size="Size.Large" Style="opacity:.35;" />
+                <p>Todavía no hay manuales publicados.</p>
+                <p class="ayuda-vacio__hint">
+                    Se publican copiando los PDF en la carpeta <code>wwwroot\manuales</code> del servidor.
+                </p>
+            </div>
+        }
+        else
+        {
+            <div class="ayuda-intro">Se abren en una pestaña nueva; desde ahí se descargan o imprimen.</div>
+
+            <div class="ayuda-docs">
+                @foreach (var m in _manuales)
+                {
+                    <a class="ayuda-doc" href="@m.Url" target="_blank" rel="noopener noreferrer">
+                        <MudIcon Icon="@Icons.Material.Filled.PictureAsPdf" Class="ayuda-doc__ico" />
+                        <div class="ayuda-doc__txt">
+                            <span class="ayuda-doc__tit">@m.Titulo</span>
+                            <span class="ayuda-doc__meta">@m.Tamano · actualizado @m.Fecha</span>
+                        </div>
+                        <MudIcon Icon="@Icons.Material.Filled.Download" Size="Size.Small" Class="ayuda-doc__dl" />
+                    </a>
+                }
+            </div>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private record Manual(string Titulo, string Url, string Tamano, string Fecha);
+
+    private List<Manual> _manuales = new();
+
+    private void Cerrar() => MudDialog.Close();
+
+    protected override void OnInitialized()
+    {
+        var carpeta = Path.Combine(Env.WebRootPath ?? "", "manuales");
+        if (!Directory.Exists(carpeta)) return;
+
+        _manuales = Directory.EnumerateFiles(carpeta, "*.pdf")
+            .Select(ruta => new FileInfo(ruta))
+            .OrderBy(fi => fi.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(fi => new Manual(
+                Titulo: Titulo(fi.Name),
+                Url: $"manuales/{Uri.EscapeDataString(fi.Name)}",
+                Tamano: Tamano(fi.Length),
+                Fecha: fi.LastWriteTime.ToString("dd/MM/yyyy")))
+            .ToList();
+    }
+
+    // "01 - Planilla de Tráfico.pdf" → "Planilla de Tráfico". El prefijo numérico solo
+    // sirve para ordenar la carpeta; no tiene por qué verse en pantalla.
+    private static string Titulo(string archivo)
+    {
+        var nombre = Path.GetFileNameWithoutExtension(archivo);
+        var guion = nombre.IndexOf(" - ", StringComparison.Ordinal);
+        if (guion > 0 && nombre[..guion].Trim().All(char.IsDigit))
+            nombre = nombre[(guion + 3)..];
+        return nombre.Trim();
+    }
+
+    private static string Tamano(long bytes) =>
+        bytes >= 1024 * 1024
+            ? $"{bytes / 1024d / 1024d:0.#} MB"
+            : $"{Math.Max(1, bytes / 1024)} KB";
+}

@@ -1,0 +1,286 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   /ayuda — la AYUDA ONLINE de Buslink (07/08/2026).
+
+   Decisión del usuario: la ayuda vive DENTRO de la app, no en un sitio externo.
+   Razón práctica: las PCs de la mesa de tráfico trabajan en la LAN de NORTUR; una
+   ayuda alojada afuera sería justamente la que no abre el día que hace falta.
+
+   Se llega desde el botón «Ayuda» de la barra superior y con F1 en la Planilla de
+   Tráfico. Abre en pestaña nueva, así el operador no pierde la planilla.
+
+   Layout vacío a propósito: es un documento, no una pantalla del sistema — tiene su
+   propio índice lateral y su buscador. Para agregar contenido: sumar registros a la
+   lista `Secciones` (el índice y el buscador se arman solos).
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+@page "/ayuda"
+@layout EmptyLayout
+@inject NavigationManager Nav
+
+<PageTitle>Ayuda · Buslink</PageTitle>
+
+<div class="doc">
+
+    <header class="doc__top">
+        <div class="doc__marca">
+            <img src="images/buslink_icon_e.png" alt="BUS LINK" />
+            <div>
+                <div class="doc__marca-nombre">BUS LINK</div>
+                <div class="doc__marca-sub">Manual del sistema</div>
+            </div>
+        </div>
+
+        <div class="doc__buscador">
+            <MudIcon Icon="@Icons.Material.Filled.Search" Size="Size.Small" />
+            <input type="search" placeholder="Buscar en la ayuda… (ej: cancelar, fletero, Excel)"
+                   value="@_busca" @oninput="OnBuscar" autocomplete="off" />
+            @if (!string.IsNullOrWhiteSpace(_busca))
+            {
+                <button type="button" class="doc__buscador-x" @onclick="LimpiarBusqueda" title="Limpiar">✕</button>
+            }
+        </div>
+
+        <a class="doc__volver" href="/" title="Volver al sistema">
+            <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small" />
+            <span>Volver al sistema</span>
+        </a>
+    </header>
+
+    <div class="doc__body">
+
+        <nav class="doc__indice">
+            @foreach (var modulo in Modulos)
+            {
+                var secs = Filtradas.Where(s => s.Modulo == modulo).ToList();
+                if (secs.Count == 0) continue;
+
+                <div class="doc__indice-mod">@modulo</div>
+                @foreach (var s in secs)
+                {
+                    <a class="doc__indice-link" href="@($"#{s.Ancla}")">@s.Titulo</a>
+                }
+            }
+        </nav>
+
+        <main class="doc__contenido">
+            @if (Filtradas.Count == 0)
+            {
+                <div class="doc__vacio">
+                    <MudIcon Icon="@Icons.Material.Outlined.SearchOff" Size="Size.Large" Style="opacity:.35;" />
+                    <p>No hay nada con «@_busca».</p>
+                    <p class="doc__vacio-hint">Probá con una palabra sola: <em>fletero</em>, <em>cancelar</em>, <em>Excel</em>, <em>permiso</em>.</p>
+                </div>
+            }
+            else
+            {
+                @foreach (var modulo in Modulos)
+                {
+                    var secs = Filtradas.Where(s => s.Modulo == modulo).ToList();
+                    if (secs.Count == 0) continue;
+
+                    <h2 class="doc__mod">@modulo</h2>
+
+                    @foreach (var s in secs)
+                    {
+                        <section class="doc__sec" id="@s.Ancla">
+                            <h3 class="doc__sec-tit">@s.Titulo</h3>
+                            @foreach (var p in s.Parrafos)
+                            {
+                                <p class="doc__p">@p</p>
+                            }
+                            @if (s.Puntos.Length > 0)
+                            {
+                                <ul class="doc__ul">
+                                    @foreach (var pt in s.Puntos)
+                                    {
+                                        <li>@pt</li>
+                                    }
+                                </ul>
+                            }
+                        </section>
+                    }
+                }
+            }
+
+            <footer class="doc__pie">
+                ¿Falta algo acá? Anotalo y lo sumamos: esta ayuda se actualiza junto con el sistema.
+            </footer>
+        </main>
+    </div>
+</div>
+
+@code {
+    private string _busca = "";
+
+    private void OnBuscar(ChangeEventArgs e) => _busca = e.Value?.ToString() ?? "";
+    private void LimpiarBusqueda() => _busca = "";
+
+    private record Seccion(string Modulo, string Titulo, string[] Parrafos, string[] Puntos)
+    {
+        /// <summary>Ancla del índice — el título sin acentos ni espacios.</summary>
+        public string Ancla => new string(Titulo.ToLowerInvariant()
+            .Replace('á', 'a').Replace('é', 'e').Replace('í', 'i').Replace('ó', 'o').Replace('ú', 'u')
+            .Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray());
+
+        public bool Coincide(string q) =>
+            Titulo.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || Modulo.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || Parrafos.Any(p => p.Contains(q, StringComparison.OrdinalIgnoreCase))
+            || Puntos.Any(p => p.Contains(q, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private List<Seccion> Filtradas =>
+        string.IsNullOrWhiteSpace(_busca)
+            ? Secciones
+            : Secciones.Where(s => s.Coincide(_busca.Trim())).ToList();
+
+    private static string[] Modulos => Secciones.Select(s => s.Modulo).Distinct().ToArray();
+
+    // ── El contenido ──────────────────────────────────────────────────────────────
+    // Escrito con las palabras de la operación, no con las de la base de datos.
+    // Regla al sumar una sección: contar QUÉ SE VE y QUÉ SE HACE, no cómo está hecho.
+    private static readonly List<Seccion> Secciones = new()
+    {
+        new("Primeros pasos", "Cómo entrar y qué ves al entrar",
+            new[]
+            {
+                "Se entra con el mismo usuario y contraseña del Metrocar. Lo que cada uno puede ver depende de sus permisos: si un módulo no aparece en el menú, es porque ese usuario no lo tiene habilitado.",
+            },
+            new[]
+            {
+                "Menú lateral (☰ arriba a la izquierda): todos los módulos, agrupados. Arranca cerrado; se toca una sección para abrirla.",
+                "Barra de alertas: avisa los vencimientos de la flota (VTV, matafuegos, registro, CNRT, AEP). Solo la ven los usuarios con el módulo Vehículos.",
+                "Reloj de la barra: es la hora del SERVIDOR, que es la que usa el sistema para los avisos.",
+                "Botón Ayuda: esta ayuda, los manuales en PDF, los atajos de teclado y los datos de soporte.",
+            }),
+
+        new("Primeros pasos", "Buscar, filtrar y exportar en cualquier pantalla",
+            new[]
+            {
+                "Casi todas las pantallas comparten la misma barra: los filtros a la izquierda y, juntos a la derecha, los botones Filtro, Actualizar y Excel.",
+            },
+            new[]
+            {
+                "Filtro aplica lo que cargaste; Actualizar vuelve a traer los datos del servidor (las pantallas ya se refrescan solas cada tanto).",
+                "Excel baja lo que estás viendo, con los filtros puestos. En los informes analíticos baja varias hojas: resumen, detalle y lo que esté en pantalla.",
+                "Las unidades se escriben siempre con el formato NT0049 (flota propia) o TT0012 (fletero).",
+            }),
+
+        new("Tráfico", "La Planilla de Tráfico",
+            new[]
+            {
+                "Es la pantalla de la mesa: los servicios del día, en el mismo orden que los mostraba el Metrocar (por hora de inicio y, a igual hora, por orden de carga).",
+            },
+            new[]
+            {
+                "El color de la fila es el estado: sin asignar, asignado, en curso, chequeado, finalizado, facturado o cancelado.",
+                "La leyenda del pie no es solo un cartel: tocando un estado la grilla se filtra por ese estado, y los clics se acumulan (otro clic lo saca).",
+                "Los botones Empresa, Turismo y Nortur son tres categorías de servicios que se pueden mostrar u ocultar; el contador de cada una dice cuántos hay.",
+                "Doble clic (o Enter) sobre una fila abre el Zoom del Viaje con la ficha completa de la reserva.",
+                "Clic derecho sobre una fila abre el menú con todo lo que se le puede hacer al servicio, con el atajo escrito al costado.",
+            }),
+
+        new("Tráfico", "Cambiar la unidad prevista (F6 a F9)",
+            new[]
+            {
+                "Es lo que más se hace en el día: decir con qué unidad se va a cubrir cada servicio. Se puede desde el teclado o desde el menú del clic derecho.",
+            },
+            new[]
+            {
+                "F9 — pasa el servicio a una unidad de la flota propia (queda NT0049).",
+                "F8 — pasa el servicio a un fletero: se elige la empresa y el interno (queda TT0012).",
+                "F7 — lo marca como cubierto por la empresa, sin decir todavía qué unidad.",
+                "F6 — lo deja sin unidad (S/C), para cuando se cayó la que iba a cubrirlo.",
+                "Ctrl+F8 — vuelve a la unidad que había planificado el diagramador.",
+                "Atajo del Metrocar: tipear directamente el número de interno sobre la grilla abre el cambio de unidad ya posicionado.",
+                "Ojo: cambiar la unidad prevista NO asigna chofer ni saca la unidad a la calle. Eso es la asignación.",
+            }),
+
+        new("Tráfico", "Novedades y avisos (F2 y F4)",
+            new[]
+            {
+                "Son las dos formas de dejar constancia de algo sobre un servicio.",
+            },
+            new[]
+            {
+                "F2 — carga una novedad en el libro de guardia colgada de la reserva sobre la que estás parado. Para una novedad suelta (sin reserva) usá el botón «Libro de novedades» de la franja de arriba, al lado de Ocupación.",
+                "F4 — fija a qué hora querés que el sistema te avise por ese servicio. Sin esto, los avisos salen solos unos minutos antes de la salida.",
+                "Los avisos solo los ve el usuario con el permiso de avisos de chequeo; si no tenés el botón, es por eso.",
+            }),
+
+        new("Tráfico", "El panel de Buses y la ocupación de la flota",
+            new[]
+            {
+                "El panel Buses muestra el estado de cada unidad; con el clic derecho sobre una unidad se llega a sus datos, sus cargas, sus órdenes de trabajo, el logoneo y la liberación.",
+                "El botón Ocupación abre una línea de tiempo del día: qué hace cada unidad, dónde quedan los huecos y qué servicios se solapan.",
+                "El botón Libro de novedades, al lado de Ocupación, abre las novedades sueltas de los últimos 7 días y permite cargar una nueva sin salir de la planilla.",
+            },
+            Array.Empty<string>()),
+
+        new("Tráfico", "Teclas de la planilla",
+            new[]
+            {
+                "Con el cursor sobre la grilla:",
+            },
+            new[]
+            {
+                "F1 — abre esta ayuda. Ctrl+F1 — la lista de atajos con la explicación de cada tecla.",
+                "F2 — novedad · F3 — actualizar ahora · F4 — hora de aviso.",
+                "F5 — cambiar el rango de fechas (solo diagramadores).",
+                "F6, F7, F8, F9 y Ctrl+F8 — cambio de la unidad prevista.",
+                "Flechas, Inicio y Fin mueven la fila activa; Enter abre el Zoom.",
+            }),
+
+        new("Reservas", "Cargar y armar reservas",
+            new[]
+            {
+                "Reservas Especiales es la carga manual de una reserva. Las plantillas sirven para los servicios que se repiten: se define una vez y después se arma el período que haga falta.",
+            },
+            new[]
+            {
+                "El armado muestra primero una vista previa de lo que va a generar, antes de confirmar.",
+                "Los catálogos del módulo (operadores, grupos, destinos) se administran desde el mismo menú.",
+                "Los grupos no se dan de alta acá: nacen cuando se carga la reserva.",
+            }),
+
+        new("Informes", "Cómo se leen los tableros",
+            new[]
+            {
+                "Los informes analíticos tienen todos la misma forma: filtros arriba, números grandes (KPI), gráficos y una tabla que se puede abrir en detalle.",
+            },
+            new[]
+            {
+                "Cross-filter: al hacer clic en una categoría de un gráfico, TODO el tablero se enfoca en esa categoría. Otro clic lo suelta. Es instantáneo, no vuelve a consultar la base.",
+                "Con dos dimensiones (por ejemplo servicio y banda horaria) los focos se combinan: quedan solo los datos que cumplen las dos condiciones.",
+                "En Reservas por cliente se puede comparar contra el mes anterior, contra N meses atrás o contra el año pasado, con la variación y una mini tendencia.",
+                "Un detalle a tener en cuenta: CABECERA_KM y CABECERA_SERV no son servicios reales, son modos de facturación; por eso no se listan como servicios.",
+            }),
+
+        new("Otros módulos", "Facturación, Combustible, Vehículos y Choferes",
+            new[]
+            {
+                "Estos módulos ya se pueden consultar completos desde Buslink: liquidaciones y tarifas, consumos y conciliación de combustible, y la flota con sus choferes, odómetros, siniestros y vencimientos.",
+                "La carga y modificación de datos se va habilitando módulo por módulo, a medida que cada tabla pasa a ser administrada por Buslink. Mientras tanto, esos datos se siguen cargando en el Metrocar.",
+            },
+            Array.Empty<string>()),
+
+        new("Otros módulos", "Usuarios y permisos",
+            new[]
+            {
+                "Desde Sistema → Usuarios y Permisos se dan de alta los usuarios y se marca a qué módulos entra cada uno.",
+                "Los permisos definen qué ve cada usuario: los módulos del menú, si puede ver precios, si diagrama o solo ajusta, y si recibe los avisos de chequeo.",
+            },
+            Array.Empty<string>()),
+
+        new("Problemas frecuentes", "Qué mirar cuando algo no sale",
+            Array.Empty<string>(),
+            new[]
+            {
+                "No veo un módulo en el menú: es un permiso del usuario, no una falla. Se revisa en Usuarios y Permisos.",
+                "No se abrió la ayuda / el GPS / el manual: el navegador bloqueó la pestaña nueva. Hay que permitir los pop-ups de Buslink.",
+                "Una pantalla muestra datos viejos: tocá Actualizar. Las pantallas guardan los datos unos minutos para responder rápido.",
+                "Un dato no coincide con el Metrocar: si es un dato que todavía se carga en el Metrocar, puede tardar en llegar a Buslink por la replicación.",
+                "Si algo se rompe, abrí Ayuda → Acerca de Buslink y tocá «Copiar datos»: eso es lo primero que le sirve a soporte.",
+            }),
+    };
+}

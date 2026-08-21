@@ -12,18 +12,26 @@ public class ExcelExportService
     /// <summary>
     /// Genera el Excel del informe Reservas por fecha y servicio.
     /// </summary>
+    /// <param name="dimension">
+    /// Cómo está desglosado el informe: "Servicio" (default) o "Cliente". Solo cambia los
+    /// títulos de las columnas — las filas ya vienen agrupadas por esa dimensión.
+    /// </param>
     public byte[] ReservasFechaServicio(
         IReadOnlyList<ReservaFechaServicioRow> detalle,
         string metrica /* "Reservas" | "Pax" */,
-        IReadOnlyList<ReservaFsDetalleRow>? reservas = null)
+        IReadOnlyList<ReservaFsDetalleRow>? reservas = null,
+        string dimension = ReportService.DimServicio)
     {
         using var wb = new XLWorkbook();
+        var esCliente = dimension == ReportService.DimCliente;
+        var tituloDim = esCliente ? "Cliente" : "Servicio";
+        var tituloCod = esCliente ? "Cod. cliente" : "Cod. servicio";
 
-        // --- Hoja 1: Detalle (fila por fecha+servicio) -----------------------
+        // --- Hoja 1: Detalle (fila por fecha + categoría del desglose) -------
         var wsDet = wb.Worksheets.Add("Detalle");
         wsDet.Cell(1, 1).Value = "Fecha";
-        wsDet.Cell(1, 2).Value = "Cod. servicio";
-        wsDet.Cell(1, 3).Value = "Servicio";
+        wsDet.Cell(1, 2).Value = tituloCod;
+        wsDet.Cell(1, 3).Value = tituloDim;
         wsDet.Cell(1, 4).Value = "Reservas";
         wsDet.Cell(1, 5).Value = "Canceladas";
         wsDet.Cell(1, 6).Value = "Pax";
@@ -32,8 +40,8 @@ public class ExcelExportService
         {
             wsDet.Cell(rDet, 1).Value = d.Fecha.ToDateTime(TimeOnly.MinValue);
             wsDet.Cell(rDet, 1).Style.DateFormat.Format = "dd/mm/yyyy";
-            wsDet.Cell(rDet, 2).Value = d.CodServicio;
-            wsDet.Cell(rDet, 3).Value = d.Servicio;
+            wsDet.Cell(rDet, 2).Value = d.Cod;
+            wsDet.Cell(rDet, 3).Value = d.Etiqueta;
             wsDet.Cell(rDet, 4).Value = d.Reservas;
             wsDet.Cell(rDet, 5).Value = d.Canceladas;
             wsDet.Cell(rDet, 6).Value = d.Pax;
@@ -42,12 +50,12 @@ public class ExcelExportService
         wsDet.Row(1).Style.Font.Bold = true;
         wsDet.Columns().AdjustToContents();
 
-        // --- Hoja 2: Pivote fecha x servicio (valor = métrica elegida) -------
+        // --- Hoja 2: Pivote fecha x categoría (valor = métrica elegida) ------
         var wsPiv = wb.Worksheets.Add("Pivote");
         var fechas = detalle.Select(d => d.Fecha).Distinct().OrderBy(f => f).ToList();
-        var servicios = detalle.Select(d => d.Servicio).Distinct().OrderBy(s => s).ToList();
+        var servicios = detalle.Select(d => d.Etiqueta).Distinct().OrderBy(s => s).ToList();
         Func<ReservaFechaServicioRow, int> val = metrica == "Pax" ? r => r.Pax : r => r.Reservas;
-        var mapa = detalle.ToDictionary(d => (d.Fecha, d.Servicio), val);
+        var mapa = detalle.ToDictionary(d => (d.Fecha, d.Etiqueta), val);
 
         wsPiv.Cell(1, 1).Value = "Fecha";
         for (var c = 0; c < servicios.Count; c++)
@@ -71,14 +79,14 @@ public class ExcelExportService
         wsPiv.Column(servicios.Count + 2).Style.Font.Bold = true;
         wsPiv.Columns().AdjustToContents();
 
-        // --- Hoja 3: Ranking por servicio ------------------------------------
+        // --- Hoja 3: Ranking por categoría del desglose -----------------------
         var wsRk = wb.Worksheets.Add("Ranking");
-        wsRk.Cell(1, 1).Value = "Servicio";
+        wsRk.Cell(1, 1).Value = tituloDim;
         wsRk.Cell(1, 2).Value = "Reservas";
         wsRk.Cell(1, 3).Value = "Pax";
         wsRk.Cell(1, 4).Value = "Canceladas";
         var ranking = detalle
-            .GroupBy(d => d.Servicio)
+            .GroupBy(d => d.Etiqueta)
             .Select(g => new
             {
                 Servicio = g.Key,
@@ -149,11 +157,18 @@ public class ExcelExportService
         using var wb = new XLWorkbook();
         var ws = wb.Worksheets.Add("Planilla");
 
+        // El orden ESPEJA el de la grilla de Tráfico (colgroup/thead de PlanillaTrafico.razor
+        // + celdas de TraficoFilaRow.razor). 03/08/2026: Comentario se movió entre Fletero y
+        // Chofer en pantalla y acá también, para que lo exportado se lea igual que lo visto.
+        // 18/08/2026: Ag pasó a ser la última columna de datos, mismo criterio. (Estado va al
+        // final del Excel porque en pantalla va PRIMERO como chip de color, que acá no existe.)
+        // 20/08/2026: Adj se fue al final y "Nro. Reserva" ocupó su lugar, también igual que
+        // la pantalla. Ojo: "Reserva" (col.1) es la FECHA; "Nro. Reserva" es el id del viaje.
         string[] headers =
         {
             "Reserva","H.Pre","H.Ini","H.Fin","H.Avi","H.Cie","U/Pr","U/Cb","U/As",
-            "Chq","Ag","Recorrido","Fletero","Chofer","Veh","Cliente","Pax","Agua",
-            "Adj","Comentario","Grupo","Vuelo","Guia","Estado"
+            "Chq","Recorrido","Fletero","Comentario","Chofer","Veh","Cliente","Pax","Agua",
+            "Nro. Reserva","Grupo","Vuelo","Guia","Ag","Adj","Estado"
         };
         for (var c = 0; c < headers.Length; c++)
             ws.Cell(1, c + 1).Value = headers[c];
@@ -172,20 +187,21 @@ public class ExcelExportService
             ws.Cell(r, 8).Value = f.UCb;
             ws.Cell(r, 9).Value = f.UAs;
             ws.Cell(r, 10).Value = f.Chq;
-            ws.Cell(r, 11).Value = f.Ag;
-            ws.Cell(r, 12).Value = f.Recorrido;
-            ws.Cell(r, 13).Value = f.Fletero;
+            ws.Cell(r, 11).Value = f.Recorrido;
+            ws.Cell(r, 12).Value = f.Fletero;
+            ws.Cell(r, 13).Value = f.Comentario;
             ws.Cell(r, 14).Value = f.Chofer;
             ws.Cell(r, 15).Value = f.Veh;
             ws.Cell(r, 16).Value = f.Cliente;
             ws.Cell(r, 17).Value = f.Pax;
             ws.Cell(r, 18).Value = f.Agua;
-            ws.Cell(r, 19).Value = f.Adj;
-            ws.Cell(r, 20).Value = f.Comentario;
-            ws.Cell(r, 21).Value = f.Grupo;
-            ws.Cell(r, 22).Value = f.Vuelo;
-            ws.Cell(r, 23).Value = f.Guia;
-            ws.Cell(r, 24).Value = f.Estado;
+            ws.Cell(r, 19).Value = f.IdViaje;
+            ws.Cell(r, 20).Value = f.Grupo;
+            ws.Cell(r, 21).Value = f.Vuelo;
+            ws.Cell(r, 22).Value = f.Guia;
+            ws.Cell(r, 23).Value = f.Ag;
+            ws.Cell(r, 24).Value = f.Adj;
+            ws.Cell(r, 25).Value = f.Estado;
 
             // Color de fila según estado (misma paleta que grid_color_viaje del FoxPro)
             var hex = ColorEstado(f.Estado);
@@ -200,6 +216,149 @@ public class ExcelExportService
         ws.Row(1).Style.Font.FontColor = XLColor.White;
         ws.SheetView.FreezeRows(1);
         ws.Columns().AdjustToContents();
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Exporta el <b>Tablero de ocupación de flota</b> (31/07/2026) con el formato que Nortur
+    /// ya arma a mano en Excel: una fila por unidad, una columna por media hora, celda pintada
+    /// cuando la unidad está ocupada (color según Empresa / Turismo / Nortur).
+    ///
+    /// <para>Recibe el tablero YA armado (<see cref="OcupacionFlota.Tablero"/>), el mismo objeto
+    /// que dibuja el diálogo: así el archivo no puede discrepar de lo que se ve en pantalla —
+    /// incluidos el corte del eje a las 02:00 y el modo de duración elegido.</para>
+    ///
+    /// Hoja 1 "Ocupación" = la matriz. Hoja 2 "Detalle" = un renglón por servicio graficado.
+    /// </summary>
+    /// <param name="real">Modo de duración con el que se armó el tablero (para la leyenda).</param>
+    /// <param name="subtitulo">Día o filtro activo, tal como lo muestra el encabezado del diálogo.</param>
+    public byte[] TableroOcupacion(OcupacionFlota.Tablero tablero, bool real, string subtitulo)
+    {
+        using var wb = new XLWorkbook();
+        var cols = tablero.FinEje / 30;              // columnas de media hora
+        const int ColBase = 3;                       // A = unidad, B = ocupado, C… = franjas
+
+        // ── Hoja 1: la matriz de medias horas ────────────────────────────────────
+        var ws = wb.Worksheets.Add("Ocupación");
+        ws.Cell(1, 1).Value = "Ocupación de flota";
+        ws.Cell(1, 3).Value = subtitulo;
+        ws.Cell(2, 1).Value = real ? "Duración real (H.Cie)" : "Duración programada (H.Fin)";
+        ws.Cell(2, 3).Value = $"{tablero.UnidadesReales} unidades · {tablero.Servicios} servicios"
+                            + (tablero.ServiciosSinUnidad > 0 ? $" · {tablero.ServiciosSinUnidad} sin unidad asignada (fila S/C)" : "")
+                            + (tablero.Solapes > 0 ? $" · {tablero.Solapes} en conflicto horario" : "")
+                            + (tablero.Excluidos > 0 ? $" · {tablero.Excluidos} sin hora de inicio (no graficados)" : "");
+        ws.Range(1, 1, 1, 3).Style.Font.Bold = true;
+        ws.Cell(2, 1).Style.Font.Italic = true;
+
+        const int FilaHead = 4;
+        ws.Cell(FilaHead, 1).Value = "Unidad";
+        ws.Cell(FilaHead, 2).Value = "Ocupado";
+        for (var c = 0; c < cols; c++)
+            ws.Cell(FilaHead, ColBase + c).Value = OcupacionFlota.Hhmm(c * 30);
+
+        ws.Row(FilaHead).Style.Font.Bold = true;
+        ws.Row(FilaHead).Style.Font.FontSize = 8;
+        ws.Row(FilaHead).Style.Fill.BackgroundColor = XLColor.FromHtml("#112F5B");
+        ws.Row(FilaHead).Style.Font.FontColor = XLColor.White;
+        ws.Row(FilaHead).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+
+        var r = FilaHead + 1;
+        foreach (var u in tablero.Unidades)
+        {
+            // La fila-pool no es una unidad: se rotula distinto y en vez de horas ocupadas
+            // lleva la cantidad de servicios pendientes de asignar (no hay flota que ocupar).
+            if (u.SinUnidad)
+            {
+                ws.Cell(r, 1).Value = "S/C (sin unidad)";
+                ws.Cell(r, 2).Value = $"{u.Servicios} serv.";
+                ws.Range(r, 1, r, 2).Style.Font.Bold = true;
+                ws.Range(r, 1, r, 2).Style.Font.FontColor = XLColor.FromHtml("#8A1C1C");
+            }
+            else
+            {
+                ws.Cell(r, 1).Value = u.Nombre;
+                ws.Cell(r, 2).Value = Math.Round(u.MinutosOcupados / 60.0, 1);
+                ws.Cell(r, 2).Style.NumberFormat.Format = "0.0 \"h\"";
+            }
+
+            // Una celda por franja: se pinta si algún servicio la toca. Si en la misma franja
+            // hay servicios de distinto tipo, manda el que arrancó primero (igual que la
+            // pantalla, donde la barra de abajo es la de la primera pista).
+            for (var c = 0; c < cols; c++)
+            {
+                var desde = c * 30;
+                var hasta = desde + 30;
+                var b = u.Barras
+                    .Where(x => x.Ini < hasta && x.Fin > desde)
+                    .OrderBy(x => x.Ini)
+                    .FirstOrDefault();
+                if (b is null) continue;
+
+                var celda = ws.Cell(r, ColBase + c);
+                celda.Style.Fill.BackgroundColor = XLColor.FromHtml(b.Color);
+                if (b.Dudosa)
+                    celda.Style.Border.OutsideBorder = XLBorderStyleValues.Medium;
+                if (b.Dudosa)
+                    celda.Style.Border.OutsideBorderColor = XLColor.FromHtml("#DC2626");
+            }
+            r++;
+        }
+
+        ws.Column(1).Width = 10;
+        ws.Column(2).Width = 8;
+        for (var c = 0; c < cols; c++)
+            ws.Column(ColBase + c).Width = 3.4;
+        ws.SheetView.FreezeRows(FilaHead);
+        ws.SheetView.FreezeColumns(2);
+
+        // ── Hoja 2: el detalle de los servicios graficados ───────────────────────
+        var wsDet = wb.Worksheets.Add("Detalle");
+        string[] headers =
+        {
+            "Unidad","Reserva","Inicio","Cierre","Duración (h)","Tipo","Estado",
+            "Recorrido","Cliente","Pax","Chofer","Nº viaje","Observación"
+        };
+        for (var c = 0; c < headers.Length; c++)
+            wsDet.Cell(1, c + 1).Value = headers[c];
+
+        var rd = 2;
+        foreach (var u in tablero.Unidades)
+        {
+            foreach (var b in u.Barras.OrderBy(x => x.Ini))
+            {
+                var f = b.Fila;
+                wsDet.Cell(rd, 1).Value = u.SinUnidad ? "S/C (sin unidad)" : u.Nombre;
+                wsDet.Cell(rd, 2).Value = f.Fecha.ToDateTime(TimeOnly.MinValue);
+                wsDet.Cell(rd, 2).Style.DateFormat.Format = "dd/mm/yyyy";
+                wsDet.Cell(rd, 3).Value = OcupacionFlota.Hhmm(b.Ini);
+                wsDet.Cell(rd, 4).Value = OcupacionFlota.Hhmm(b.Fin);
+                wsDet.Cell(rd, 5).Value = Math.Round(b.Duracion / 60.0, 2);
+                wsDet.Cell(rd, 6).Value = OcupacionFlota.NombreTipo(b.Tipo);
+                wsDet.Cell(rd, 7).Value = f.EstadoDisplay;
+                wsDet.Cell(rd, 8).Value = f.Recorrido;
+                wsDet.Cell(rd, 9).Value = f.Cliente;
+                wsDet.Cell(rd, 10).Value = f.Pax;
+                wsDet.Cell(rd, 11).Value = f.Chofer;
+                wsDet.Cell(rd, 12).Value = f.IdViaje;
+                wsDet.Cell(rd, 13).Value =
+                    b.Cortada && b.Dudosa ? "Cortado a las 02:00 · duración fuera de rango"
+                  : b.Cortada             ? "Cortado a las 02:00"
+                  : b.Dudosa              ? "Duración fuera de rango: revisar H.Ini / H.Fin / H.Cie"
+                  : "";
+                if (b.Dudosa || b.Cortada)
+                    wsDet.Range(rd, 1, rd, headers.Length).Style.Fill.BackgroundColor = XLColor.FromHtml("#FDECEC");
+                rd++;
+            }
+        }
+
+        wsDet.Row(1).Style.Font.Bold = true;
+        wsDet.Row(1).Style.Fill.BackgroundColor = XLColor.FromHtml("#112F5B");
+        wsDet.Row(1).Style.Font.FontColor = XLColor.White;
+        wsDet.SheetView.FreezeRows(1);
+        wsDet.Columns().AdjustToContents(1, Math.Min(rd, 500));
 
         using var ms = new MemoryStream();
         wb.SaveAs(ms);
@@ -270,31 +429,42 @@ public class ExcelExportService
     public byte[] BandaHoraria(
         IReadOnlyList<BandaHorariaRow> filas,
         string metrica /* "Reservas" | "Pax" */,
+        bool porHora = false,
         IReadOnlyList<BandaHorariaDetalleRow>? viajes = null)
     {
         // La métrica elige qué número va en pivote/resumen (viajes o pax).
         Func<BandaHorariaRow, int> val = metrica == "Pax" ? f => f.Pax : f => f.Reservas;
         var etiquetaMetrica = metrica == "Pax" ? "Pax" : "Viajes";
-        var bandas = ReportService.BandasHorarias;
+
+        // El Excel replica la agrupación que se está viendo en pantalla: las 6 bandas o las 24
+        // horas de inicio (30/07/2026). `bandas` es el nombre histórico de la variable = las
+        // columnas del pivote, sean bandas u horas.
+        var bandas = porHora ? ReportService.HorasDelDia : ReportService.BandasHorarias;
+        Func<BandaHorariaRow, string> colDe = porHora ? f => $"{f.Hora:00}:00" : f => f.Banda;
+        var etiquetaCol = porHora ? "Hora de inicio" : "Banda horaria";
 
         using var wb = new XLWorkbook();
 
         // --- Hoja 1: Detalle agregado (fecha × veh × banda, con viajes y pax) ----
         var wsDet = wb.Worksheets.Add("Detalle");
         wsDet.Cell(1, 1).Value = "Fecha";
-        wsDet.Cell(1, 2).Value = "Tipo vehículo";
-        wsDet.Cell(1, 3).Value = "Banda horaria";
-        wsDet.Cell(1, 4).Value = "Viajes";
-        wsDet.Cell(1, 5).Value = "Pax";
+        wsDet.Cell(1, 2).Value = "Tipo de servicio";
+        wsDet.Cell(1, 3).Value = "Tipo vehículo";
+        wsDet.Cell(1, 4).Value = "Banda horaria";
+        wsDet.Cell(1, 5).Value = "Hora de inicio";
+        wsDet.Cell(1, 6).Value = "Viajes";
+        wsDet.Cell(1, 7).Value = "Pax";
         var r = 2;
         foreach (var f in filas)
         {
             wsDet.Cell(r, 1).Value = f.Fecha.ToDateTime(TimeOnly.MinValue);
             wsDet.Cell(r, 1).Style.DateFormat.Format = "dd/mm/yyyy";
-            wsDet.Cell(r, 2).Value = f.TipoVehiculo;
-            wsDet.Cell(r, 3).Value = f.Banda;
-            wsDet.Cell(r, 4).Value = f.Reservas;
-            wsDet.Cell(r, 5).Value = f.Pax;
+            wsDet.Cell(r, 2).Value = f.Categoria;
+            wsDet.Cell(r, 3).Value = f.TipoVehiculo;
+            wsDet.Cell(r, 4).Value = f.Banda;
+            wsDet.Cell(r, 5).Value = $"{f.Hora:00}:00";
+            wsDet.Cell(r, 6).Value = f.Reservas;
+            wsDet.Cell(r, 7).Value = f.Pax;
             r++;
         }
         wsDet.Row(1).Style.Font.Bold = true;
@@ -303,10 +473,10 @@ public class ExcelExportService
         // --- Hoja 2: Pivote fecha × banda (valor = métrica elegida) --------------
         var fechas = filas.Select(f => f.Fecha).Distinct().OrderBy(d => d).ToList();
         var mapa = filas
-            .GroupBy(f => (f.Fecha, f.Banda))
+            .GroupBy(f => (f.Fecha, Col: colDe(f)))
             .ToDictionary(g => g.Key, g => g.Sum(val));
 
-        var wsPiv = wb.Worksheets.Add($"Pivote ({etiquetaMetrica})");
+        var wsPiv = wb.Worksheets.Add($"Pivote {etiquetaMetrica} x {(porHora ? "hora" : "banda")}");
         wsPiv.Cell(1, 1).Value = "Fecha";
         for (var c = 0; c < bandas.Count; c++)
             wsPiv.Cell(1, c + 2).Value = bandas[c];
@@ -350,7 +520,7 @@ public class ExcelExportService
 
         var vehiculos = filas.Select(f => f.TipoVehiculo).Distinct().OrderBy(v => v).ToList();
         var mapaVeh = filas
-            .GroupBy(f => (f.TipoVehiculo, f.Banda))
+            .GroupBy(f => (f.TipoVehiculo, Col: colDe(f)))
             .ToDictionary(g => g.Key, g => g.Sum(val));
 
         for (var i = 0; i < vehiculos.Count; i++)
@@ -369,14 +539,44 @@ public class ExcelExportService
         wsVeh.Column(bandas.Count + 2).Style.Font.Bold = true;
         wsVeh.Columns().AdjustToContents();
 
-        // --- Hoja 4: Viajes uno por uno (drill-down) -----------------------------
+        // --- Hoja 4: Resumen por tipo de servicio × columna (30/07/2026) ---------
+        // Es la lectura que pidió el frente final: cuánto pesa Transporte de Personal (Empresa)
+        // frente a Turismo en cada franja. Se listan las 3 categorías siempre, aunque den 0.
+        var wsCat = wb.Worksheets.Add("Resumen por tipo de servicio");
+        wsCat.Cell(1, 1).Value = etiquetaCol;
+        for (var c = 0; c < ReportService.CategoriasServicio.Count; c++)
+            wsCat.Cell(1, c + 2).Value = ReportService.CategoriasServicio[c];
+        wsCat.Cell(1, ReportService.CategoriasServicio.Count + 2).Value = "TOTAL";
+
+        var mapaCat = filas
+            .GroupBy(f => (Col: colDe(f), f.Categoria))
+            .ToDictionary(g => g.Key, g => g.Sum(val));
+
+        for (var i = 0; i < bandas.Count; i++)
+        {
+            wsCat.Cell(i + 2, 1).Value = bandas[i];
+            var tot = 0;
+            for (var c = 0; c < ReportService.CategoriasServicio.Count; c++)
+            {
+                var v = mapaCat.TryGetValue((bandas[i], ReportService.CategoriasServicio[c]), out var x) ? x : 0;
+                wsCat.Cell(i + 2, c + 2).Value = v;
+                tot += v;
+            }
+            wsCat.Cell(i + 2, ReportService.CategoriasServicio.Count + 2).Value = tot;
+        }
+        wsCat.Row(1).Style.Font.Bold = true;
+        wsCat.Column(ReportService.CategoriasServicio.Count + 2).Style.Font.Bold = true;
+        wsCat.Columns().AdjustToContents();
+
+        // --- Hoja 5: Viajes uno por uno (drill-down) -----------------------------
         if (viajes is { Count: > 0 })
         {
             var wsV = wb.Worksheets.Add("Viajes");
             string[] cab =
             {
-                "Nº Reserva", "Fecha", "Hora", "Banda", "Tipo vehículo", "Servicio", "Cliente",
-                "Recorrido", "Pax", "Estado", "Interno", "Chofer", "Grupo", "Origen"
+                "Nº Reserva", "Fecha", "Hora", "Banda", "Tipo de servicio", "Tipo vehículo",
+                "Servicio", "Cliente", "Recorrido", "Pax", "Estado", "Interno", "Chofer",
+                "Grupo", "Origen"
             };
             for (var c = 0; c < cab.Length; c++)
                 wsV.Cell(1, c + 1).Value = cab[c];
@@ -390,16 +590,17 @@ public class ExcelExportService
                 wsV.Cell(rV, 2).Style.DateFormat.Format = "dd/mm/yyyy";
                 wsV.Cell(rV, 3).Value = v.Hora;
                 wsV.Cell(rV, 4).Value = d.Banda;
-                wsV.Cell(rV, 5).Value = d.TipoVehiculo;
-                wsV.Cell(rV, 6).Value = v.Servicio;
-                wsV.Cell(rV, 7).Value = v.Cliente;
-                wsV.Cell(rV, 8).Value = v.Recorrido;
-                wsV.Cell(rV, 9).Value = v.Pax;
-                wsV.Cell(rV, 10).Value = v.Estado;
-                if (v.Interno.HasValue) wsV.Cell(rV, 11).Value = v.Interno.Value;
-                wsV.Cell(rV, 12).Value = v.Chofer;
-                wsV.Cell(rV, 13).Value = v.Grupo;
-                wsV.Cell(rV, 14).Value = v.Origen == "P" ? "Plantilla" : "Transportación";
+                wsV.Cell(rV, 5).Value = d.Categoria;
+                wsV.Cell(rV, 6).Value = d.TipoVehiculo;
+                wsV.Cell(rV, 7).Value = v.Servicio;
+                wsV.Cell(rV, 8).Value = v.Cliente;
+                wsV.Cell(rV, 9).Value = v.Recorrido;
+                wsV.Cell(rV, 10).Value = v.Pax;
+                wsV.Cell(rV, 11).Value = v.Estado;
+                if (v.Interno.HasValue) wsV.Cell(rV, 12).Value = v.Interno.Value;
+                wsV.Cell(rV, 13).Value = v.Chofer;
+                wsV.Cell(rV, 14).Value = v.Grupo;
+                wsV.Cell(rV, 15).Value = v.Origen == "P" ? "Plantilla" : "Transportación";
                 rV++;
             }
             wsV.Row(1).Style.Font.Bold = true;
@@ -415,38 +616,49 @@ public class ExcelExportService
     /// <summary>
     /// Exporta el informe "Reservas por cliente" (FoxPro: viaje_analisis.scx — su única salida
     /// era una tabla dinámica de Excel; acá replicamos el pivote cliente × mes y sumamos hojas).
-    /// Hoja 1: detalle agregado (mes × cliente × tipo). Hoja 2: pivote cliente × mes con la
-    /// métrica elegida. Hoja 3: resumen tipo × mes. Hoja 4 (opcional): los viajes uno por uno.
+    /// Hoja 1: detalle agregado (mes × cliente × tipo × motivo). Hoja 2: pivote cliente × mes
+    /// con la métrica elegida (y las columnas del período de comparación si lo hay). Hoja 3:
+    /// resumen tipo × mes. Hoja 4: resumen por motivo de cancelación. Hoja 5 (opcional): los
+    /// viajes uno por uno, con la unidad y su dueño.
     /// </summary>
     public byte[] ReservasPorCliente(
         IReadOnlyList<ReservaClienteRow> filas,
         string metrica /* "Reservas" | "Pax" */,
-        IReadOnlyList<ReservaClienteDetalleRow>? viajes = null)
+        string criterio /* ReportService.CriterioUso | CriterioFletero */,
+        IReadOnlyList<MotivoCancelaDto> motivos,
+        IReadOnlyList<ReservaClienteDetalleRow>? viajes = null,
+        IReadOnlyList<ReservaClienteRow>? filasBase = null,
+        string baseLbl = "")
     {
         Func<ReservaClienteRow, int> val = metrica == "Pax" ? f => f.Pax : f => f.Viajes;
         var etiquetaMetrica = metrica == "Pax" ? "Pax" : "Viajes";
         var meses = filas.Select(f => f.Mes).Distinct().OrderBy(m => m).ToList();
         var tipos = ReportService.TiposReservaCliente;
 
+        string MotivoDe(int id) =>
+            id == 0 ? "" : motivos.FirstOrDefault(m => m.Id == id)?.Motivo ?? $"({id})";
+
         using var wb = new XLWorkbook();
 
-        // --- Hoja 1: Detalle agregado (mes × cliente × tipo, con viajes y pax) ---
+        // --- Hoja 1: Detalle agregado (mes × cliente × tipo × motivo) ---
         var wsDet = wb.Worksheets.Add("Detalle");
         wsDet.Cell(1, 1).Value = "Mes";
         wsDet.Cell(1, 2).Value = "Código";
         wsDet.Cell(1, 3).Value = "Cliente";
-        wsDet.Cell(1, 4).Value = "Tipo";
-        wsDet.Cell(1, 5).Value = "Viajes";
-        wsDet.Cell(1, 6).Value = "Pax";
+        wsDet.Cell(1, 4).Value = "Tipo de unidad";
+        wsDet.Cell(1, 5).Value = "Motivo cancelación";
+        wsDet.Cell(1, 6).Value = "Viajes";
+        wsDet.Cell(1, 7).Value = "Pax";
         var r = 2;
         foreach (var f in filas)
         {
             wsDet.Cell(r, 1).Value = f.Mes;
             wsDet.Cell(r, 2).Value = f.IdCliente;
             wsDet.Cell(r, 3).Value = f.Cliente;
-            wsDet.Cell(r, 4).Value = f.Tipo;
-            wsDet.Cell(r, 5).Value = f.Viajes;
-            wsDet.Cell(r, 6).Value = f.Pax;
+            wsDet.Cell(r, 4).Value = f.TipoSegun(criterio);
+            wsDet.Cell(r, 5).Value = MotivoDe(f.IdMotivo);
+            wsDet.Cell(r, 6).Value = f.Viajes;
+            wsDet.Cell(r, 7).Value = f.Pax;
             r++;
         }
         wsDet.Row(1).Style.Font.Bold = true;
@@ -462,11 +674,24 @@ public class ExcelExportService
             .GroupBy(f => (f.IdCliente, f.Mes))
             .ToDictionary(g => g.Key, g => g.Sum(val));
 
+        // Totales del período de comparación por cliente (columnas extra "X vs X-1").
+        var hayBase = filasBase is { Count: > 0 };
+        var totalBaseCli = hayBase
+            ? filasBase!.GroupBy(f => f.IdCliente).ToDictionary(g => g.Key, g => g.Sum(val))
+            : new Dictionary<string, int>();
+
         var wsPiv = wb.Worksheets.Add($"Pivote ({etiquetaMetrica})");
         wsPiv.Cell(1, 1).Value = "Cliente";
         for (var c = 0; c < meses.Count; c++)
             wsPiv.Cell(1, c + 2).Value = meses[c];
-        wsPiv.Cell(1, meses.Count + 2).Value = "TOTAL";
+        var colTotal = meses.Count + 2;
+        wsPiv.Cell(1, colTotal).Value = "TOTAL";
+        if (hayBase)
+        {
+            wsPiv.Cell(1, colTotal + 1).Value = $"TOTAL {baseLbl}".Trim();
+            wsPiv.Cell(1, colTotal + 2).Value = "Variación";
+            wsPiv.Cell(1, colTotal + 3).Value = "Variación %";
+        }
 
         for (var i = 0; i < clientes.Count; i++)
         {
@@ -474,7 +699,18 @@ public class ExcelExportService
             for (var c = 0; c < meses.Count; c++)
                 wsPiv.Cell(i + 2, c + 2).Value =
                     mapa.TryGetValue((clientes[i].Id, meses[c]), out var x) ? x : 0;
-            wsPiv.Cell(i + 2, meses.Count + 2).Value = clientes[i].Total;
+            wsPiv.Cell(i + 2, colTotal).Value = clientes[i].Total;
+            if (hayBase)
+            {
+                var prev = totalBaseCli.TryGetValue(clientes[i].Id, out var p) ? p : 0;
+                wsPiv.Cell(i + 2, colTotal + 1).Value = prev;
+                wsPiv.Cell(i + 2, colTotal + 2).Value = clientes[i].Total - prev;
+                if (prev > 0)
+                {
+                    wsPiv.Cell(i + 2, colTotal + 3).Value = (clientes[i].Total - prev) / (double)prev;
+                    wsPiv.Cell(i + 2, colTotal + 3).Style.NumberFormat.Format = "+0.0%;-0.0%;0.0%";
+                }
+            }
         }
         var rTot = clientes.Count + 2;
         wsPiv.Cell(rTot, 1).Value = "TOTAL";
@@ -485,10 +721,21 @@ public class ExcelExportService
             wsPiv.Cell(rTot, c + 2).Value = colTot;
             granTot += colTot;
         }
-        wsPiv.Cell(rTot, meses.Count + 2).Value = granTot;
+        wsPiv.Cell(rTot, colTotal).Value = granTot;
+        if (hayBase)
+        {
+            var granBase = filasBase!.Sum(val);
+            wsPiv.Cell(rTot, colTotal + 1).Value = granBase;
+            wsPiv.Cell(rTot, colTotal + 2).Value = granTot - granBase;
+            if (granBase > 0)
+            {
+                wsPiv.Cell(rTot, colTotal + 3).Value = (granTot - granBase) / (double)granBase;
+                wsPiv.Cell(rTot, colTotal + 3).Style.NumberFormat.Format = "+0.0%;-0.0%;0.0%";
+            }
+        }
         wsPiv.Row(1).Style.Font.Bold = true;
         wsPiv.Row(rTot).Style.Font.Bold = true;
-        wsPiv.Column(meses.Count + 2).Style.Font.Bold = true;
+        wsPiv.Column(colTotal).Style.Font.Bold = true;
         wsPiv.SheetView.FreezeRows(1);
         wsPiv.Columns().AdjustToContents(1, Math.Min(clientes.Count + 2, 500));
 
@@ -500,7 +747,7 @@ public class ExcelExportService
         wsTipo.Cell(1, meses.Count + 2).Value = "TOTAL";
 
         var mapaTipo = filas
-            .GroupBy(f => (f.Tipo, f.Mes))
+            .GroupBy(f => (Tipo: f.TipoSegun(criterio), f.Mes))
             .ToDictionary(g => g.Key, g => g.Sum(val));
         for (var i = 0; i < tipos.Count; i++)
         {
@@ -518,14 +765,71 @@ public class ExcelExportService
         wsTipo.Column(meses.Count + 2).Style.Font.Bold = true;
         wsTipo.Columns().AdjustToContents();
 
-        // --- Hoja 4: Viajes uno por uno (drill-down) --------------------------------
+        // --- Hoja 4: Cancelaciones por motivo × mes (solo si hay canceladas) --------
+        // Es lo que la clienta no encontraba: el motivo, cruzado con el cliente.
+        if (filas.Any(f => f.IdMotivo > 0))
+        {
+            var wsMot = wb.Worksheets.Add("Motivos de cancelación");
+            var motivosPresentes = filas.Where(f => f.IdMotivo > 0)
+                .GroupBy(f => f.IdMotivo)
+                .Select(g => (Id: g.Key, Nombre: MotivoDe(g.Key), Total: g.Sum(val)))
+                .OrderByDescending(x => x.Total).ToList();
+
+            wsMot.Cell(1, 1).Value = "Motivo";
+            for (var c = 0; c < meses.Count; c++)
+                wsMot.Cell(1, c + 2).Value = meses[c];
+            wsMot.Cell(1, meses.Count + 2).Value = "TOTAL";
+
+            var mapaMot = filas.Where(f => f.IdMotivo > 0)
+                .GroupBy(f => (f.IdMotivo, f.Mes))
+                .ToDictionary(g => g.Key, g => g.Sum(val));
+            for (var i = 0; i < motivosPresentes.Count; i++)
+            {
+                wsMot.Cell(i + 2, 1).Value = motivosPresentes[i].Nombre;
+                for (var c = 0; c < meses.Count; c++)
+                    wsMot.Cell(i + 2, c + 2).Value =
+                        mapaMot.TryGetValue((motivosPresentes[i].Id, meses[c]), out var x) ? x : 0;
+                wsMot.Cell(i + 2, meses.Count + 2).Value = motivosPresentes[i].Total;
+            }
+            wsMot.Row(1).Style.Font.Bold = true;
+            wsMot.Column(meses.Count + 2).Style.Font.Bold = true;
+            wsMot.Columns().AdjustToContents();
+
+            // Cruce cliente × motivo — la vista que existía en el Metrocar.
+            var wsCliMot = wb.Worksheets.Add("Cliente x motivo");
+            wsCliMot.Cell(1, 1).Value = "Cliente";
+            for (var c = 0; c < motivosPresentes.Count; c++)
+                wsCliMot.Cell(1, c + 2).Value = motivosPresentes[c].Nombre;
+            wsCliMot.Cell(1, motivosPresentes.Count + 2).Value = "TOTAL";
+
+            var mapaCliMot = filas.Where(f => f.IdMotivo > 0)
+                .GroupBy(f => (f.IdCliente, f.IdMotivo))
+                .ToDictionary(g => g.Key, g => g.Sum(val));
+            var rowCm = 2;
+            foreach (var cl in clientes)
+            {
+                wsCliMot.Cell(rowCm, 1).Value = cl.Nombre;
+                for (var c = 0; c < motivosPresentes.Count; c++)
+                    wsCliMot.Cell(rowCm, c + 2).Value =
+                        mapaCliMot.TryGetValue((cl.Id, motivosPresentes[c].Id), out var x) ? x : 0;
+                wsCliMot.Cell(rowCm, motivosPresentes.Count + 2).Value = cl.Total;
+                rowCm++;
+            }
+            wsCliMot.Row(1).Style.Font.Bold = true;
+            wsCliMot.Column(motivosPresentes.Count + 2).Style.Font.Bold = true;
+            wsCliMot.SheetView.FreezeRows(1);
+            wsCliMot.Columns().AdjustToContents(1, Math.Min(clientes.Count + 2, 500));
+        }
+
+        // --- Hoja final: Viajes uno por uno (drill-down) ----------------------------
         if (viajes is { Count: > 0 })
         {
             var wsV = wb.Worksheets.Add("Viajes");
             string[] cab =
             {
-                "Nº Reserva", "Fecha", "Hora", "Cliente", "Tipo", "Servicio", "Recorrido",
-                "Pax", "Estado", "Motivo cancelación", "Interno", "Chofer", "Grupo", "Origen"
+                "Nº Reserva", "Fecha", "Hora", "Cliente", "Tipo de unidad", "Servicio", "Recorrido",
+                "Pax", "Estado", "Motivo cancelación", "Interno", "Dominio", "Dueño / fletero",
+                "Uso", "Chofer", "Grupo", "Origen"
             };
             for (var c = 0; c < cab.Length; c++)
                 wsV.Cell(1, c + 1).Value = cab[c];
@@ -539,16 +843,19 @@ public class ExcelExportService
                 wsV.Cell(rV, 2).Style.DateFormat.Format = "dd/mm/yyyy";
                 wsV.Cell(rV, 3).Value = v.Hora;
                 wsV.Cell(rV, 4).Value = v.Cliente;
-                wsV.Cell(rV, 5).Value = d.Tipo;
+                wsV.Cell(rV, 5).Value = d.TipoSegun(criterio);
                 wsV.Cell(rV, 6).Value = v.Servicio;
                 wsV.Cell(rV, 7).Value = v.Recorrido;
                 wsV.Cell(rV, 8).Value = v.Pax;
                 wsV.Cell(rV, 9).Value = v.Estado;
                 wsV.Cell(rV, 10).Value = d.Motivo;
                 if (v.Interno.HasValue) wsV.Cell(rV, 11).Value = v.Interno.Value;
-                wsV.Cell(rV, 12).Value = v.Chofer;
-                wsV.Cell(rV, 13).Value = v.Grupo;
-                wsV.Cell(rV, 14).Value = v.Origen == "P" ? "Plantilla" : "Transportación";
+                wsV.Cell(rV, 12).Value = d.Dominio;
+                wsV.Cell(rV, 13).Value = d.Fletero;
+                wsV.Cell(rV, 14).Value = d.Uso;
+                wsV.Cell(rV, 15).Value = v.Chofer;
+                wsV.Cell(rV, 16).Value = v.Grupo;
+                wsV.Cell(rV, 17).Value = v.Origen == "P" ? "Plantilla" : "Transportación";
                 rV++;
             }
             wsV.Row(1).Style.Font.Bold = true;
@@ -563,31 +870,57 @@ public class ExcelExportService
 
     /// <summary>
     /// Exporta el informe "Viajes por Choferes" (form viaje_analisis_chofer.scx).
-    /// Hoja 1: Resumen por chofer. Hoja 2: Pivote chofer × día (con francos, como el FoxPro).
-    /// Hoja 3: Viajes uno por uno (drill-down).
+    /// Hoja 1: Resumen por chofer. Hoja 2: Pivote chofer × día/mes (con francos, como el
+    /// FoxPro). Hoja 3: Mix por tipo de servicio. Hoja 4: Viajes uno por uno (drill-down).
     /// </summary>
+    /// <param name="porMes">Agrupación de las columnas del pivote: false = día, true = mes.</param>
+    /// <param name="categoriaFoco">
+    /// Tipo de servicio enfocado en el tablero (Empresa/Turismo/Nortur) o null = todos. Las
+    /// hojas 1, 2 y 4 salen con ese recorte, para que el Excel diga lo mismo que la pantalla.
+    /// La hoja 3 (mix) siempre usa el dataset COMPLETO: su razón de ser es comparar las
+    /// categorías entre sí, y con el foco puesto quedaría una sola columna.
+    /// </param>
     public byte[] ViajesPorChofer(
         IReadOnlyList<ViajesChoferRow> filas,
-        string metrica /* "Viajes" | "Km" | "Pax" */,
+        string metrica /* "Viajes" | "Km" | "Pax" | "Horas" */,
         DateOnly desde,
         DateOnly hasta,
+        bool porMes = false,
+        string? categoriaFoco = null,
         IReadOnlyList<ViajesChoferDetalleRow>? viajes = null)
     {
-        Func<ViajesChoferRow, int> val = metrica switch
+        // Horas sale en horas DECIMALES (Minutos/60), no en minutos crudos — el resto de las
+        // métricas son conteos enteros (viajes/km/pax) así que el pivote queda con "0.0" solo
+        // en la columna/hoja de Horas (ver el NumberFormat más abajo).
+        Func<ViajesChoferRow, double> val = metrica switch
         {
             "Km" => f => f.Km,
             "Pax" => f => f.Pax,
+            "Horas" => f => f.Minutos / 60.0,
             _ => f => f.Viajes
         };
-        var etiqueta = metrica switch { "Km" => "Km", "Pax" => "Pax", _ => "Viajes" };
+        var etiqueta = metrica switch { "Km" => "Km", "Pax" => "Pax", "Horas" => "Horas", _ => "Viajes" };
+        var formatoNumero = metrica == "Horas" ? "0.0" : "#,##0";
+
+        // Dataset con el foco de tipo de servicio aplicado (lo que se ve en pantalla).
+        var datos = categoriaFoco is null
+            ? filas
+            : filas.Where(f => f.Categoria == categoriaFoco).ToList();
+
+        // Clave y etiqueta de columna según la agrupación elegida.
+        string ColKey(DateOnly d) => porMes ? d.ToString("yyyy-MM") : d.ToString("yyyy-MM-dd");
+        var cultura = System.Globalization.CultureInfo.GetCultureInfo("es-AR");
 
         using var wb = new XLWorkbook();
+        var sufijo = categoriaFoco is null ? "" : $" — {categoriaFoco}";
 
         // --- Hoja 1: Resumen por chofer -------------------------------------
+        // Siempre en conteos/totales reales (viajes, km, pax, horas), sin importar qué métrica
+        // esté elegida en la pantalla — igual que ya hacían Km y Pax.
         var wsR = wb.Worksheets.Add("Resumen por chofer");
-        string[] hR = { "Código", "Chofer", "Localidad", "Tipo", "Viajes", "Turismo", "Cabecera", "Km", "Pax", "Días con actividad" };
+        string[] hR = { "Código", "Chofer", "Localidad", "Tipo", "Viajes", "Empresa", "Turismo", "Nortur", "Km", "Pax", "Horas", "Días con actividad" };
         for (var c = 0; c < hR.Length; c++) wsR.Cell(1, c + 1).Value = hR[c];
-        var porChofer = filas
+        var porChofer = datos
             .GroupBy(f => f.IdChofer)
             .Select(g => new
             {
@@ -596,10 +929,12 @@ public class ExcelExportService
                 Localidad = g.First().Localidad,
                 Tipo = g.First().Tipo,
                 Viajes = g.Sum(x => x.Viajes),
-                Turismo = g.Sum(x => x.Turismo),
-                Cabecera = g.Sum(x => x.Cabecera),
+                Empresa = g.Where(x => x.Categoria == "Empresa").Sum(x => x.Viajes),
+                Turismo = g.Where(x => x.Categoria == "Turismo").Sum(x => x.Viajes),
+                Nortur = g.Where(x => x.Categoria == "Nortur").Sum(x => x.Viajes),
                 Km = g.Sum(x => x.Km),
                 Pax = g.Sum(x => x.Pax),
+                Horas = Math.Round(g.Sum(x => x.Minutos) / 60.0, 1),
                 Dias = g.Select(x => x.Fecha).Distinct().Count()
             })
             .OrderByDescending(x => x.Viajes).ThenBy(x => x.Nombre)
@@ -612,53 +947,160 @@ public class ExcelExportService
             wsR.Cell(r, 3).Value = c.Localidad;
             wsR.Cell(r, 4).Value = c.Tipo;
             wsR.Cell(r, 5).Value = c.Viajes;
-            wsR.Cell(r, 6).Value = c.Turismo;
-            wsR.Cell(r, 7).Value = c.Cabecera;
-            wsR.Cell(r, 8).Value = c.Km;
-            wsR.Cell(r, 9).Value = c.Pax;
-            wsR.Cell(r, 10).Value = c.Dias;
+            wsR.Cell(r, 6).Value = c.Empresa;
+            wsR.Cell(r, 7).Value = c.Turismo;
+            wsR.Cell(r, 8).Value = c.Nortur;
+            wsR.Cell(r, 9).Value = c.Km;
+            wsR.Cell(r, 10).Value = c.Pax;
+            wsR.Cell(r, 11).Value = c.Horas;
+            wsR.Cell(r, 12).Value = c.Dias;
             r++;
         }
+        if (porChofer.Count > 0)
+            wsR.Column(11).Style.NumberFormat.Format = "0.0";
         wsR.Row(1).Style.Font.Bold = true;
         wsR.SheetView.FreezeRows(1);
         wsR.Columns().AdjustToContents(1, Math.Min(porChofer.Count + 1, 500));
 
-        // --- Hoja 2: Pivote chofer × día (con francos) ----------------------
-        var dias = new List<DateOnly>();
-        for (var d = desde; d <= hasta; d = d.AddDays(1)) dias.Add(d);
-        var mapa = filas.GroupBy(f => (f.IdChofer, f.Fecha)).ToDictionary(g => g.Key, g => g.Sum(val));
+        // --- Hoja 2: Pivote chofer × día o mes (con francos) ----------------
+        // Las columnas se arman recorriendo el rango COMPLETO (no solo los días con datos),
+        // así el pivote muestra los huecos igual que la grilla de la pantalla.
+        var cols = new List<(string Key, string Label)>();
+        if (porMes)
+        {
+            for (var d = new DateOnly(desde.Year, desde.Month, 1); d <= hasta; d = d.AddMonths(1))
+                cols.Add((d.ToString("yyyy-MM"), d.ToString("MMM yyyy", cultura)));
+        }
+        else
+        {
+            for (var d = desde; d <= hasta; d = d.AddDays(1))
+                cols.Add((d.ToString("yyyy-MM-dd"), d.ToString("dd/MM")));
+        }
+        var idxCol = cols.Select((c, i) => (c.Key, i)).ToDictionary(t => t.Key, t => t.i);
+        var mapa = datos.GroupBy(f => (f.IdChofer, Col: ColKey(f.Fecha)))
+                        .ToDictionary(g => g.Key, g => g.Sum(val));
 
-        var wsP = wb.Worksheets.Add($"Pivote ({etiqueta})");
-        wsP.Cell(1, 1).Value = "Chofer";
-        for (var c = 0; c < dias.Count; c++) wsP.Cell(1, c + 2).Value = dias[c].ToString("dd/MM");
-        wsP.Cell(1, dias.Count + 2).Value = "TOTAL";
+        var wsP = wb.Worksheets.Add($"Pivote {etiqueta} por {(porMes ? "mes" : "día")}");
+        wsP.Cell(1, 1).Value = $"Chofer{sufijo}";
+        for (var c = 0; c < cols.Count; c++) wsP.Cell(1, c + 2).Value = cols[c].Label;
+        wsP.Cell(1, cols.Count + 2).Value = "TOTAL";
 
-        var choferes = filas.GroupBy(f => f.IdChofer)
-            .Select(g => (Id: g.Key, Nombre: g.First().Chofer,
-                Primero: g.Min(x => x.Fecha), Ultimo: g.Max(x => x.Fecha),
-                Total: g.Sum(val)))
+        var choferes = datos.GroupBy(f => f.IdChofer)
+            .Select(g => (Id: g.Key, Nombre: g.First().Chofer, Total: g.Sum(val)))
             .OrderByDescending(x => x.Total).ThenBy(x => x.Nombre)
             .ToList();
         for (var i = 0; i < choferes.Count; i++)
         {
             var ch = choferes[i];
             wsP.Cell(i + 2, 1).Value = ch.Nombre;
-            for (var c = 0; c < dias.Count; c++)
+
+            // Franco = columna sin actividad ENTRE la primera y la última con actividad del
+            // chofer (mismo criterio que el FoxPro, generalizado a la columna elegida).
+            var conDatos = cols.Where(c => mapa.ContainsKey((ch.Id, c.Key)))
+                               .Select(c => idxCol[c.Key]).ToList();
+            var primero = conDatos.Count > 0 ? conDatos.Min() : -1;
+            var ultimo = conDatos.Count > 0 ? conDatos.Max() : -1;
+
+            for (var c = 0; c < cols.Count; c++)
             {
-                var dia = dias[c];
-                if (mapa.TryGetValue((ch.Id, dia), out var v))
+                if (mapa.TryGetValue((ch.Id, cols[c].Key), out var v))
                     wsP.Cell(i + 2, c + 2).Value = v;
-                else if (dia >= ch.Primero && dia <= ch.Ultimo)
-                    wsP.Cell(i + 2, c + 2).Value = "F";   // franco (día sin viajes entre 1º y último)
+                else if (c >= primero && c <= ultimo)
+                    wsP.Cell(i + 2, c + 2).Value = "F";
             }
-            wsP.Cell(i + 2, dias.Count + 2).Value = ch.Total;
+            wsP.Cell(i + 2, cols.Count + 2).Value = ch.Total;
         }
+        if (choferes.Count > 0)
+            wsP.Range(2, 2, choferes.Count + 1, cols.Count + 2).Style.NumberFormat.Format = formatoNumero;
         wsP.Row(1).Style.Font.Bold = true;
-        wsP.Column(dias.Count + 2).Style.Font.Bold = true;
+        wsP.Column(cols.Count + 2).Style.Font.Bold = true;
         wsP.SheetView.FreezeRows(1);
+        wsP.SheetView.FreezeColumns(1);
         wsP.Columns().AdjustToContents(1, Math.Min(choferes.Count + 1, 500));
 
-        // --- Hoja 3: Viajes uno por uno -------------------------------------
+        // --- Hoja 3: Mix por tipo de servicio -------------------------------
+        // Qué hace cada chofer: viajes/km/pax por categoría + el % que representa cada una
+        // sobre su total. Responde "¿este chofer es de empresa o de turismo?".
+        // SIEMPRE sobre el dataset completo (ver el <param> de categoriaFoco).
+        var wsM = wb.Worksheets.Add("Mix por tipo de servicio");
+        string[] hM =
+        {
+            "Código", "Chofer", "Tipo",
+            "Viajes Empresa", "Viajes Turismo", "Viajes Nortur", "Viajes TOTAL",
+            "% Empresa", "% Turismo", "% Nortur",
+            "Km Empresa", "Km Turismo", "Km Nortur", "Km TOTAL",
+            "Pax Empresa", "Pax Turismo", "Pax Nortur", "Pax TOTAL",
+            "Horas Empresa", "Horas Turismo", "Horas Nortur", "Horas TOTAL",
+            "Perfil"
+        };
+        for (var c = 0; c < hM.Length; c++) wsM.Cell(1, c + 1).Value = hM[c];
+
+        var mix = filas.GroupBy(f => f.IdChofer)
+            .Select(g =>
+            {
+                int V(string cat) => g.Where(x => x.Categoria == cat).Sum(x => x.Viajes);
+                int K(string cat) => g.Where(x => x.Categoria == cat).Sum(x => x.Km);
+                int P(string cat) => g.Where(x => x.Categoria == cat).Sum(x => x.Pax);
+                double H(string cat) => Math.Round(g.Where(x => x.Categoria == cat).Sum(x => x.Minutos) / 60.0, 1);
+                var tot = g.Sum(x => x.Viajes);
+                return new
+                {
+                    Id = g.Key,
+                    Nombre = g.First().Chofer,
+                    Tipo = g.First().Tipo,
+                    VE = V("Empresa"), VT = V("Turismo"), VN = V("Nortur"), VTot = tot,
+                    KE = K("Empresa"), KT = K("Turismo"), KN = K("Nortur"), KTot = g.Sum(x => x.Km),
+                    PE = P("Empresa"), PT = P("Turismo"), PN = P("Nortur"), PTot = g.Sum(x => x.Pax),
+                    HE = H("Empresa"), HT = H("Turismo"), HN = H("Nortur"), HTot = Math.Round(g.Sum(x => x.Minutos) / 60.0, 1),
+                };
+            })
+            .OrderByDescending(x => x.VTot).ThenBy(x => x.Nombre)
+            .ToList();
+
+        r = 2;
+        foreach (var m in mix)
+        {
+            double Pct(int n) => m.VTot > 0 ? (double)n / m.VTot : 0;
+            // "Perfil": la categoría dominante, o Mixto si ninguna llega al 70% de sus viajes.
+            var top = new[] { ("Empresa", m.VE), ("Turismo", m.VT), ("Nortur", m.VN) }
+                .OrderByDescending(t => t.Item2).First();
+            var perfil = m.VTot == 0 ? "—" : Pct(top.Item2) >= 0.70 ? top.Item1 : "Mixto";
+
+            wsM.Cell(r, 1).Value = m.Id;
+            wsM.Cell(r, 2).Value = m.Nombre;
+            wsM.Cell(r, 3).Value = m.Tipo;
+            wsM.Cell(r, 4).Value = m.VE;
+            wsM.Cell(r, 5).Value = m.VT;
+            wsM.Cell(r, 6).Value = m.VN;
+            wsM.Cell(r, 7).Value = m.VTot;
+            wsM.Cell(r, 8).Value = Pct(m.VE);
+            wsM.Cell(r, 9).Value = Pct(m.VT);
+            wsM.Cell(r, 10).Value = Pct(m.VN);
+            wsM.Cell(r, 11).Value = m.KE;
+            wsM.Cell(r, 12).Value = m.KT;
+            wsM.Cell(r, 13).Value = m.KN;
+            wsM.Cell(r, 14).Value = m.KTot;
+            wsM.Cell(r, 15).Value = m.PE;
+            wsM.Cell(r, 16).Value = m.PT;
+            wsM.Cell(r, 17).Value = m.PN;
+            wsM.Cell(r, 18).Value = m.PTot;
+            wsM.Cell(r, 19).Value = m.HE;
+            wsM.Cell(r, 20).Value = m.HT;
+            wsM.Cell(r, 21).Value = m.HN;
+            wsM.Cell(r, 22).Value = m.HTot;
+            wsM.Cell(r, 23).Value = perfil;
+            r++;
+        }
+        if (mix.Count > 0)
+        {
+            wsM.Range(2, 8, mix.Count + 1, 10).Style.NumberFormat.Format = "0 %";
+            wsM.Range(2, 19, mix.Count + 1, 22).Style.NumberFormat.Format = "0.0";
+        }
+        wsM.Row(1).Style.Font.Bold = true;
+        wsM.SheetView.FreezeRows(1);
+        wsM.Columns().AdjustToContents(1, Math.Min(mix.Count + 1, 500));
+
+        // --- Hoja 4: Viajes uno por uno -------------------------------------
         if (viajes is { Count: > 0 })
             AgregarHojaViajes(wb, viajes.Select(v => v.Reserva).ToList());
 
@@ -764,6 +1206,426 @@ public class ExcelExportService
         wsV.Row(1).Style.Font.Bold = true;
         wsV.SheetView.FreezeRows(1);
         wsV.Columns().AdjustToContents(1, Math.Min(viajes.Count + 1, 500));
+    }
+
+    /// <summary>
+    /// Exporta el Panel de Flota en tres hojas: el resumen por la dimensión abierta, el cruce
+    /// oferta ↔ demanda por tipo y el padrón de unidades una por una (la hoja que se lleva el
+    /// usuario para trabajar). Los agregados llegan ya calculados desde la pantalla, así el
+    /// Excel muestra EXACTAMENTE los mismos números que se ven.
+    /// </summary>
+    public byte[] PanelFlota(
+        IReadOnlyList<FlotaUnidadRow> unidades,
+        IReadOnlyList<FlotaResumenCatRow> resumen,
+        IReadOnlyList<FlotaOfertaDemandaRow> ofertaDemanda,
+        string tituloDimension,
+        DateOnly desde,
+        DateOnly hasta)
+    {
+        using var wb = new XLWorkbook();
+
+        // --- Hoja 1: resumen por la dimensión elegida ------------------------
+        var wsR = wb.Worksheets.Add("Resumen");
+        string[] hR =
+        {
+            tituloDimension, "Unidades", "Propias", "Contratadas", "De baja", "Butacas",
+            "Antigüedad prom.", "Sin uso", "Viajes", "Km", "Unidades con km"
+        };
+        for (var c = 0; c < hR.Length; c++) wsR.Cell(1, c + 1).Value = hR[c];
+
+        var r = 2;
+        foreach (var x in resumen)
+        {
+            wsR.Cell(r, 1).Value = x.Cat;
+            wsR.Cell(r, 2).Value = x.Unidades;
+            wsR.Cell(r, 3).Value = x.Propias;
+            wsR.Cell(r, 4).Value = x.Contratadas;
+            wsR.Cell(r, 5).Value = x.Bajas;
+            wsR.Cell(r, 6).Value = x.Butacas;
+            if (x.AntiguedadProm is double a)
+            {
+                wsR.Cell(r, 7).Value = Math.Round(a, 1);
+                wsR.Cell(r, 7).Style.NumberFormat.Format = "0.0";
+            }
+            wsR.Cell(r, 8).Value = x.Ociosas;
+            wsR.Cell(r, 9).Value = x.Viajes;
+            wsR.Cell(r, 10).Value = x.Km;
+            wsR.Cell(r, 11).Value = x.UnidadesConKm;
+            r++;
+        }
+        wsR.Cell(r, 1).Value = "TOTAL";
+        wsR.Cell(r, 2).Value = resumen.Sum(x => x.Unidades);
+        wsR.Cell(r, 3).Value = resumen.Sum(x => x.Propias);
+        wsR.Cell(r, 4).Value = resumen.Sum(x => x.Contratadas);
+        wsR.Cell(r, 5).Value = resumen.Sum(x => x.Bajas);
+        wsR.Cell(r, 6).Value = resumen.Sum(x => x.Butacas);
+        wsR.Cell(r, 8).Value = resumen.Sum(x => x.Ociosas);
+        wsR.Cell(r, 9).Value = resumen.Sum(x => x.Viajes);
+        wsR.Cell(r, 10).Value = resumen.Sum(x => x.Km);
+        wsR.Row(r).Style.Font.Bold = true;
+
+        // El período solo mide actividad: el plantel es la foto de hoy (`vehiculo` no guarda
+        // historia). Va escrito en la hoja para que el Excel no se lea fuera de contexto.
+        wsR.Cell(r + 2, 1).Value =
+            $"Plantel a hoy ({DateTime.Today:dd/MM/yyyy}). Viajes, días y km corresponden al período "
+            + $"{desde:dd/MM/yyyy} – {hasta:dd/MM/yyyy}.";
+        wsR.Cell(r + 3, 1).Value =
+            $"Los km excluyen las lecturas de odómetro que superan {ReportService.KmMaximoPorMes:#,0} km en un mes (errores de carga).";
+        wsR.Row(1).Style.Font.Bold = true;
+        wsR.SheetView.FreezeRows(1);
+        wsR.Columns().AdjustToContents(1, Math.Min(resumen.Count + 4, 500));
+
+        // --- Hoja 2: oferta vs demanda por tipo ------------------------------
+        var wsD = wb.Worksheets.Add("Oferta vs demanda");
+        string[] hD =
+        {
+            "Tipo", "Unidades activas", "Trabajaron", "Viajes pedidos", "Sin asignar",
+            "% sin cubrir", "Viajes por unidad"
+        };
+        for (var c = 0; c < hD.Length; c++) wsD.Cell(1, c + 1).Value = hD[c];
+
+        var rD = 2;
+        foreach (var x in ofertaDemanda)
+        {
+            wsD.Cell(rD, 1).Value = x.Tipo;
+            wsD.Cell(rD, 2).Value = x.Unidades;
+            wsD.Cell(rD, 3).Value = x.Trabajaron;
+            wsD.Cell(rD, 4).Value = x.Pedidos;
+            wsD.Cell(rD, 5).Value = x.SinAsignar;
+            if (x.Pedidos > 0)
+            {
+                wsD.Cell(rD, 6).Value = Math.Round(x.PctSinCubrir, 1);
+                wsD.Cell(rD, 6).Style.NumberFormat.Format = "0.0";
+            }
+            if (x.Unidades > 0 && x.Pedidos > 0)
+            {
+                wsD.Cell(rD, 7).Value = Math.Round(x.ViajesPorUnidad, 1);
+                wsD.Cell(rD, 7).Style.NumberFormat.Format = "0.0";
+            }
+            rD++;
+        }
+        wsD.Cell(rD, 1).Value = "TOTAL";
+        wsD.Cell(rD, 2).Value = ofertaDemanda.Sum(x => x.Unidades);
+        wsD.Cell(rD, 3).Value = ofertaDemanda.Sum(x => x.Trabajaron);
+        wsD.Cell(rD, 4).Value = ofertaDemanda.Sum(x => x.Pedidos);
+        wsD.Cell(rD, 5).Value = ofertaDemanda.Sum(x => x.SinAsignar);
+        wsD.Row(rD).Style.Font.Bold = true;
+        wsD.Cell(rD + 2, 1).Value =
+            "Sin asignar = viajes que se pidieron de ese tipo de vehículo y quedaron sin unidad. "
+            + "El tipo pedido sale de la reserva y puede no existir en la flota (y al revés).";
+        wsD.Row(1).Style.Font.Bold = true;
+        wsD.SheetView.FreezeRows(1);
+        wsD.Columns().AdjustToContents(1, Math.Min(ofertaDemanda.Count + 3, 200));
+
+        // --- Hoja 3: padrón de unidades, una por una -------------------------
+        var wsU = wb.Worksheets.Add("Unidades");
+        string[] hU =
+        {
+            "Interno", "Dominio", "Tipo", "Marca y modelo", "Año", "Butacas", "Antigüedad",
+            "Uso", "Titular", "Situación", "Estado", "Viajes", "Pax transportados",
+            "Días trabajados", "Km", "Meses odóm. OK", "Meses odóm. descartados", "Fecha de baja"
+        };
+        for (var c = 0; c < hU.Length; c++) wsU.Cell(1, c + 1).Value = hU[c];
+
+        var rU = 2;
+        foreach (var u in unidades.OrderBy(x => x.Interno == 0 ? int.MaxValue : x.Interno)
+                                  .ThenBy(x => x.Dominio))
+        {
+            wsU.Cell(rU, 1).Value = u.InternoNT;
+            wsU.Cell(rU, 2).Value = u.Dominio;
+            wsU.Cell(rU, 3).Value = u.Tipo;
+            wsU.Cell(rU, 4).Value = u.Marca;
+            if (u.Antiguedad is not null) wsU.Cell(rU, 5).Value = u.Modelo;
+            if (u.Pax > 0) wsU.Cell(rU, 6).Value = u.Pax;
+            if (u.Antiguedad is int ant) wsU.Cell(rU, 7).Value = ant;
+            wsU.Cell(rU, 8).Value = u.Uso;
+            wsU.Cell(rU, 9).Value = u.Titular;
+            wsU.Cell(rU, 10).Value = u.EsBaja ? "De baja" : u.EsOciosa ? "Sin uso" : "Operativa";
+            wsU.Cell(rU, 11).Value = u.Estado;
+            wsU.Cell(rU, 12).Value = u.Viajes;
+            wsU.Cell(rU, 13).Value = u.PaxTransportados;
+            wsU.Cell(rU, 14).Value = u.DiasTrabajados;
+            if (u.TieneKm) wsU.Cell(rU, 15).Value = u.Km;
+            wsU.Cell(rU, 16).Value = u.MesesOdometroOk;
+            wsU.Cell(rU, 17).Value = u.MesesOdometroRaro;
+            if (u.FBaja is DateOnly fb)
+            {
+                wsU.Cell(rU, 18).Value = fb.ToDateTime(TimeOnly.MinValue);
+                wsU.Cell(rU, 18).Style.DateFormat.Format = "dd/mm/yyyy";
+            }
+            rU++;
+        }
+        wsU.Row(1).Style.Font.Bold = true;
+        wsU.SheetView.FreezeRows(1);
+        wsU.Columns().AdjustToContents(1, Math.Min(unidades.Count + 1, 500));
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Exporta el Panel de Clientes. Hoja 1: el ranking tal como se ve (con participación y
+    /// Pareto). Hoja 2: el pivote cliente × mes de la métrica elegida. Hoja 3: el padrón
+    /// completo con el segmento de actividad y los datos que le faltan a cada registro —
+    /// esa hoja es la lista accionable para depurar la base.
+    /// </summary>
+    public byte[] PanelClientes(
+        IReadOnlyList<ClienteResumenRow> ranking,
+        IReadOnlyList<ClienteMesRow> filas,
+        IReadOnlyList<string> meses,
+        IReadOnlyList<ClientePadronRow> padron,
+        string tituloDimension,
+        string metrica,
+        DateOnly corte,
+        DateOnly desde,
+        DateOnly hasta)
+    {
+        using var wb = new XLWorkbook();
+        const string fmtPlata = "#,##0.00";
+
+        // --- Hoja 1: ranking de clientes -------------------------------------
+        var wsR = wb.Worksheets.Add("Ranking");
+        string[] hR =
+        {
+            "Código", "Cliente", tituloDimension, "Facturado", "Facturado USD", "Viajes",
+            "Cancelados", "% cancelado", "Pax", "Facturado por viaje", "% del total",
+            "% acumulado", "Última reserva", "Segmento", "Tipo fiscal", "Lista de precios"
+        };
+        for (var c = 0; c < hR.Length; c++) wsR.Cell(1, c + 1).Value = hR[c];
+
+        // El total y el acumulado se calculan sobre la MISMA métrica que se ve en pantalla.
+        decimal Met(ClienteResumenRow x) => metrica switch
+        {
+            ReportService.MetCliViajes => x.Viajes,
+            ReportService.MetCliPax => x.Pax,
+            _ => x.Facturado,
+        };
+        var totalMet = ranking.Sum(Met);
+
+        var r = 2;
+        decimal corrido = 0;
+        foreach (var x in ranking)
+        {
+            corrido += Met(x);
+            wsR.Cell(r, 1).Value = x.IdCliente;
+            wsR.Cell(r, 2).Value = x.Nombre;
+            wsR.Cell(r, 3).Value = x.Categoria;
+            wsR.Cell(r, 4).Value = x.Facturado; wsR.Cell(r, 4).Style.NumberFormat.Format = fmtPlata;
+            if (x.FacturadoUsd > 0) { wsR.Cell(r, 5).Value = x.FacturadoUsd; wsR.Cell(r, 5).Style.NumberFormat.Format = fmtPlata; }
+            wsR.Cell(r, 6).Value = x.Viajes;
+            wsR.Cell(r, 7).Value = x.Cancelados;
+            if (x.Viajes > 0) { wsR.Cell(r, 8).Value = Math.Round(x.PctCancelado, 1); wsR.Cell(r, 8).Style.NumberFormat.Format = "0.0"; }
+            wsR.Cell(r, 9).Value = x.Pax;
+            if (x.FacturadoPorViaje is decimal pv) { wsR.Cell(r, 10).Value = pv; wsR.Cell(r, 10).Style.NumberFormat.Format = fmtPlata; }
+            if (totalMet > 0)
+            {
+                wsR.Cell(r, 11).Value = Math.Round((double)(Met(x) * 100 / totalMet), 2);
+                wsR.Cell(r, 11).Style.NumberFormat.Format = "0.00";
+                wsR.Cell(r, 12).Value = Math.Round((double)(corrido * 100 / totalMet), 2);
+                wsR.Cell(r, 12).Style.NumberFormat.Format = "0.00";
+            }
+            if (x.UltimaReserva is DateOnly ur)
+            {
+                wsR.Cell(r, 13).Value = ur.ToDateTime(TimeOnly.MinValue);
+                wsR.Cell(r, 13).Style.DateFormat.Format = "dd/mm/yyyy";
+            }
+            wsR.Cell(r, 14).Value = x.Segmento;
+            wsR.Cell(r, 15).Value = x.Fiscal;
+            wsR.Cell(r, 16).Value = x.ListaPrecio;
+            r++;
+        }
+        wsR.Cell(r, 1).Value = "TOTAL";
+        wsR.Cell(r, 4).Value = ranking.Sum(x => x.Facturado); wsR.Cell(r, 4).Style.NumberFormat.Format = fmtPlata;
+        wsR.Cell(r, 5).Value = ranking.Sum(x => x.FacturadoUsd); wsR.Cell(r, 5).Style.NumberFormat.Format = fmtPlata;
+        wsR.Cell(r, 6).Value = ranking.Sum(x => x.Viajes);
+        wsR.Cell(r, 7).Value = ranking.Sum(x => x.Cancelados);
+        wsR.Cell(r, 9).Value = ranking.Sum(x => x.Pax);
+        wsR.Row(r).Style.Font.Bold = true;
+
+        // Las decisiones de cálculo van escritas en la hoja: el Excel se reenvía por mail y se
+        // lee fuera de contexto.
+        wsR.Cell(r + 2, 1).Value = $"Período {desde:dd/MM/yyyy} – {hasta:dd/MM/yyyy}. Métrica del ranking: {metrica}.";
+        wsR.Cell(r + 3, 1).Value =
+            "La facturación está DEVENGADA AL MES DEL VIAJE (no al de la liquidación) y sale del detalle "
+            + "de liquidación (importe + incremento − descuento), no del total de la cabecera.";
+        wsR.Cell(r + 4, 1).Value =
+            "Importes en PESOS CORRIENTES: los facturados en dólares se convierten con el tipo de cambio "
+            + "de cada liquidación. Comparar años distintos en pesos sobrestima el crecimiento por inflación.";
+        wsR.Cell(r + 5, 1).Value = $"Segmento de actividad medido contra el último día con datos: {corte:dd/MM/yyyy}.";
+        wsR.Row(1).Style.Font.Bold = true;
+        wsR.SheetView.FreezeRows(1);
+        wsR.Columns().AdjustToContents(1, Math.Min(ranking.Count + 1, 500));
+
+        // --- Hoja 2: pivote cliente × mes ------------------------------------
+        var wsP = wb.Worksheets.Add($"{metrica} por mes");
+        wsP.Cell(1, 1).Value = "Código";
+        wsP.Cell(1, 2).Value = "Cliente";
+        for (var c = 0; c < meses.Count; c++)
+        {
+            var m = meses[c];
+            wsP.Cell(1, c + 3).Value = m.Length == 7 ? $"{m.Substring(5, 2)}/{m.Substring(0, 4)}" : m;
+        }
+        wsP.Cell(1, meses.Count + 3).Value = "TOTAL";
+
+        decimal MetMes(ClienteMesRow x) => metrica switch
+        {
+            ReportService.MetCliViajes => x.Viajes,
+            ReportService.MetCliPax => x.Pax,
+            _ => x.Facturado,
+        };
+        var mapa = filas.GroupBy(f => (f.IdCliente, f.Mes))
+                        .ToDictionary(g => g.Key, g => g.Sum(MetMes));
+
+        var rP = 2;
+        foreach (var x in ranking)
+        {
+            wsP.Cell(rP, 1).Value = x.IdCliente;
+            wsP.Cell(rP, 2).Value = x.Nombre;
+            decimal totFila = 0;
+            for (var c = 0; c < meses.Count; c++)
+            {
+                var v = mapa.TryGetValue((x.IdCliente, meses[c]), out var val) ? val : 0;
+                totFila += v;
+                if (v == 0) continue;
+                wsP.Cell(rP, c + 3).Value = v;
+                if (metrica == ReportService.MetCliFacturado) wsP.Cell(rP, c + 3).Style.NumberFormat.Format = fmtPlata;
+            }
+            wsP.Cell(rP, meses.Count + 3).Value = totFila;
+            if (metrica == ReportService.MetCliFacturado) wsP.Cell(rP, meses.Count + 3).Style.NumberFormat.Format = fmtPlata;
+            rP++;
+        }
+        wsP.Row(1).Style.Font.Bold = true;
+        wsP.SheetView.FreezeRows(1);
+        wsP.Columns().AdjustToContents(1, Math.Min(ranking.Count + 1, 500));
+
+        // --- Hoja 3: padrón completo (la lista para depurar) ------------------
+        var wsC = wb.Worksheets.Add("Padrón");
+        string[] hC =
+        {
+            "Código", "Cliente", "Segmento", "Última reserva", "Primera reserva",
+            "Viajes históricos", "Tipo fiscal", "CUIT", "Teléfono", "E-mail", "Contacto",
+            "Localidad", "Provincia", "Lista de precios", "Obtención de precios",
+            "Tarifario propio", "Sin precios", "Candidato a baja",
+            "Descuento", "Incremento", "Alta", "Inhabilitado", "Datos que faltan"
+        };
+        for (var c = 0; c < hC.Length; c++) wsC.Cell(1, c + 1).Value = hC[c];
+
+        var rC = 2;
+        foreach (var p in padron.OrderBy(x => ClientePadronRow.OrdenSegmento(x.Segmento(corte)))
+                                .ThenByDescending(x => x.ViajesHistoricos))
+        {
+            wsC.Cell(rC, 1).Value = p.IdCliente;
+            wsC.Cell(rC, 2).Value = p.Display;
+            wsC.Cell(rC, 3).Value = p.Segmento(corte);
+            if (p.UltimaReserva is DateOnly u) { wsC.Cell(rC, 4).Value = u.ToDateTime(TimeOnly.MinValue); wsC.Cell(rC, 4).Style.DateFormat.Format = "dd/mm/yyyy"; }
+            if (p.PrimeraReserva is DateOnly pr) { wsC.Cell(rC, 5).Value = pr.ToDateTime(TimeOnly.MinValue); wsC.Cell(rC, 5).Style.DateFormat.Format = "dd/mm/yyyy"; }
+            wsC.Cell(rC, 6).Value = p.ViajesHistoricos;
+            wsC.Cell(rC, 7).Value = p.Fiscal;
+            wsC.Cell(rC, 8).Value = p.Cuit;
+            wsC.Cell(rC, 9).Value = p.Telefono;
+            wsC.Cell(rC, 10).Value = p.Email;
+            wsC.Cell(rC, 11).Value = p.Contacto;
+            wsC.Cell(rC, 12).Value = p.Localidad;
+            wsC.Cell(rC, 13).Value = p.Provincia;
+            wsC.Cell(rC, 14).Value = p.ListaPrecio;
+            wsC.Cell(rC, 15).Value = p.ObPrecio;
+            wsC.Cell(rC, 16).Value = p.TieneTarifaPropia ? "Sí" : "";
+            wsC.Cell(rC, 17).Value = p.SinPrecio ? "SIN PRECIOS" : "";
+            wsC.Cell(rC, 18).Value = p.CandidatoBaja(corte) ? "REVISAR" : "";
+            if (p.Descuento != 0) wsC.Cell(rC, 19).Value = p.Descuento;
+            if (p.Incremento != 0) wsC.Cell(rC, 20).Value = p.Incremento;
+            if (p.FAlta is DateOnly fa) { wsC.Cell(rC, 21).Value = fa.ToDateTime(TimeOnly.MinValue); wsC.Cell(rC, 21).Style.DateFormat.Format = "dd/mm/yyyy"; }
+            if (p.FBaja is DateOnly fb) { wsC.Cell(rC, 22).Value = fb.ToDateTime(TimeOnly.MinValue); wsC.Cell(rC, 22).Style.DateFormat.Format = "dd/mm/yyyy"; }
+            wsC.Cell(rC, 23).Value = string.Join(", ", p.Faltantes());
+            rC++;
+        }
+        wsC.Cell(rC + 1, 1).Value =
+            $"Segmento medido contra el último día con datos ({corte:dd/MM/yyyy}): Activo ≤ 90 días, "
+            + "Tibio ≤ 1 año, Dormido ≤ 2 años, Inactivo más de 2 años, Nunca operó = sin una sola reserva.";
+        wsC.Cell(rC + 2, 1).Value =
+            "«Sin precios» = no tiene ni lista de precios ni tarifario propio cargado: al facturarlo no hay "
+            + "de dónde sacar el importe. «Candidato a baja» = nunca operó o hace más de dos años que no pide "
+            + "un servicio (es una sugerencia para revisar, no una baja automática).";
+        wsC.Row(1).Style.Font.Bold = true;
+        wsC.SheetView.FreezeRows(1);
+        wsC.Columns().AdjustToContents(1, Math.Min(padron.Count + 1, 500));
+
+        using var msC = new MemoryStream();
+        wb.SaveAs(msC);
+        return msC.ToArray();
+    }
+
+    /// <summary>
+    /// Exporta la vista de Retención y riesgo: un cliente por fila con su comparación entre
+    /// los dos períodos, la clase ABC y en qué estado quedó (se fue / cayó / estable / creció /
+    /// nuevo). Es la lista con la que se sale a recuperar clientes.
+    /// </summary>
+    public byte[] RetencionClientes(
+        IReadOnlyList<RetencionRow> filas,
+        string metrica,
+        string periodoActual,
+        string periodoBase)
+    {
+        using var wb = new XLWorkbook();
+        var ws = wb.Worksheets.Add("Retención");
+        var esPlata = metrica == ReportService.MetCliFacturado;
+        var fmt = esPlata ? "#,##0.00" : "#,##0";
+
+        string[] h =
+        {
+            "Código", "Cliente", "Clase ABC", "Estado", "Segmento",
+            $"{metrica} período", $"{metrica} base", "Variación", "Variación %",
+            "Viajes", "Cancelados", "% cancelado", "Última reserva"
+        };
+        for (var c = 0; c < h.Length; c++) ws.Cell(1, c + 1).Value = h[c];
+
+        var r = 2;
+        foreach (var x in filas)
+        {
+            ws.Cell(r, 1).Value = x.IdCliente;
+            ws.Cell(r, 2).Value = x.Nombre;
+            ws.Cell(r, 3).Value = x.Clase;
+            ws.Cell(r, 4).Value = x.EstadoTexto;
+            ws.Cell(r, 5).Value = x.Segmento;
+            ws.Cell(r, 6).Value = x.Actual; ws.Cell(r, 6).Style.NumberFormat.Format = fmt;
+            ws.Cell(r, 7).Value = x.Base;   ws.Cell(r, 7).Style.NumberFormat.Format = fmt;
+            ws.Cell(r, 8).Value = x.Delta;  ws.Cell(r, 8).Style.NumberFormat.Format = fmt;
+            if (x.Pct is double p) { ws.Cell(r, 9).Value = Math.Round(p, 1); ws.Cell(r, 9).Style.NumberFormat.Format = "0.0"; }
+            ws.Cell(r, 10).Value = x.Viajes;
+            ws.Cell(r, 11).Value = x.Cancelados;
+            if (x.Viajes > 0) { ws.Cell(r, 12).Value = Math.Round(x.PctCancelado, 1); ws.Cell(r, 12).Style.NumberFormat.Format = "0.0"; }
+            if (x.UltimaReserva is DateOnly u)
+            {
+                ws.Cell(r, 13).Value = u.ToDateTime(TimeOnly.MinValue);
+                ws.Cell(r, 13).Style.DateFormat.Format = "dd/mm/yyyy";
+            }
+            r++;
+        }
+        ws.Cell(r, 1).Value = "TOTAL";
+        ws.Cell(r, 6).Value = filas.Sum(x => x.Actual); ws.Cell(r, 6).Style.NumberFormat.Format = fmt;
+        ws.Cell(r, 7).Value = filas.Sum(x => x.Base);   ws.Cell(r, 7).Style.NumberFormat.Format = fmt;
+        ws.Cell(r, 8).Value = filas.Sum(x => x.Delta);  ws.Cell(r, 8).Style.NumberFormat.Format = fmt;
+        ws.Cell(r, 10).Value = filas.Sum(x => x.Viajes);
+        ws.Cell(r, 11).Value = filas.Sum(x => x.Cancelados);
+        ws.Row(r).Style.Font.Bold = true;
+
+        ws.Cell(r + 2, 1).Value = $"Período {periodoActual} comparado contra {periodoBase}. Métrica: {metrica}.";
+        ws.Cell(r + 3, 1).Value =
+            "Clase ABC = importancia por Pareto de la métrica: A son los clientes que hacen el primer 80 %, "
+            + "B hasta el 95 %, C la cola. Los que se fueron conservan la clase que tenían en el período base.";
+        ws.Cell(r + 4, 1).Value =
+            "«Se fue» = tenía actividad en el período base y ninguna en este. «Cayó» / «Creció» = varió 40 % o más.";
+        if (esPlata)
+            ws.Cell(r + 5, 1).Value =
+                "Importes en pesos corrientes: si los dos períodos caen en años distintos, parte de la variación es inflación.";
+        ws.Row(1).Style.Font.Bold = true;
+        ws.SheetView.FreezeRows(1);
+        ws.Columns().AdjustToContents(1, Math.Min(filas.Count + 1, 500));
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
     }
 
     /// <summary>
@@ -1403,6 +2265,67 @@ public class ExcelExportService
         return ms.ToArray();
     }
 
+    /// <summary>
+    /// Documentación de los choferes con actividad en el período (modal de ViajesPorChofer).
+    /// Sale con la MISMA clasificación que la pantalla (<see cref="VencimientosChofer"/>) y en
+    /// el mismo orden de urgencia, así el .xlsx no puede discrepar de lo que se ve.
+    /// </summary>
+    public byte[] ChoferesVencimientos(IReadOnlyList<ChoferDocVista> filas, int dias, string periodo)
+    {
+        using var wb = new XLWorkbook();
+        var ws = wb.Worksheets.Add("Documentacion");
+
+        void PintarDoc(IXLCell cell, DocEstado est, DateOnly? f)
+        {
+            if (f is DateOnly d)
+            {
+                cell.Value = d.ToDateTime(TimeOnly.MinValue);
+                cell.Style.DateFormat.Format = "dd/mm/yyyy";
+            }
+            else
+            {
+                cell.Value = est == DocEstado.NoAplica ? "no corresponde" : "sin fecha";
+            }
+            if (est == DocEstado.Vencido) cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#F8CBCB");
+            else if (est == DocEstado.PorVencer) cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#FCE3B4");
+        }
+
+        string[] h = { "Chofer", "Nombre", "Tipo", "Viajes", "Nº Registro",
+                       "Registro", "CNRT", "AEP", "Estado", "Vence primero", "Plazo (días)" };
+        for (var c = 0; c < h.Length; c++) ws.Cell(1, c + 1).Value = h[c];
+
+        var r = 2;
+        foreach (var f in VencimientosChofer.OrdenarPorUrgencia(filas))
+        {
+            ws.Cell(r, 1).Value = f.IdChofer;
+            ws.Cell(r, 2).Value = f.Nombre;
+            ws.Cell(r, 3).Value = f.EsContratado ? $"Contratado · {f.Doc.Fletero}" : "Nortur";
+            ws.Cell(r, 4).Value = f.Viajes;
+            ws.Cell(r, 5).Value = f.Doc.RegistroNro;
+            PintarDoc(ws.Cell(r, 6), f.Registro, f.Doc.RegistroVto);
+            PintarDoc(ws.Cell(r, 7), f.Cnrt, f.Doc.CnrtVto);
+            PintarDoc(ws.Cell(r, 8), f.Aep, f.Doc.AepVto);
+            ws.Cell(r, 9).Value = f.Peor == DocEstado.Vencido ? "VENCIDO" : "POR VENCER";
+            ws.Cell(r, 10).Value = f.DocCritico;
+            if (f.DiasCritico is int dd) ws.Cell(r, 11).Value = dd;
+            r++;
+        }
+
+        // Pie con el criterio: sin esta línea los números no se pueden auditar contra el sistema.
+        var pie = r + 1;
+        ws.Cell(pie, 1).Value = $"Período: {periodo} · ventana de aviso: {dias} días · "
+            + "registro y CNRT sin fecha = vencido (regla Metrocar); AEP sin fecha = no corresponde.";
+        ws.Range(pie, 1, pie, h.Length).Merge();
+        ws.Cell(pie, 1).Style.Font.Italic = true;
+        ws.Cell(pie, 1).Style.Font.FontColor = XLColor.FromHtml("#5B7290");
+
+        EstiloHeaderAgenda(ws);
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
+    }
+
     private static void EstiloHeaderAgenda(IXLWorksheet ws)
     {
         ws.Row(1).Style.Font.Bold = true;
@@ -1733,6 +2656,44 @@ public class ExcelExportService
     }
 
     /// <summary>Exporta la grilla de Guardias (trafico_guardia.scx).</summary>
+    /// <summary>Libro de Novedades (Tráfico → Libro de Novedades). El original FoxPro no
+    /// exporta: la única salida era leer la grilla en pantalla.</summary>
+    public byte[] LibroNovedades(IReadOnlyList<LibroNovedadRow> filas)
+    {
+        using var wb = new XLWorkbook();
+        var ws = wb.Worksheets.Add("Libro de Novedades");
+        string[] headers = { "F. Carga", "Asunto", "Mensaje", "U. Creador", "Nº Viaje", "Cliente", "Origen", "Enviada" };
+        for (var c = 0; c < headers.Length; c++) ws.Cell(1, c + 1).Value = headers[c];
+        var r = 2;
+        foreach (var n in filas)
+        {
+            if (n.FCarga is DateTime f)
+            {
+                ws.Cell(r, 1).Value = f;
+                ws.Cell(r, 1).Style.DateFormat.Format = "dd/mm/yyyy hh:mm";
+            }
+            ws.Cell(r, 2).Value = n.Asunto;
+            // El mensaje es texto libre multilínea: se deja tal cual y se activa el wrap.
+            ws.Cell(r, 3).Value = n.Mensaje;
+            ws.Cell(r, 3).Style.Alignment.WrapText = true;
+            ws.Cell(r, 4).Value = n.Usuario;
+            if (n.IdViaje > 0) ws.Cell(r, 5).Value = n.IdViaje;
+            ws.Cell(r, 6).Value = n.Cliente;
+            ws.Cell(r, 7).Value = n.Origen;
+            if (n.FEnvio is DateOnly e)
+            {
+                ws.Cell(r, 8).Value = e.ToDateTime(TimeOnly.MinValue);
+                ws.Cell(r, 8).Style.DateFormat.Format = "dd/mm/yyyy";
+            }
+            r++;
+        }
+        ws.Column(3).Width = 70;
+        EstiloHeaderAgenda(ws);
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
+    }
+
     public byte[] Guardias(IReadOnlyList<GuardiaRow> filas)
     {
         using var wb = new XLWorkbook();
@@ -2051,6 +3012,344 @@ public class ExcelExportService
         }
         wsD.Range(2, 7, Math.Max(2, rd - 1), 7).Style.NumberFormat.Format = "#,##0.0";
         EstiloHeaderAgenda(wsD);
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Exporta el Panel del Operador. Hoja 1: el perfil de cada operador tal como se ve en
+    /// pantalla. Hoja 2: la matriz creador × modificador (quién toca lo de quién). Hoja 3:
+    /// la carga día por día, que es la que sirve para pegar en un tablero propio.
+    ///
+    /// Las tres hojas llevan escritos al pie los límites del dato (el período es por fecha
+    /// de CARGA, y `u_modify` guarda solo la última mano): un Excel se reenvía por mail y se
+    /// lee sin la pantalla al lado, así que las salvedades tienen que viajar con él.
+    /// </summary>
+    public byte[] PanelOperador(
+        IReadOnlyList<OperadorPerfilRow> perfiles,
+        IReadOnlyList<OperadorMatrizRow> matriz,
+        IReadOnlyList<OperadorDiaRow> evolucion,
+        DateOnly desde,
+        DateOnly hasta)
+    {
+        using var wb = new XLWorkbook();
+        var periodo = $"Período de CARGA: {desde:dd/MM/yyyy} – {hasta:dd/MM/yyyy}";
+
+        // --- Hoja 1: perfil por operador -------------------------------------
+        var wsP = wb.Worksheets.Add("Operadores");
+        string[] hP =
+        {
+            "Operador", "Estado del usuario", "Altas", "Pax", "Días con carga", "Altas por día",
+            "Clientes distintos", "Canceladas", "% canceladas", "Sin asignar", "% sin asignar",
+            "Antelación prom. (días)", "Cargas retroactivas", "Modificaciones hechas",
+            "Modificó de otros", "Sus altas tocadas por otro", "Primera carga", "Última carga"
+        };
+        for (var c = 0; c < hP.Length; c++) wsP.Cell(1, c + 1).Value = hP[c];
+
+        var r = 2;
+        foreach (var p in perfiles)
+        {
+            wsP.Cell(r, 1).Value = p.Operador;
+            wsP.Cell(r, 2).Value = p.EstadoTexto;
+            wsP.Cell(r, 3).Value = p.Altas;
+            wsP.Cell(r, 4).Value = p.Pax;
+            wsP.Cell(r, 5).Value = p.DiasConCarga;
+            if (p.DiasConCarga > 0)
+            {
+                wsP.Cell(r, 6).Value = Math.Round(p.AltasPorDia, 1);
+                wsP.Cell(r, 6).Style.NumberFormat.Format = "0.0";
+            }
+            wsP.Cell(r, 7).Value = p.Clientes;
+            wsP.Cell(r, 8).Value = p.Canceladas;
+            if (p.Altas > 0)
+            {
+                wsP.Cell(r, 9).Value = Math.Round(p.PctCanceladas, 1);
+                wsP.Cell(r, 9).Style.NumberFormat.Format = "0.0";
+            }
+            wsP.Cell(r, 10).Value = p.SinAsignar;
+            if (p.Altas > 0)
+            {
+                wsP.Cell(r, 11).Value = Math.Round(p.PctSinAsignar, 1);
+                wsP.Cell(r, 11).Style.NumberFormat.Format = "0.0";
+            }
+            if (p.AntelacionProm is double ant)
+            {
+                wsP.Cell(r, 12).Value = Math.Round(ant, 1);
+                wsP.Cell(r, 12).Style.NumberFormat.Format = "0.0";
+            }
+            wsP.Cell(r, 13).Value = p.Retroactivas;
+            wsP.Cell(r, 14).Value = p.Modificaciones;
+            wsP.Cell(r, 15).Value = p.ModificoDeOtros;
+            wsP.Cell(r, 16).Value = p.AltasTocadasPorOtro;
+            if (p.PrimeraCarga is DateOnly pc)
+            {
+                wsP.Cell(r, 17).Value = pc.ToDateTime(TimeOnly.MinValue);
+                wsP.Cell(r, 17).Style.DateFormat.Format = "dd/mm/yyyy";
+            }
+            if (p.UltimaCarga is DateOnly uc)
+            {
+                wsP.Cell(r, 18).Value = uc.ToDateTime(TimeOnly.MinValue);
+                wsP.Cell(r, 18).Style.DateFormat.Format = "dd/mm/yyyy";
+            }
+
+            // El operador fantasma se marca en el Excel igual que en pantalla: es el hallazgo
+            // de control, y en una planilla sin colores pasaría de largo.
+            if (p.EstadoUsuario != EstadoUsuarioOperador.Vigente)
+                wsP.Range(r, 1, r, hP.Length).Style.Fill.BackgroundColor = XLColor.FromHtml("#FDECEA");
+            r++;
+        }
+        wsP.Cell(r, 1).Value = "TOTAL";
+        wsP.Cell(r, 3).Value = perfiles.Sum(x => x.Altas);
+        wsP.Cell(r, 4).Value = perfiles.Sum(x => x.Pax);
+        wsP.Cell(r, 8).Value = perfiles.Sum(x => x.Canceladas);
+        wsP.Cell(r, 10).Value = perfiles.Sum(x => x.SinAsignar);
+        wsP.Cell(r, 13).Value = perfiles.Sum(x => x.Retroactivas);
+        wsP.Cell(r, 14).Value = perfiles.Sum(x => x.Modificaciones);
+        wsP.Cell(r, 15).Value = perfiles.Sum(x => x.ModificoDeOtros);
+        wsP.Cell(r, 16).Value = perfiles.Sum(x => x.AltasTocadasPorOtro);
+        wsP.Row(r).Style.Font.Bold = true;
+
+        wsP.Cell(r + 2, 1).Value = periodo + " — es la fecha en que se cargó la reserva "
+            + "(`f_create`), NO la fecha del viaje. Una reserva cargada hoy para diciembre entra acá.";
+        wsP.Cell(r + 3, 1).Value = "Antelación = días entre la carga y la fecha del viaje. "
+            + "Negativa (retroactiva) = se cargó después de que el viaje ocurrió.";
+        wsP.Cell(r + 4, 1).Value = "Modificaciones: `u_modify` guarda SOLO la última mano que tocó "
+            + "cada reserva, así que son un piso, nunca el total.";
+        wsP.Cell(r + 5, 1).Value = "Fila resaltada = el operador no está vigente en el padrón de "
+            + "usuarios (dado de baja o inexistente).";
+        wsP.Row(1).Style.Font.Bold = true;
+        wsP.SheetView.FreezeRows(1);
+        wsP.Columns().AdjustToContents(1, Math.Min(perfiles.Count + 1, 200));
+
+        // --- Hoja 2: matriz creador × modificador ----------------------------
+        var wsM = wb.Worksheets.Add("Quién modifica a quién");
+        string[] hM = { "Cargó la reserva", "La modificó", "Cantidad", "Tipo" };
+        for (var c = 0; c < hM.Length; c++) wsM.Cell(1, c + 1).Value = hM[c];
+
+        var rM = 2;
+        foreach (var m in matriz.OrderByDescending(x => x.Cantidad))
+        {
+            wsM.Cell(rM, 1).Value = m.Creador;
+            wsM.Cell(rM, 2).Value = m.Modificador;
+            wsM.Cell(rM, 3).Value = m.Cantidad;
+            wsM.Cell(rM, 4).Value = m.EsPropia ? "Se corrigió a sí mismo" : "Modificó de otro";
+            rM++;
+        }
+        wsM.Cell(rM, 1).Value = "TOTAL";
+        wsM.Cell(rM, 3).Value = matriz.Sum(x => x.Cantidad);
+        wsM.Row(rM).Style.Font.Bold = true;
+        wsM.Cell(rM + 2, 1).Value = "La diagonal (se corrigió a sí mismo) es lo normal y suele ser "
+            + "la mayoría. Lo que hay que leer es lo de afuera: quién entra a corregir lo del otro.";
+        wsM.Cell(rM + 3, 1).Value = periodo;
+        wsM.Row(1).Style.Font.Bold = true;
+        wsM.SheetView.FreezeRows(1);
+        wsM.Columns().AdjustToContents(1, Math.Min(matriz.Count + 1, 300));
+
+        // --- Hoja 3: carga día por día ---------------------------------------
+        var wsE = wb.Worksheets.Add("Carga diaria");
+        string[] hE = { "Fecha de carga", "Día", "Operador", "Altas" };
+        for (var c = 0; c < hE.Length; c++) wsE.Cell(1, c + 1).Value = hE[c];
+
+        var rE = 2;
+        foreach (var e in evolucion.OrderBy(x => x.Fecha).ThenByDescending(x => x.Altas))
+        {
+            wsE.Cell(rE, 1).Value = e.Fecha.ToDateTime(TimeOnly.MinValue);
+            wsE.Cell(rE, 1).Style.DateFormat.Format = "dd/mm/yyyy";
+            wsE.Cell(rE, 2).Value = DiaSemana(e.Fecha);
+            wsE.Cell(rE, 3).Value = e.Operador;
+            wsE.Cell(rE, 4).Value = e.Altas;
+            rE++;
+        }
+        wsE.Cell(rE, 1).Value = "TOTAL";
+        wsE.Cell(rE, 4).Value = evolucion.Sum(x => x.Altas);
+        wsE.Row(rE).Style.Font.Bold = true;
+        wsE.Cell(rE + 2, 1).Value = periodo;
+        wsE.Row(1).Style.Font.Bold = true;
+        wsE.SheetView.FreezeRows(1);
+        wsE.Columns().AdjustToContents(1, Math.Min(evolucion.Count + 1, 500));
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Nombre del día en castellano. Se calcula en C# a propósito: `DATEPART(weekday)` de SQL
+    /// depende de `SET DATEFIRST`, que cambia con el idioma del login — el mismo informe daría
+    /// distinto en el server local (español) que en otro en inglés.
+    /// </summary>
+    private static string DiaSemana(DateOnly f) => f.DayOfWeek switch
+    {
+        DayOfWeek.Monday => "Lunes",
+        DayOfWeek.Tuesday => "Martes",
+        DayOfWeek.Wednesday => "Miércoles",
+        DayOfWeek.Thursday => "Jueves",
+        DayOfWeek.Friday => "Viernes",
+        DayOfWeek.Saturday => "Sábado",
+        _ => "Domingo",
+    };
+
+    /// <summary>
+    /// Exporta el Panel de Tercerización. Hoja 1: los prestadores. Hoja 2: la evolución mensual.
+    /// Hoja 3: el desglose completo (las tres dimensiones, sin recortar al top de la pantalla).
+    /// Hoja 4: el cruce de oportunidad por tipo.
+    /// </summary>
+    public byte[] PanelTercerizacion(
+        IReadOnlyList<TercerizacionPrestadorRow> prestadores,
+        IReadOnlyList<TercerizacionMesRow> meses,
+        IReadOnlyList<TercerizacionDetalleRow> detalle,
+        IReadOnlyList<TercerizacionOportunidadRow> oportunidad,
+        DateOnly desde,
+        DateOnly hasta)
+    {
+        using var wb = new XLWorkbook();
+        var periodo = $"Período: {desde:dd/MM/yyyy} – {hasta:dd/MM/yyyy}";
+        var totalViajes = prestadores.Sum(p => p.Viajes);
+
+        // --- Hoja 1: prestadores ---------------------------------------------
+        var wsP = wb.Worksheets.Add("Prestadores");
+        string[] hP = { "Código", "Razón social", "Tipo", "Viajes", "% del total", "Pax", "Km",
+                        "Unidades", "Clientes", "Servicios", "Días", "Viajes por unidad" };
+        for (var c = 0; c < hP.Length; c++) wsP.Cell(1, c + 1).Value = hP[c];
+
+        var r = 2;
+        foreach (var p in prestadores)
+        {
+            wsP.Cell(r, 1).Value = p.Prestador;
+            wsP.Cell(r, 2).Value = p.Nombre;
+            wsP.Cell(r, 3).Value = p.EsPropio ? "Flota propia" : "Fletero";
+            wsP.Cell(r, 4).Value = p.Viajes;
+            if (totalViajes > 0)
+            {
+                wsP.Cell(r, 5).Value = Math.Round(p.Viajes * 100.0 / totalViajes, 1);
+                wsP.Cell(r, 5).Style.NumberFormat.Format = "0.0";
+            }
+            wsP.Cell(r, 6).Value = p.Pax;
+            wsP.Cell(r, 7).Value = p.Km;
+            wsP.Cell(r, 8).Value = p.Unidades;
+            wsP.Cell(r, 9).Value = p.Clientes;
+            wsP.Cell(r, 10).Value = p.Servicios;
+            wsP.Cell(r, 11).Value = p.Dias;
+            if (p.Unidades > 0)
+            {
+                wsP.Cell(r, 12).Value = Math.Round(p.ViajesPorUnidad, 1);
+                wsP.Cell(r, 12).Style.NumberFormat.Format = "0.0";
+            }
+            r++;
+        }
+        wsP.Cell(r, 1).Value = "TOTAL";
+        wsP.Cell(r, 4).Value = totalViajes;
+        wsP.Cell(r, 6).Value = prestadores.Sum(p => p.Pax);
+        wsP.Cell(r, 7).Value = prestadores.Sum(p => p.Km);
+        wsP.Row(r).Style.Font.Bold = true;
+        wsP.Cell(r + 2, 1).Value = periodo + ". Solo viajes CON unidad asignada y no cancelados.";
+        wsP.Cell(r + 3, 1).Value =
+            "Quién presta el servicio sale del TITULAR de la unidad (viaje.fletero). Ojo: el campo "
+            + "`uso` del padrón de vehículos (PROPIO/CONTRATADO) describe la relación de la unidad "
+            + "con SU titular, no con NORTUR — clasificar por ahí cuenta viajes de terceros como propios.";
+        wsP.Row(1).Style.Font.Bold = true;
+        wsP.SheetView.FreezeRows(1);
+        wsP.Columns().AdjustToContents(1, Math.Min(prestadores.Count + 1, 200));
+
+        // --- Hoja 2: evolución mensual ---------------------------------------
+        var wsM = wb.Worksheets.Add("Evolución mensual");
+        string[] hM = { "Mes", "Propios", "Tercerizados", "Total prestados", "% tercerizado", "Sin cubrir" };
+        for (var c = 0; c < hM.Length; c++) wsM.Cell(1, c + 1).Value = hM[c];
+
+        var rM = 2;
+        foreach (var m in meses)
+        {
+            wsM.Cell(rM, 1).Value = m.Etiqueta;
+            wsM.Cell(rM, 2).Value = m.Propios;
+            wsM.Cell(rM, 3).Value = m.Tercerizados;
+            wsM.Cell(rM, 4).Value = m.Asignados;
+            if (m.Asignados > 0)
+            {
+                wsM.Cell(rM, 5).Value = Math.Round(m.PctTercerizado, 1);
+                wsM.Cell(rM, 5).Style.NumberFormat.Format = "0.0";
+            }
+            wsM.Cell(rM, 6).Value = m.SinAsignar;
+            rM++;
+        }
+        wsM.Row(rM).Style.Font.Bold = true;
+        wsM.Cell(rM, 1).Value = "TOTAL";
+        wsM.Cell(rM, 2).Value = meses.Sum(m => m.Propios);
+        wsM.Cell(rM, 3).Value = meses.Sum(m => m.Tercerizados);
+        wsM.Cell(rM, 4).Value = meses.Sum(m => m.Asignados);
+        wsM.Cell(rM, 6).Value = meses.Sum(m => m.SinAsignar);
+        wsM.Cell(rM + 2, 1).Value =
+            "«Sin cubrir» son viajes que nunca tuvieron unidad (SIN ASIGNAR): NO entran en el "
+            + "denominador del % tercerizado, se muestran al lado como demanda no cubierta.";
+        wsM.Row(1).Style.Font.Bold = true;
+        wsM.SheetView.FreezeRows(1);
+        wsM.Columns().AdjustToContents(1, Math.Min(meses.Count + 3, 200));
+
+        // --- Hoja 3: desglose completo ---------------------------------------
+        var wsD = wb.Worksheets.Add("Desglose");
+        string[] hD = { "Dimensión", "Categoría", "Propios", "Tercerizados", "Total", "% tercerizado", "Pax terceros" };
+        for (var c = 0; c < hD.Length; c++) wsD.Cell(1, c + 1).Value = hD[c];
+
+        var rD = 2;
+        foreach (var g in detalle.GroupBy(x => new { x.Dimension, x.Categoria })
+                                 .OrderBy(g => g.Key.Dimension)
+                                 .ThenByDescending(g => g.Where(x => !x.EsPropio).Sum(x => x.Viajes)))
+        {
+            var prop = g.Where(x => x.EsPropio).Sum(x => x.Viajes);
+            var terc = g.Where(x => !x.EsPropio).Sum(x => x.Viajes);
+            var tot = prop + terc;
+            wsD.Cell(rD, 1).Value = g.Key.Dimension;
+            wsD.Cell(rD, 2).Value = g.Key.Categoria;
+            wsD.Cell(rD, 3).Value = prop;
+            wsD.Cell(rD, 4).Value = terc;
+            wsD.Cell(rD, 5).Value = tot;
+            if (tot > 0)
+            {
+                wsD.Cell(rD, 6).Value = Math.Round(terc * 100.0 / tot, 1);
+                wsD.Cell(rD, 6).Style.NumberFormat.Format = "0.0";
+            }
+            wsD.Cell(rD, 7).Value = g.Where(x => !x.EsPropio).Sum(x => x.Pax);
+            rD++;
+        }
+        wsD.Row(1).Style.Font.Bold = true;
+        wsD.SheetView.FreezeRows(1);
+        wsD.Columns().AdjustToContents(1, Math.Min(rD, 500));
+
+        // --- Hoja 4: oportunidad ---------------------------------------------
+        var wsO = wb.Worksheets.Add("Oportunidad");
+        string[] hO = { "Tipo pedido", "Propios", "Tercerizados", "% tercerizado", "Sin cubrir",
+                        "Unidades propias del tipo", "Días-unidad sin salir", "¿Revisar?" };
+        for (var c = 0; c < hO.Length; c++) wsO.Cell(1, c + 1).Value = hO[c];
+
+        var rO = 2;
+        foreach (var o in oportunidad)
+        {
+            wsO.Cell(rO, 1).Value = o.Tipo;
+            wsO.Cell(rO, 2).Value = o.Propios;
+            wsO.Cell(rO, 3).Value = o.Tercerizados;
+            if (o.Asignados > 0)
+            {
+                wsO.Cell(rO, 4).Value = Math.Round(o.PctTercerizado, 1);
+                wsO.Cell(rO, 4).Style.NumberFormat.Format = "0.0";
+            }
+            wsO.Cell(rO, 5).Value = o.SinAsignar;
+            wsO.Cell(rO, 6).Value = o.UnidadesPropias;
+            wsO.Cell(rO, 7).Value = o.DiasUnidadOciosos;
+            wsO.Cell(rO, 8).Value = o.HayPregunta ? "SÍ" : "";
+            if (o.HayPregunta)
+                wsO.Range(rO, 1, rO, hO.Length).Style.Fill.BackgroundColor = XLColor.FromHtml("#FFF4E3");
+            rO++;
+        }
+        wsO.Cell(rO + 1, 1).Value =
+            "ESTA HOJA SIRVE PARA PREGUNTAR, NO PARA CONCLUIR. Un «día-unidad sin salir» no es "
+            + "capacidad disponible: la unidad pudo estar en taller, sin chofer o de franco, y en "
+            + "un feriado figura parada toda la flota. Se abre por tipo porque tercerizar una VAN "
+            + "no se cubre con un BUS parado.";
+        wsO.Cell(rO + 2, 1).Value = periodo;
+        wsO.Row(1).Style.Font.Bold = true;
+        wsO.SheetView.FreezeRows(1);
+        wsO.Columns().AdjustToContents(1, Math.Min(oportunidad.Count + 1, 200));
 
         using var ms = new MemoryStream();
         wb.SaveAs(ms);

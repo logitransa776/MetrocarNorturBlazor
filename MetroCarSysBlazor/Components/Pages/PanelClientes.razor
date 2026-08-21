@@ -1,0 +1,1233 @@
+﻿@page "/panel-clientes"
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject IDialogService DialogService
+@rendermode InteractiveServer
+
+@* ─────────────────────────────────────────────────────────────────────────────
+   Panel de Clientes — informe NUEVO (no existe en el Metrocar/FoxPro).
+
+   Cruza lo que hoy vive en tres pantallas distintas: el padrón (`cliente`), la
+   actividad (`viaje`) y la plata (`liquidacion_detalle`). Contesta "quién vale
+   cuánto": ranking, participación, concentración y evolución mes a mes.
+
+   Dos consultas (cliente × mes + padrón) y todo lo demás en memoria: cambiar de
+   dimensión, de métrica o enfocar una categoría no vuelve a la base.
+
+   ⚠ La plata está DEVENGADA AL MES DEL VIAJE y sale del detalle de liquidación,
+   no de `liquidacion.total` (que tiene cargas corruptas). Ver el encabezado de
+   Services/ReportService.PanelClientes.cs para el detalle de las decisiones.
+   ───────────────────────────────────────────────────────────────────────────── *@
+
+<PageTitle>BusLink</PageTitle>
+
+<div class="page-header mb-3">
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+            Panel de Clientes
+        </MudText>
+        @* El informe está EN DESARROLLO en el catálogo: el badge lo dice también acá, para que
+           quien lo abre sepa que está en evaluación y no publicado a la operación. *@
+        <span class="nt-badge-dev" title="Informe en evaluación: se publica al módulo Facturación cuando el cliente lo apruebe.">
+            <MudIcon Icon="@Icons.Material.Filled.Science" Size="MudSize.Small" />
+            En desarrollo
+        </span>
+        <AyudaReporte Ruta="panel-clientes" />
+    </div>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Quién vale cuánto: viajes, pasajeros y facturación por cliente y por tipo · Nortur
+    </MudText>
+</div>
+
+@* ── Selector de vista ──
+   Cartera mide el NEGOCIO en un período; Padrón mide la BASE de datos y no depende de
+   fechas. Son dos preguntas distintas sobre el mismo dato, por eso conviven acá y no en
+   dos informes: comparten las dos consultas ya cargadas. *@
+<div class="pad-vistas mb-3">
+    <AyudaReporte Ruta="panel-clientes" Bloque="vistas" Chico="true" />
+    <button type="button" class="pad-vista @(_vista == VistaCartera ? "pad-vista--on" : "")"
+            @onclick="() => CambiarVista(VistaCartera)">
+        <MudIcon Icon="@Icons.Material.Filled.Leaderboard" Size="MudSize.Small" />
+        <span>Cartera</span>
+        <small>quién vale cuánto</small>
+    </button>
+    <button type="button" class="pad-vista @(_vista == VistaRetencion ? "pad-vista--on" : "")"
+            @onclick="() => CambiarVista(VistaRetencion)">
+        <MudIcon Icon="@Icons.Material.Filled.TrendingDown" Size="MudSize.Small" />
+        <span>Retención y riesgo</span>
+        <small>a quién estoy perdiendo</small>
+    </button>
+    <button type="button" class="pad-vista @(_vista == VistaPadron ? "pad-vista--on" : "")"
+            @onclick="() => CambiarVista(VistaPadron)">
+        <MudIcon Icon="@Icons.Material.Filled.FactCheck" Size="MudSize.Small" />
+        <span>Salud del padrón</span>
+        <small>qué hay para limpiar</small>
+    </button>
+</div>
+
+@* ── Barra de filtros (filtros a la izquierda, acciones juntas a la derecha) ──
+   En la vista Padrón se ocultan los filtros de período y desglose: el padrón es el
+   catálogo completo, no depende del Desde–Hasta. Solo queda el Excel. *@
+<MudPaper Elevation="1" Class="rfs-filtros mb-3">
+    <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudSize.Small" Style="color:#003AA0; flex-shrink:0;" />
+
+    @if (_vista == VistaPadron)
+    {
+        <MudText Typo="Typo.body2" Style="color:#7A90AD;">
+            El padrón es el catálogo <b>completo</b> de clientes: no depende del período.
+            La antigüedad de uso se mide contra el último día con datos (<b>@_corte.ToString("dd/MM/yyyy")</b>).
+        </MudText>
+    }
+
+    <div class="rfs-fechas" style="@(_vista == VistaPadron ? "display:none;" : "")">
+        <MudDatePicker Label="Desde" Date="_desde" DateChanged="@(d => _desde = d)"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+        <MudDatePicker Label="Hasta" Date="_hasta" DateChanged="@(d => _hasta = d)"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+    </div>
+
+    @* En Retención, en lugar del desglose va el selector de período base (que sí re-consulta). *@
+    @if (_vista == VistaRetencion)
+    {
+        <MudSelect T="string" Label="Comparar contra" Value="_periodoBase" ValueChanged="CambiarPeriodoBase"
+                   Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:215px;"
+                   title="Contra qué período se mide la variación. El período anterior mide el momento; el año pasado saca de encima la estacionalidad, que en turismo es fuerte.">
+            <MudSelectItem T="string" Value="@BaseAnterior">Período anterior</MudSelectItem>
+            <MudSelectItem T="string" Value="@BaseAnioPasado">Año pasado</MudSelectItem>
+        </MudSelect>
+    }
+
+    @* Dimensión y métrica son cortes del MISMO dataset → se aplican al instante. *@
+    @if (_vista == VistaCartera)
+    {
+    <MudSelect T="string" Label="Agrupar por" Value="_dimension" ValueChanged="CambiarDimension"
+               Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:195px;"
+               title="Con qué criterio se clasifica cada cliente. La tabla `cliente` no tiene un campo 'tipo': la línea de negocio y la moneda se DERIVAN de lo que el cliente operó y facturó en el período. Se aplica al instante.">
+        @foreach (var d in ReportService.DimensionesClientes)
+        {
+            <MudSelectItem T="string" Value="@d">@EtiquetaDim(d)</MudSelectItem>
+        }
+    </MudSelect>
+    }
+
+    @* La métrica manda en las dos vistas de negocio (en Retención define contra qué se mide
+       la variación: plata, viajes o pasajeros). *@
+    @if (_vista != VistaPadron)
+    {
+        <MudSelect T="string" Label="Métrica" Value="_metrica" ValueChanged="CambiarMetrica"
+                   Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:150px;"
+                   title="Con qué se mide todo el tablero: plata facturada, cantidad de viajes o pasajeros transportados. Se aplica al instante.">
+            @foreach (var m in ReportService.MetricasClientes)
+            {
+                <MudSelectItem T="string" Value="@m">@m</MudSelectItem>
+            }
+        </MudSelect>
+    }
+
+    <span style="flex:1 1 auto;"></span>
+
+    <div style="display:flex; gap:6px; flex-shrink:0;">
+        @if (_vista != VistaPadron)
+        {
+            <MudButton Variant="Variant.Filled" Color="@(_pendientes > 0 ? MudColor.Warning : MudColor.Primary)"
+                       OnClick="Cargar" Disabled="_cargando"
+                       StartIcon="@(_pendientes > 0 ? Icons.Material.Filled.PriorityHigh : Icons.Material.Filled.Search)"
+                       Style="border-radius:8px; height:40px; text-transform:none;">
+                @(_cargando ? "Cargando..." : _pendientes > 0 ? $"Aplicar filtros ({_pendientes})" : "Aplicar filtros")
+            </MudButton>
+        }
+        <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                   StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                   Disabled="@(_cargando || (_vista == VistaCartera ? _ranking.Count == 0 : _padronLista.Count == 0))"
+                   Style="border-radius:8px; height:40px; text-transform:none;">
+            Excel
+        </MudButton>
+    </div>
+</MudPaper>
+
+@if (_pendientes > 0 && !_cargando && _vista == VistaCartera)
+{
+    <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3" Style="border-radius:12px;"
+              Icon="@Icons.Material.Filled.Update">
+        Lo que se ve abajo <b>todavía no incluye</b> el cambio de fechas — apretá <b>Aplicar filtros</b> para actualizar.
+    </MudAlert>
+}
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else if (_vista == VistaPadron)
+{
+    <PadronClientesPanel @ref="_padronPanel" Padron="_padronLista" Corte="_corte" AbrirFicha="AbrirFicha" />
+}
+else if (_vista == VistaRetencion)
+{
+    @* 🔴 Metrica va con @: en Razor un parámetro de tipo string SIN @ toma el literal
+       ("_metrica") en vez del valor del campo — los de tipo lista sí se evalúan. *@
+    <RetencionClientesPanel @ref="_retencionPanel"
+                            Actual="_ranking" Base="_rankingBase" Metrica="@_metrica"
+                            PeriodoActual="@PeriodoTxt" PeriodoBase="@PeriodoBaseTxt"
+                            EsAnioPasado="@(_periodoBase == BaseAnioPasado)"
+                            CruzaAnios="@(_bDesdeAp.Year != _hastaAp.Year)"
+                            AvisoLiquidacion="@AvisoLiquidacionTxt"
+                            AbrirFicha="AbrirFicha" />
+}
+else if (_ranking.Count == 0)
+{
+    <MudAlert Severity="Severity.Warning" Style="border-radius:12px;">
+        No hay clientes con actividad en el período elegido.
+    </MudAlert>
+}
+else
+{
+    <div class="@(_pendientes > 0 ? "rfs-desactualizado" : "")">
+
+    @* ── KPIs ── *@
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="Clientes" Value="@Fmt(_kClientes)" Sub="@_kClientesSub" Color="@NorturColors.Azul" />
+        <KpiCard Label="Facturado" Value="@Plata(_kFacturado)" Sub="@_kFacturadoSub" Color="@NorturColors.Verde" />
+        <KpiCard Label="Viajes" Value="@Fmt(_kViajes)" Sub="@_kViajesSub" Color="@NorturColors.Naranja" />
+        <KpiCard Label="Pasajeros" Value="@Fmt(_kPax)" Sub="en el período" Color="#0EA5E9" />
+        <KpiCard Label="Por viaje" Value="@Plata(_kPorViaje)" Sub="promedio por servicio" Color="#7C3AED" />
+        <KpiCard Label="Top 5" Value="@($"{_kConcentracion:0.0} %")" Sub="@_kConcentracionSub" Color="@NorturColors.Rojo" />
+    </div>
+
+    @if (_avisoPesos)
+    {
+        @* Con la inflación argentina, sumar pesos de años distintos no significa nada.
+           Se avisa en vez de esconderlo o de inventar un índice de ajuste. *@
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Style="border-radius:12px;"
+                  Icon="@Icons.Material.Filled.Info">
+            El período abarca <b>más de un año calendario</b>: los importes están en <b>pesos corrientes</b>
+            (los de cada momento), así que comparar meses lejanos entre sí sobrestima el crecimiento.
+            Para volumen puro, cambiá la métrica a <b>Viajes</b> o <b>Pax</b>.
+        </MudAlert>
+    }
+
+    @if (_coberturaMes is not null)
+    {
+        @* El rezago de la liquidación es la explicación #1 de "por qué el último mes cayó":
+           los viajes están hechos pero todavía no se facturaron. *@
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Style="border-radius:12px;"
+                  Icon="@Icons.Material.Filled.HourglassBottom">
+            <b>@_coberturaMes.Value.Mes todavía no está liquidado del todo</b>: solo el
+            <b>@($"{_coberturaMes.Value.Pct:0}%")</b> de sus viajes tiene facturación cargada. Los meses recientes
+            van a subir cuando se emitan las liquidaciones que faltan — no los leas como una caída.
+        </MudAlert>
+    }
+
+    @if (_mesEnCursoIncompleto)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Style="border-radius:12px;"
+                  Icon="@Icons.Material.Filled.EditCalendar">
+            El período termina <b>a mitad de mes</b>: la última columna del pivote tiene días de menos.
+            La columna <b>Evolución</b> lo excluye a propósito y compara los dos últimos meses completos.
+        </MudAlert>
+    }
+
+    @if (_lineasSinTc > 0)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3" Style="border-radius:12px;"
+                  Icon="@Icons.Material.Filled.ReportProblem">
+            @_lineasSinTc @(_lineasSinTc == 1 ? "línea facturada en dólares quedó" : "líneas facturadas en dólares quedaron")
+            <b>fuera del total en pesos</b>: su liquidación no tiene tipo de cambio cargado. Los dólares sí se cuentan
+            en el subtotal en USD.
+        </MudAlert>
+    }
+
+    @* ── Composición: top clientes por métrica + reparto por categoría ── *@
+    <MudGrid @key="_chartsKey" Spacing="3" Class="mb-3" Style="align-items:stretch;">
+        <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
+            <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                <div class="rfs-bar-head mb-2">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                        Top @_topN clientes por @_metrica.ToLowerInvariant()
+                    </MudText>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <MudSelect T="int" Value="_topN" ValueChanged="CambiarTopN" Label="Mostrar"
+                                   Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:110px;">
+                            <MudSelectItem T="int" Value="10">Top 10</MudSelectItem>
+                            <MudSelectItem T="int" Value="15">Top 15</MudSelectItem>
+                            <MudSelectItem T="int" Value="20">Top 20</MudSelectItem>
+                            <MudSelectItem T="int" Value="999">Todos</MudSelectItem>
+                        </MudSelect>
+                    </div>
+                </div>
+                <ApexChart TItem="BarItem" Options="_optsBar" Height="@_altoBarras" @ref="_barChart">
+                    <ApexPointSeries TItem="BarItem" Items="_barItems" Name="@_metrica"
+                                     SeriesType="SeriesType.Bar"
+                                     XValue="@(x => x.Cat)" YValue="@(x => x.Valor)"
+                                     ShowDataLabels="true" />
+                </ApexChart>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="5" Style="display:flex; flex-direction:column;">
+            <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                @CabeceraFoco($"Reparto por {EtiquetaDimSingular}")
+                @* Torta limpia + cantidad y % en la LEYENDA (ApexCharts no tiene leader lines).
+                   @key propio: se remonta en cada foco para que la leyenda no quede con los
+                   valores del render anterior (regla del cross-filter del proyecto). *@
+                <ApexChart @key="_pieKey" TItem="PieItem" Options="_optsPie" Height="340"
+                           OnDataPointSelection="OnPieSelection">
+                    <ApexPointSeries TItem="PieItem" Items="_pieItems" Name="@_metrica"
+                                     SeriesType="SeriesType.Pie"
+                                     XValue="@(x => x.Cat)" YValue="@(x => x.Valor)" />
+                </ApexChart>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @* ── Ranking de clientes: el corazón del informe ── *@
+    <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
+        <div class="mb-3">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                Ranking de clientes por @_metrica.ToLowerInvariant()
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                Click en el nombre para abrir la ficha del cliente · click en su @EtiquetaDimSingular para enfocar el tablero ·
+                <b>% acum.</b> es el Pareto: cuántos clientes hacen la mayor parte del negocio
+            </MudText>
+        </div>
+        <div class="rfs-tabla-wrap">
+            <table class="rfs-tabla">
+                <thead>
+                    <tr>
+                        <th class="rfs-col-fecha" style="min-width:230px;">Cliente</th>
+                        <th class="rfs-th-serv">@EtiquetaDimSingularTit</th>
+                        <th class="rfs-num" title="Facturado en el período, devengado al mes del viaje">Facturado</th>
+                        <th class="rfs-num" title="Parte del facturado en dólares, expresada en dólares">USD</th>
+                        <th class="rfs-num">Viajes</th>
+                        <th class="rfs-num" title="Viajes cancelados sobre el total del cliente">% canc.</th>
+                        <th class="rfs-num">Pax</th>
+                        <th class="rfs-num" title="Facturado dividido los viajes que sí se prestaron">Por viaje</th>
+                        <th class="rfs-num" title="Participación del cliente en la métrica elegida">% del total</th>
+                        <th class="rfs-num" title="Participación acumulada: el Pareto de la cartera">% acum.</th>
+                        <th class="rfs-th-serv" title="Última reserva ya ocurrida del cliente">Última</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @* Virtualize: pueden ser cientos de clientes (regla de performance del proyecto). *@
+                    <Virtualize Items="_ranking" Context="c" ItemSize="30" OverscanCount="12" SpacerElement="tr">
+                        @{
+                            var atenua = EnFoco(c.Categoria) ? "" : "rfs-atenua";
+                            var acum = AcumDe(c.IdCliente);
+                        }
+                        <tr>
+                            <td class="rfs-col-fecha rfs-click @atenua"
+                                style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+                                title="@($"{c.Nombre} ({c.IdCliente}) · abrir la ficha del cliente")"
+                                @onclick="() => AbrirFicha(c.IdCliente)">@c.Nombre</td>
+                            <td class="rfs-th-serv rfs-click @atenua @(_focus == c.Categoria ? "pfl-cat-foco" : "")"
+                                title="@($"Clic para enfocar el tablero en {c.Categoria}")"
+                                @onclick="() => ToggleFoco(c.Categoria)">
+                                <span class="pfl-punto" style="@($"background:{ColorDe(c.Categoria)};")"></span>@c.Categoria
+                            </td>
+                            <td class="rfs-num @atenua" title="@PlataFull(c.Facturado)">@Plata(c.Facturado)</td>
+                            <td class="rfs-num @atenua">@(c.FacturadoUsd > 0 ? "u$s " + Fmt(c.FacturadoUsd) : "·")</td>
+                            <td class="rfs-num @atenua">@Fmt(c.Viajes)</td>
+                            <td class="rfs-num @atenua @(c.PctCancelado >= 20 ? "pfl-alerta" : "")"
+                                title="@($"{c.Cancelados} cancelados de {c.Viajes} viajes")">
+                                @(c.Cancelados > 0 ? $"{c.PctCancelado:0.0}%" : "·")
+                            </td>
+                            <td class="rfs-num @atenua">@Cero(c.Pax)</td>
+                            <td class="rfs-num @atenua">@(c.FacturadoPorViaje is decimal pv && pv > 0 ? Plata(pv) : "·")</td>
+                            <td class="rfs-num @atenua">@($"{PctDe(c):0.0}%")</td>
+                            <td class="rfs-num @atenua" style="color:#7A90AD;">@($"{acum:0.0}%")</td>
+                            <td class="rfs-th-serv @atenua" style="font-weight:500;">@FechaCorta(c.UltimaReserva)</td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td class="rfs-col-fecha rfs-tot">TOTAL@(_focus is null ? "" : $" ({_focus})")</td>
+                        @* _kClientes y no _ranking.Count: el pie tiene que contar lo mismo que
+                           suman los totales, o sea los clientes EN FOCO. *@
+                        <td class="rfs-th-serv rfs-tot">@_kClientes cliente(s)</td>
+                        <td class="rfs-num rfs-tot rfs-grantot" title="@PlataFull(_tFacturado)">@Plata(_tFacturado)</td>
+                        <td class="rfs-num rfs-tot">@(_tUsd > 0 ? "u$s " + Fmt(_tUsd) : "·")</td>
+                        <td class="rfs-num rfs-tot">@Fmt(_tViajes)</td>
+                        <td class="rfs-num rfs-tot">@(_tViajes > 0 ? $"{_tCancelados * 100.0 / _tViajes:0.0}%" : "·")</td>
+                        <td class="rfs-num rfs-tot">@Fmt(_tPax)</td>
+                        <td class="rfs-num rfs-tot">@Plata(_kPorViaje)</td>
+                        <td class="rfs-num rfs-tot">100,0%</td>
+                        <td class="rfs-num rfs-tot">·</td>
+                        <td class="rfs-th-serv rfs-tot">·</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </MudPaper>
+
+    @* ── Pivote cliente × mes ── *@
+    <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
+        <div class="mb-3">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                @_metrica por cliente y mes
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                La columna <b>Evolución</b> compara el último mes con el anterior y dibuja la serie completa ·
+                click en el cliente para abrir su ficha
+            </MudText>
+        </div>
+        <div class="rfs-tabla-wrap">
+            <table class="rfs-tabla rfs-tabla-tend">
+                <thead>
+                    <tr>
+                        <th class="rfs-col-fecha" style="min-width:230px;">Cliente</th>
+                        @foreach (var m in _meses)
+                        {
+                            <th class="rfs-th-serv">@MesHeader(m)</th>
+                        }
+                        <th class="rfs-th-total">TOTAL</th>
+                        <th class="rfs-th-tend" title="Último mes contra el anterior + evolución de todo el período">EVOLUCIÓN</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <Virtualize Items="_pivClientes" Context="cli" ItemSize="30" OverscanCount="12" SpacerElement="tr">
+                        @{ var at = EnFoco(CatDe(cli)) ? "" : "rfs-atenua"; }
+                        <tr>
+                            <td class="rfs-col-fecha rfs-click @at"
+                                style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+                                title="@($"{NombreDe(cli)} · abrir la ficha del cliente")"
+                                @onclick="() => AbrirFicha(cli)">@NombreDe(cli)</td>
+                            @foreach (var m in _meses)
+                            {
+                                var mes = m;
+                                var v = PivVal(cli, mes);
+                                @if (v > 0)
+                                {
+                                    <td class="rfs-num @at" title="@($"{NombreDe(cli)} · {MesHeader(mes)}: {ValFull(v)}")">@Val(v)</td>
+                                }
+                                else
+                                {
+                                    <td class="rfs-num rfs-cero @at">·</td>
+                                }
+                            }
+                            <td class="rfs-num rfs-tot @at" title="@ValFull(PivTotFila(cli))">@Val(PivTotFila(cli))</td>
+                            <td class="rfs-tend @at">@CeldaEvolucion(cli)</td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td class="rfs-col-fecha rfs-tot">TOTAL</td>
+                        @foreach (var m in _meses)
+                        {
+                            <td class="rfs-num rfs-tot" title="@ValFull(PivTotCol(m))">@Val(PivTotCol(m))</td>
+                        }
+                        <td class="rfs-num rfs-tot rfs-grantot" title="@ValFull(_granTotal)">@Val(_granTotal)</td>
+                        <td class="rfs-tend rfs-tot">@CeldaEvolucion(null)</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </MudPaper>
+
+    </div>
+}
+
+@code {
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+    private static readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    // ── Filtros ── (default: los últimos 6 meses calendario, como el pivote de Reservas)
+    private DateTime? _desde = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-5);
+    private DateTime? _hasta = DateTime.Today;
+    private string _dimension = ReportService.DimCliLinea;
+    private string _metrica = ReportService.MetCliFacturado;
+    private int _topN = 10;
+
+    private DateOnly _desdeAp, _hastaAp;
+    private bool _cargando;
+
+    private int _pendientes
+    {
+        get
+        {
+            if (_filas.Count == 0 && !_cargando) return 0;
+            var n = 0;
+            if (_desde is not null && DateOnly.FromDateTime(_desde.Value) != _desdeAp) n++;
+            if (_hasta is not null && DateOnly.FromDateTime(_hasta.Value) != _hastaAp) n++;
+            return n;
+        }
+    }
+
+    // ── Vistas del informe ──
+    private const string VistaCartera = "CARTERA";
+    private const string VistaRetencion = "RETENCION";
+    private const string VistaPadron = "PADRON";
+    private string _vista = VistaCartera;
+    private PadronClientesPanel? _padronPanel;
+    private RetencionClientesPanel? _retencionPanel;
+
+    private string PeriodoTxt => $"{_desdeAp:dd/MM/yyyy} – {_hastaAp:dd/MM/yyyy}";
+    private string PeriodoBaseTxt => $"{_bDesdeAp:dd/MM/yyyy} – {_bHastaAp:dd/MM/yyyy}";
+
+    private void CambiarVista(string v) => _vista = v;
+
+    /// <summary>
+    /// Contra qué período se compara en la vista de retención: el mismo largo inmediatamente
+    /// anterior (default) o el mismo período del año pasado.
+    /// </summary>
+    private const string BaseAnterior = "ANTERIOR";
+    private const string BaseAnioPasado = "ANIO";
+    private string _periodoBase = BaseAnterior;
+    private DateOnly _bDesdeAp, _bHastaAp;
+
+    // ── Datos crudos ──
+    private List<ClienteMesRow> _filas = new();
+    private List<ClienteMesRow> _filasBase = new();
+    private List<ClienteResumenRow> _rankingBase = new();
+    private Dictionary<string, ClientePadronRow> _padron = new();
+    private List<ClientePadronRow> _padronLista = new();
+    private DateOnly _corte = DateOnly.FromDateTime(DateTime.Today);
+    private string _idInterno = "NORTUR";
+
+    // ── Derivados ──
+    private Dictionary<string, string> _catPorCliente = new();
+    private List<ClienteResumenRow> _ranking = new();
+    private Dictionary<string, double> _acumPorCliente = new();
+    private List<string> _meses = new();
+    private List<string> _pivClientes = new();
+    private Dictionary<(string, string), decimal> _pivMap = new();
+    private Dictionary<string, decimal> _pivTotFila = new(), _pivTotCol = new();
+    private decimal _granTotal;
+
+    // ── KPIs ──
+    private int _kClientes, _kViajes, _kPax, _lineasSinTc;
+    private decimal _kFacturado, _kPorViaje;
+    private double _kConcentracion;
+    private string _kClientesSub = "", _kFacturadoSub = "", _kViajesSub = "", _kConcentracionSub = "";
+    private bool _avisoPesos;
+
+    // ── Totales de la tabla (con el foco aplicado) ──
+    private decimal _tFacturado, _tUsd;
+    private int _tViajes, _tPax, _tCancelados;
+
+    // ── Cross-filter (una dimensión: la categoría del cliente) ──
+    private string? _focus;
+    private bool EnFoco(string cat) => _focus is null || _focus == cat;
+
+    // ── Gráficos ──
+    private record BarItem(string Cat, decimal Valor);
+    private record PieItem(string Cat, decimal Valor);
+    private List<BarItem> _barItems = new();
+    private List<PieItem> _pieItems = new();
+    private int _altoBarras = 360;
+    private ApexChart<BarItem>? _barChart;
+    private Guid _chartsKey = Guid.NewGuid();
+    private Guid _pieKey = Guid.NewGuid();
+
+    private static readonly List<string> _palette = new()
+    {
+        "#2058D0", "#F99410", "#16A34A", "#DC2626", "#0EA5E9",
+        "#7C3AED", "#B45309", "#DB2777", "#0D9488", "#65A30D",
+        "#4F46E5", "#EA580C", "#059669", "#9333EA", "#0891B2"
+    };
+    private const string _colorOtros = "#94A3B8";
+    private Dictionary<string, string> _colorPorCat = new();
+    private string ColorDe(string cat) => _colorPorCat.TryGetValue(cat, out var c) ? c : _colorOtros;
+    private string ColorFoco(string cat) => (_focus is null || cat == _focus) ? ColorDe(cat) : "#D9E1EC";
+
+    // ── Etiquetas ──
+    private static string EtiquetaDim(string d) => d switch
+    {
+        ReportService.DimCliMoneda => "Moneda facturada",
+        ReportService.DimCliFiscal => "Tipo fiscal",
+        ReportService.DimCliActividad => "Segmento de actividad",
+        _ => "Línea de negocio",
+    };
+    private string EtiquetaDimSingular => _dimension switch
+    {
+        ReportService.DimCliMoneda => "moneda",
+        ReportService.DimCliFiscal => "tipo fiscal",
+        ReportService.DimCliActividad => "segmento",
+        _ => "línea",
+    };
+    private string EtiquetaDimSingularTit =>
+        char.ToUpper(EtiquetaDimSingular[0]) + EtiquetaDimSingular[1..];
+
+    private RenderFragment CabeceraFoco(string titulo) => __builder =>
+    {
+        <div class="rfs-bar-head mb-2">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@titulo</MudText>
+            @if (_focus is not null)
+            {
+                <div class="rfs-focus">
+                    <span class="rfs-focus__lbl">Filtrado:</span>
+                    <span class="rfs-focus__val" style="@($"background:{ColorDe(_focus)};")">@_focus</span>
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                   OnClick="LimpiarFoco" title="Quitar filtro"
+                                   Style="color:#64748B; padding:2px;" />
+                </div>
+            }
+            else
+            {
+                <span class="rfs-focus-hint">💡 Clic en una categoría para enfocar el tablero</span>
+            }
+        </div>
+    };
+
+    private ApexChartOptions<BarItem> _optsBar = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        PlotOptions = new()
+        {
+            Bar = new()
+            {
+                Horizontal = true, BorderRadius = 4,
+                BorderRadiusApplication = BorderRadiusApplication.End, Distributed = true,
+                DataLabels = new() { Position = BarDataLabelPosition.Top }
+            }
+        },
+        Legend = new() { Show = false },
+        DataLabels = new()
+        {
+            Enabled = true,
+            TextAnchor = TextAnchor.Start,
+            // 46 y no 8: los datos de clientes son EXTREMOS (AEROLINEAS solo es el 60-70% del
+            // tablero), así que las demás barras miden pocos píxeles y ApexCharts les dibuja
+            // la etiqueta ENCIMA de la barra en vez de después. Medido: con 22 y con 32 el
+            // label de la 2ª barra seguía pisando; con 46 sale limpio. El eje tiene 30% de
+            // margen, así que el de la barra más larga tampoco se corta.
+            OffsetX = 46,
+            Style = new() { FontSize = "11px", FontWeight = "600", Colors = new List<string> { "#334155" } },
+        },
+        // Sin formato, el eje muestra los importes crudos (956589900, 1913180000…).
+        Xaxis = new()
+        {
+            Labels = new()
+            {
+                Style = new() { FontSize = "11px" },
+                Formatter = "function(val){ var v = Math.abs(val); " +
+                            "if (v >= 1e9) return (val/1e9).toFixed(1)+' MM'; " +
+                            "if (v >= 1e6) return (val/1e6).toFixed(0)+' M'; " +
+                            "if (v >= 1e3) return (val/1e3).toFixed(0)+' k'; " +
+                            "return Math.round(val).toString(); }"
+            }
+        },
+        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px" }, MaxWidth = 190 } } },
+        Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
+        Theme = new() { Mode = Mode.Light },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
+    private ApexChartOptions<PieItem> _optsPie = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        Colors = _palette,
+        Legend = new()
+        {
+            Show = true, Position = LegendPosition.Bottom, FontSize = "12px",
+            OnItemClick = new() { ToggleDataSeries = false },
+        },
+        DataLabels = new() { Enabled = false },
+        Theme = new() { Mode = Mode.Light },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        // La letra la decide el catálogo, no esta página: hoy pide 'S' porque el informe está
+        // EN DESARROLLO, y volverá a pedir 'F' (Facturación, la que habilita ver precios) el
+        // día que se lo gradúe. Así la guarda sigue sola al cambio y no queda el permiso
+        // escrito en dos lados que se contradicen.
+        if (!InformesCatalogo.PuedeVerRuta(Permisos, "panel-clientes"))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await Cargar();
+    }
+
+    private async Task Cargar()
+    {
+        if (_desde is null || _hasta is null) return;
+
+        _cargando = true;
+        StateHasChanged();
+
+        _desdeAp = DateOnly.FromDateTime(_desde.Value);
+        _hastaAp = DateOnly.FromDateTime(_hasta.Value);
+        _focus = null;   // datos nuevos: la categoría enfocada puede ya no existir
+
+        CalcularPeriodoBase();
+
+        var actividad = Reports.GetClientesActividadAsync(_desdeAp, _hastaAp);
+        // El período base se trae SIEMPRE, aunque la vista abierta sea otra: son consultas
+        // cacheadas y así cambiar a Retención es instantáneo, sin un segundo spinner.
+        var actividadBase = Reports.GetClientesActividadAsync(_bDesdeAp, _bHastaAp);
+        var padron = Reports.GetClientesPadronAsync();
+        var corte = Reports.GetFechaCorteDatosAsync();
+        var interno = Reports.GetIdClienteInternoAsync();
+        await Task.WhenAll(actividad, actividadBase, padron, corte, interno);
+
+        _filas = actividad.Result;
+        _filasBase = actividadBase.Result;
+        _padronLista = padron.Result;
+        // GroupBy + First en vez de ToDictionary directo: un código repetido en el padrón no
+        // puede tumbar la pantalla entera con una excepción de clave duplicada.
+        _padron = _padronLista
+            .GroupBy(p => p.IdCliente, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        _corte = corte.Result;
+        _idInterno = interno.Result;
+
+        Recalcular();
+        RemontarGraficos();
+        _cargando = false;
+    }
+
+    /// <summary>
+    /// El período contra el que se compara. "Anterior" = el mismo largo pegado atrás (si el
+    /// período es de 5 meses, los 5 meses previos); "Año pasado" = las mismas fechas corridas
+    /// 12 meses. El primero mide el momento; el segundo saca de encima la estacionalidad, que
+    /// en turismo es fuerte.
+    /// </summary>
+    private void CalcularPeriodoBase()
+    {
+        if (_periodoBase == BaseAnioPasado)
+        {
+            _bDesdeAp = _desdeAp.AddYears(-1);
+            _bHastaAp = _hastaAp.AddYears(-1);
+        }
+        else
+        {
+            var dias = _hastaAp.DayNumber - _desdeAp.DayNumber + 1;
+            _bHastaAp = _desdeAp.AddDays(-1);
+            _bDesdeAp = _bHastaAp.AddDays(-(dias - 1));
+        }
+    }
+
+    private async Task CambiarPeriodoBase(string b)
+    {
+        _periodoBase = b;
+        await Cargar();   // el período base sale de otra consulta
+    }
+
+    private void CambiarDimension(string dim)
+    {
+        _dimension = dim;
+        _focus = null;   // el foco era una categoría de la dimensión anterior
+        Recalcular();
+        RemontarGraficos();
+    }
+
+    private void CambiarMetrica(string met)
+    {
+        _metrica = met;
+        Recalcular();
+        RemontarGraficos();
+    }
+
+    private void CambiarTopN(int n)
+    {
+        _topN = n;
+        Recalcular();
+        RemontarGraficos();   // cambia la FORMA del gráfico de barras
+    }
+
+    private void RemontarGraficos()
+    {
+        _chartsKey = Guid.NewGuid();
+        _pieKey = Guid.NewGuid();
+    }
+
+    // ── Clasificación: qué categoría le toca a cada cliente ────────────────────
+    //
+    // Ninguna de las cuatro sale de un campo "tipo" del padrón (no existe): la línea de
+    // negocio y la moneda se DERIVAN de lo que el cliente operó y facturó en el período.
+
+    private string CategoriaDe(string idCliente, List<ClienteMesRow> filasDelCliente) => _dimension switch
+    {
+        ReportService.DimCliMoneda => CategoriaMoneda(filasDelCliente),
+        ReportService.DimCliFiscal => _padron.TryGetValue(idCliente, out var p) ? p.Fiscal : "Sin tipo fiscal",
+        ReportService.DimCliActividad => _padron.TryGetValue(idCliente, out var q) ? q.Segmento(_corte) : ClientePadronRow.SegNunca,
+        _ => CategoriaLinea(idCliente, filasDelCliente),
+    };
+
+    /// <summary>
+    /// Línea de negocio del cliente: la del `modo_uso` de los servicios que contrató. El cliente
+    /// propio (`parametro.id_cliente`) gana siempre — sus GUARDIA/traslados a taller son internos
+    /// aunque el servicio sea de transporte de personal. Mismo criterio que Banda Horaria.
+    /// </summary>
+    private string CategoriaLinea(string idCliente, List<ClienteMesRow> f)
+    {
+        if (string.Equals(idCliente, _idInterno, StringComparison.OrdinalIgnoreCase)) return "Internos";
+        int t = f.Sum(x => x.ViajesTurismo), p = f.Sum(x => x.ViajesPersonal);
+        if (t == 0 && p == 0) return "Sin clasificar";
+        return t > p ? "Turismo" : p > t ? "Personal" : "Mixto";
+    }
+
+    /// <summary>En qué moneda se le facturó realmente al cliente en el período.</summary>
+    private static string CategoriaMoneda(List<ClienteMesRow> f)
+    {
+        decimal pesos = f.Sum(x => x.FacturadoPesos), usd = f.Sum(x => x.FacturadoUsd);
+        if (pesos <= 0 && usd <= 0) return "Sin facturar";
+        if (usd > 0 && pesos > 0) return "Ambas";
+        return usd > 0 ? "Dólares" : "Pesos";
+    }
+
+    private string CatDe(string cli) => _catPorCliente.TryGetValue(cli, out var c) ? c : "Sin clasificar";
+    private string NombreDe(string cli) =>
+        _padron.TryGetValue(cli, out var p) ? p.Display : (string.IsNullOrWhiteSpace(cli) ? "(sin cliente)" : cli);
+
+    // ── Métrica activa ────────────────────────────────────────────────────────
+    private decimal ValorDe(ClienteMesRow r) => _metrica switch
+    {
+        ReportService.MetCliViajes => r.Viajes,
+        ReportService.MetCliPax => r.Pax,
+        _ => r.Facturado,
+    };
+
+    private void Recalcular()
+    {
+        var porCliente = _filas.GroupBy(f => f.IdCliente)
+                               .ToDictionary(g => g.Key, g => g.ToList());
+
+        // La categoría se calcula SIEMPRE sobre el dataset completo del cliente: el foco
+        // atenúa, no reclasifica.
+        _catPorCliente = porCliente.ToDictionary(kv => kv.Key, kv => CategoriaDe(kv.Key, kv.Value));
+
+        // ── Ranking: todas las filas (el foco atenúa en la tabla, no las borra) ──
+        _ranking = ArmarRanking(_filas);
+        _rankingBase = ArmarRanking(_filasBase);
+
+        // Color por entidad: el ranking de categorías por la métrica define el hue, y ese
+        // color acompaña a la categoría en la torta y en el punto de la tabla.
+        _colorPorCat = _ranking
+            .GroupBy(c => c.Categoria)
+            .Select(g => (Cat: g.Key, Total: g.Sum(MetricaDe)))
+            .OrderByDescending(x => x.Total)
+            .Select((x, i) => (x.Cat, i))
+            .ToDictionary(t => t.Cat, t => t.i < _palette.Count ? _palette[t.i] : _colorOtros);
+
+        // ── % acumulado (Pareto): sobre el ranking COMPLETO, en el orden en que se ve ──
+        var totalMetrica = _ranking.Sum(MetricaDe);
+        _acumPorCliente = new();
+        decimal corrido = 0;
+        foreach (var c in _ranking)
+        {
+            corrido += MetricaDe(c);
+            _acumPorCliente[c.IdCliente] = totalMetrica > 0 ? (double)(corrido * 100 / totalMetrica) : 0;
+        }
+
+        // ── Datos con el foco aplicado: KPIs, totales y pivote ──
+        var enFoco = _ranking.Where(c => EnFoco(c.Categoria)).ToList();
+        var idsEnFoco = enFoco.Select(c => c.IdCliente).ToHashSet();
+        var filasFoco = _filas.Where(f => idsEnFoco.Contains(f.IdCliente)).ToList();
+
+        _tFacturado = enFoco.Sum(c => c.Facturado);
+        _tUsd = enFoco.Sum(c => c.FacturadoUsd);
+        _tViajes = enFoco.Sum(c => c.Viajes);
+        _tCancelados = enFoco.Sum(c => c.Cancelados);
+        _tPax = enFoco.Sum(c => c.Pax);
+        _lineasSinTc = filasFoco.Sum(f => f.LineasSinTipoCambio);
+
+        _kClientes = enFoco.Count;
+        _kFacturado = _tFacturado;
+        _kViajes = _tViajes;
+        _kPax = _tPax;
+        var viajesActivos = _tViajes - _tCancelados;
+        _kPorViaje = viajesActivos > 0 ? _tFacturado / viajesActivos : 0;
+
+        // Subtítulos deliberadamente cortos: son 6 KPIs en una fila y el texto largo se
+        // recorta con "…" (regla del patrón de informe analítico).
+        var conFacturacion = enFoco.Count(c => c.Facturado > 0);
+        _kClientesSub = $"{conFacturacion} facturan · {_padron.Count} en padrón";
+        _kFacturadoSub = _tUsd > 0 ? $"u$s {Fmt(_tUsd)} en dólares" : "devengado al viaje";
+        _kViajesSub = _tCancelados > 0
+            ? $"{Fmt(_tCancelados)} cancelados ({_tCancelados * 100.0 / Math.Max(_tViajes, 1):0.0} %)"
+            : "sin cancelaciones";
+
+        // Concentración: cuánto pesan los 5 primeros. Es el KPI de riesgo de cartera.
+        var top5 = enFoco.Take(5).Sum(MetricaDe);
+        var totalFoco = enFoco.Sum(MetricaDe);
+        _kConcentracion = totalFoco > 0 ? (double)(top5 * 100 / totalFoco) : 0;
+        _kConcentracionSub = enFoco.Count > 0
+            ? $"de {_metrica.ToLowerInvariant()} en {Math.Min(5, enFoco.Count)} de {enFoco.Count} clientes"
+            : "sin clientes";
+
+        // Pesos corrientes: el aviso salta cuando el período cruza años calendario.
+        _avisoPesos = _metrica == ReportService.MetCliFacturado && _desdeAp.Year != _hastaAp.Year;
+
+        // ── Gráfico de barras: top N clientes por la métrica (sigue el foco) ──
+        _barItems = enFoco.Where(c => MetricaDe(c) > 0)
+                          .Take(_topN)
+                          .Select(c => new BarItem(Recortar(c.Nombre), MetricaDe(c)))
+                          .ToList();
+        _altoBarras = Math.Max(280, _barItems.Count * 32);
+        AplicarEjeBarras();
+        _optsBar.Colors = _barItems.Count > 0
+            ? _barItems.Select(_ => "#2058D0").ToList()
+            : new List<string> { "#2058D0" };
+
+        // ── Torta por categoría: valores COMPLETOS, el foco solo cambia los colores ──
+        _pieItems = _ranking
+            .GroupBy(c => c.Categoria)
+            .Select(g => new PieItem(g.Key, g.Sum(MetricaDe)))
+            .Where(p => p.Valor > 0)
+            .OrderByDescending(p => p.Valor)
+            .ToList();
+        _optsPie.Colors = _pieItems.Select(p => ColorFoco(p.Cat)).ToList();
+        AplicarLeyendaTorta(_pieItems.Sum(p => p.Valor));
+
+        // ── Pivote cliente × mes (con el foco aplicado) ──
+        _meses = _filas.Select(f => f.Mes).Distinct().OrderBy(m => m).ToList();
+        _pivMap = filasFoco
+            .GroupBy(f => (f.IdCliente, f.Mes))
+            .ToDictionary(g => g.Key, g => g.Sum(ValorDe));
+        _pivTotFila = filasFoco.GroupBy(f => f.IdCliente).ToDictionary(g => g.Key, g => g.Sum(ValorDe));
+        _pivTotCol = filasFoco.GroupBy(f => f.Mes).ToDictionary(g => g.Key, g => g.Sum(ValorDe));
+        _granTotal = filasFoco.Sum(ValorDe);
+        _pivClientes = enFoco.Select(c => c.IdCliente)
+                             .Where(id => _pivTotFila.ContainsKey(id))
+                             .ToList();
+
+        CalcularMesesComparables();
+        _mesEnCursoIncompleto = _meses.Count > _mesesComparables.Count;
+
+        // Cobertura de facturación del último mes completo: cuántos de sus viajes ya están
+        // liquidados. Es lo que explica por qué los meses recientes "facturan menos" — la
+        // liquidación se emite después, y sin este dato el informe parece decir que el
+        // negocio se derrumbó.
+        _coberturaMes = null;
+        if (EsPlata && _mesesComparables.Count > 0)
+        {
+            var ult = _mesesComparables[^1];
+            var f = filasFoco.Where(x => x.Mes == ult).ToList();
+            var activos = f.Sum(x => x.ViajesActivos);
+            if (activos > 0)
+            {
+                var cob = f.Sum(x => x.ViajesFacturados) * 100.0 / activos;
+                if (cob < 95) _coberturaMes = (MesHeader(ult), cob);
+            }
+        }
+    }
+
+    /// <summary>Mes y % de viajes ya liquidados, cuando el último mes completo está sin cerrar.</summary>
+    private (string Mes, double Pct)? _coberturaMes;
+
+    /// <summary>El mismo aviso de rezago, en texto, para la vista de Retención.</summary>
+    private string? AvisoLiquidacionTxt => _coberturaMes is null
+        ? null
+        : $"<b>{_coberturaMes.Value.Mes} todavía no está liquidado del todo</b>: solo el "
+          + $"<b>{_coberturaMes.Value.Pct:0}%</b> de sus viajes tiene facturación cargada.";
+
+    /// <summary>
+    /// Arma el ranking de clientes a partir de un conjunto de filas cliente × mes. Se usa para
+    /// el período pedido y también para el período BASE de la vista de retención, así los dos
+    /// se calculan con exactamente el mismo criterio.
+    /// </summary>
+    private List<ClienteResumenRow> ArmarRanking(List<ClienteMesRow> filas) => filas
+        .GroupBy(f => f.IdCliente)
+        .Select(g =>
+        {
+            var p = _padron.TryGetValue(g.Key, out var pad) ? pad : null;
+            return new ClienteResumenRow(
+                IdCliente: g.Key,
+                Nombre: NombreDe(g.Key),
+                Categoria: _catPorCliente.TryGetValue(g.Key, out var cat) ? cat : CategoriaDe(g.Key, g.ToList()),
+                Viajes: g.Sum(x => x.Viajes),
+                Cancelados: g.Sum(x => x.Cancelados),
+                Pax: g.Sum(x => x.Pax),
+                Facturado: g.Sum(x => x.Facturado),
+                FacturadoUsd: g.Sum(x => x.FacturadoUsd),
+                UltimaReserva: p?.UltimaReserva,
+                Segmento: p?.Segmento(_corte) ?? ClientePadronRow.SegNunca,
+                Fiscal: p?.Fiscal ?? "Sin tipo fiscal",
+                ListaPrecio: p?.ListaPrecio ?? "");
+        })
+        .OrderByDescending(MetricaDe)
+        .ThenBy(c => c.Nombre)
+        .ToList();
+
+    private decimal MetricaDe(ClienteResumenRow c) => _metrica switch
+    {
+        ReportService.MetCliViajes => c.Viajes,
+        ReportService.MetCliPax => c.Pax,
+        _ => c.Facturado,
+    };
+
+    private double PctDe(ClienteResumenRow c)
+    {
+        var total = _ranking.Sum(MetricaDe);
+        return total > 0 ? (double)(MetricaDe(c) * 100 / total) : 0;
+    }
+
+    private double AcumDe(string idCliente) => _acumPorCliente.TryGetValue(idCliente, out var a) ? a : 0;
+
+    /// <summary>
+    /// Margen del eje X + formato del datalabel. El % del datalabel se calcula contra el total
+    /// de las barras visibles, y los importes se abrevian (con 10 dígitos, el número no entra).
+    /// </summary>
+    private void AplicarEjeBarras()
+    {
+        // 🔴 El total se inyecta DENTRO de un literal JavaScript: hay que escribirlo con
+        // cultura invariante. Con la cultura es-AR de la app, un decimal sale con coma
+        // ("6112345,67") y ApexCharts revienta al parsear las opciones ("Unexpected number"),
+        // dejando el gráfico vacío y tirando abajo el circuito de Blazor.
+        var total = Math.Round(_barItems.Sum(b => b.Valor))
+                        .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var max = _barItems.Count > 0 ? _barItems.Max(b => b.Valor) : 0;
+        if (_optsBar.Xaxis is not null)
+        {
+            _optsBar.Xaxis.Min = 0;
+            _optsBar.Xaxis.Max = max > 0 ? (double)max * 1.30 : 1;
+        }
+        if (_optsBar.DataLabels is not null)
+            _optsBar.DataLabels.Formatter = EsPlata
+                // Etiqueta compacta ("$436M (8%)"): cuanto más corto el texto, menos riesgo de
+                  // que se monte sobre la barra siguiente en un ranking tan desparejo.
+                  ? "function(val){ var t = " + total + "; var p = t > 0 ? Math.round(val * 100 / t) : 0; " +
+                  "var s = val >= 1e9 ? '$'+(val/1e9).toFixed(1)+'MM' : val >= 1e6 ? '$'+(val/1e6).toFixed(0)+'M' : '$'+Math.round(val).toLocaleString('es-AR'); " +
+                  "return s + ' (' + p + '%)'; }"
+                : "function(val){ var t = " + total + "; var p = t > 0 ? Math.round(val * 100 / t) : 0; " +
+                  "return val.toLocaleString('es-AR') + ' (' + p + '%)'; }";
+    }
+
+    private void AplicarLeyendaTorta(decimal total)
+    {
+        if (_optsPie.Legend is null) return;
+        // Mismo cuidado que en las barras: número invariante dentro del literal JS.
+        var t = Math.Round(total).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        // El % se muestra con un decimal cuando la categoría pesa menos del 1%: con
+        // Math.round, "Internos" e "Sin clasificar" salían como "(0%)".
+        const string pct = "var p = t>0 ? (v*100/t) : 0; var ps = p>=1 ? Math.round(p) : Math.round(p*10)/10; ";
+        _optsPie.Legend.Formatter = EsPlata
+            ? "function(name, opts){ var v = opts.w.globals.series[opts.seriesIndex]; var t = " + t + "; " + pct +
+              "var s = v >= 1e9 ? '$ '+(v/1e9).toFixed(1)+' MM' : v >= 1e6 ? '$ '+(v/1e6).toFixed(1)+' M' : '$ '+Math.round(v).toLocaleString('es-AR'); " +
+              "return name + ': ' + s + ' (' + ps + '%)'; }"
+            : "function(name, opts){ var v = opts.w.globals.series[opts.seriesIndex]; var t = " + t + "; " + pct +
+              "return name + ': ' + v.toLocaleString('es-AR') + ' (' + ps + '%)'; }";
+    }
+
+    private bool EsPlata => _metrica == ReportService.MetCliFacturado;
+
+    // ── Accesores del pivote ──
+    private decimal PivVal(string cli, string mes) => _pivMap.TryGetValue((cli, mes), out var v) ? v : 0;
+    private decimal PivTotFila(string cli) => _pivTotFila.TryGetValue(cli, out var v) ? v : 0;
+    private decimal PivTotCol(string mes) => _pivTotCol.TryGetValue(mes, out var v) ? v : 0;
+
+    // Última columna del pivote: Δ del último mes COMPLETO contra el anterior + sparkline.
+    //
+    // 🔴 La comparación NO usa las dos últimas columnas a secas: si el período termina a
+    // mitad de mes (el caso normal, "hasta = hoy"), ese mes tiene días de menos y toda la
+    // columna se llenaba de "−100%", que no dice nada. `_mesesComparables` deja afuera el mes
+    // en curso; el sparkline sí dibuja la serie completa, con el último tramo punteado.
+    private RenderFragment CeldaEvolucion(string? cli) => __builder =>
+    {
+        Func<string, decimal> serie = cli is null ? PivTotCol : mes => PivVal(cli, mes);
+        var vals = _meses.Select(serie).ToList();
+        var comp = _mesesComparables;
+
+        <div class="rfs-tend-wrap">
+            @if (comp.Count >= 2)
+            {
+                var actual = serie(comp[^1]);
+                var previo = serie(comp[^2]);
+                var delta = actual - previo;
+                double? pct = previo > 0 ? (double)(delta * 100 / previo) : null;
+                <span class="rfs-tend-delta @ClaseVar(delta)"
+                      title="@($"{(cli is null ? "Total" : NombreDe(cli))} · {MesHeader(comp[^1])}: {ValFull(actual)} · {MesHeader(comp[^2])}: {ValFull(previo)}")">
+                    @if (delta != 0)
+                    {
+                        <span class="rfs-tend-arrow">@(delta > 0 ? "▲" : "▼")</span>
+                    }
+                    <span>@Val(Math.Abs(delta), signo: delta < 0 ? "−" : delta > 0 ? "+" : "")</span>
+                    @if (pct is not null)
+                    {
+                        <span class="rfs-tend-pct">@FmtPct(pct)</span>
+                    }
+                </span>
+            }
+            @Sparkline(vals)
+        </div>
+    };
+
+    /// <summary>
+    /// Los meses del período que están COMPLETOS (su último día entra en el rango pedido).
+    /// El mes en curso queda afuera: compararlo contra un mes entero es comparar 10 días
+    /// contra 31.
+    /// </summary>
+    private List<string> _mesesComparables = new();
+
+    private void CalcularMesesComparables()
+    {
+        _mesesComparables = _meses
+            .Where(m =>
+            {
+                if (m.Length != 7) return false;
+                var y = int.Parse(m[..4]);
+                var mm = int.Parse(m[5..7]);
+                var ultimoDia = new DateOnly(y, mm, DateTime.DaysInMonth(y, mm));
+                return ultimoDia <= _hastaAp;
+            })
+            .ToList();
+    }
+
+    /// <summary>¿El período corta a mitad de mes? (para avisarlo en pantalla).</summary>
+    private bool _mesEnCursoIncompleto;
+
+    private static string ClaseVar(decimal d) =>
+        d > 0 ? "rfs-var-up" : d < 0 ? "rfs-var-down" : "rfs-var-flat";
+
+    private static string FmtPct(double? p) =>
+        p is null ? "" : (p.Value >= 0 ? "+" : "−") + $"{Math.Abs(p.Value):0}%";
+
+    /// <summary>Sparkline SVG inline de la serie mensual (sin librerías), igual que Reservas.</summary>
+    private MarkupString Sparkline(List<decimal> vals)
+    {
+        if (vals.Count < 2) return (MarkupString)"";
+        const int w = 64, h = 20, pad = 2;
+        decimal max = vals.Max(), min = vals.Min();
+        double span = (double)(max - min);
+        double dx = (w - 2.0 * pad) / (vals.Count - 1);
+        double Y(decimal v) => span <= 0 ? h / 2.0 : h - pad - (double)(v - min) / span * (h - 2.0 * pad);
+        var pts = string.Join(" ", vals.Select((v, i) => $"{pad + i * dx:0.#},{Y(v):0.#}"));
+        var delta = vals[^1] - vals[^2];
+        var color = delta > 0 ? "#16A34A" : delta < 0 ? "#DC2626" : "#94A3B8";
+        var cx = pad + (vals.Count - 1) * dx;
+        var cy = Y(vals[^1]);
+        return (MarkupString)(
+            $"<svg class=\"rfs-spark\" viewBox=\"0 0 {w} {h}\" width=\"{w}\" height=\"{h}\" preserveAspectRatio=\"none\">" +
+            $"<polyline points=\"{pts}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"1.5\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>" +
+            $"<circle cx=\"{cx:0.#}\" cy=\"{cy:0.#}\" r=\"2\" fill=\"{color}\"/>" +
+            "</svg>");
+    }
+
+    // ── Cross-filter ──
+    private async Task ToggleFoco(string cat)
+    {
+        _focus = _focus == cat ? null : cat;
+        Recalcular();
+        _pieKey = Guid.NewGuid();   // la torta se remonta (el update en el lugar rompe su leyenda)
+        // Las barras cambian de VALORES (siguen el foco) → options + series.
+        if (_barChart is not null)
+        {
+            await _barChart.UpdateOptionsAsync(true, true, false);
+            await _barChart.UpdateSeriesAsync(true);
+        }
+    }
+
+    private Task LimpiarFoco() => ToggleFoco(_focus ?? "");
+
+    private async Task OnPieSelection(SelectedData<PieItem> e)
+    {
+        var cat = e.DataPoint?.Items?.FirstOrDefault()?.Cat;
+        if (cat is not null) await ToggleFoco(cat);
+    }
+
+    // ── Ficha del cliente (el mismo dialog que usa el ABM de Clientes) ──
+    private async Task AbrirFicha(string idCliente)
+    {
+        if (string.IsNullOrWhiteSpace(idCliente)) return;
+        // La ficha muestra la actividad del MISMO período del informe: si el usuario venía
+        // mirando marzo-agosto, la solapa Actividad no puede contarle otra historia.
+        var parametros = new DialogParameters<ClienteDetalleDialog>
+        {
+            { x => x.IdCliente, idCliente },
+            { x => x.Desde, (DateOnly?)_desdeAp },
+            { x => x.Hasta, (DateOnly?)_hastaAp }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large, FullWidth = true,
+            CloseButton = false, CloseOnEscapeKey = true, BackdropClick = true
+        };
+        await DialogService.ShowAsync<ClienteDetalleDialog>("Ficha del cliente", parametros, opciones);
+    }
+
+    private async Task DescargarExcel()
+    {
+        // Cada vista exporta lo suyo, y con los filtros que el usuario dejó puestos: el Excel
+        // tiene que ser lo que se está mirando, no un volcado genérico.
+        if (_vista == VistaRetencion && _retencionPanel is not null)
+        {
+            var bytesRet = Excel.RetencionClientes(
+                _retencionPanel.Visibles, _metrica, PeriodoTxt, PeriodoBaseTxt);
+            var nombreRet = $"retencion_clientes_{_desdeAp:yyyyMMdd}_{_hastaAp:yyyyMMdd}.xlsx";
+            using var streamRet = new MemoryStream(bytesRet);
+            using var streamRefRet = new DotNetStreamReference(streamRet);
+            await JS.InvokeVoidAsync("descargarArchivo", nombreRet, streamRefRet);
+            return;
+        }
+
+        // Desde la vista Padrón, la hoja del padrón exporta exactamente las filas que se ven
+        // (con el problema y el segmento filtrados): es la lista que se manda a corregir.
+        var padronExcel = _vista == VistaPadron && _padronPanel is not null
+            ? _padronPanel.Visibles
+            : _padronLista;
+
+        var bytes = Excel.PanelClientes(
+            _ranking, _filas, _meses, padronExcel,
+            EtiquetaDimSingularTit, _metrica, _corte, _desdeAp, _hastaAp);
+        var nombre = _vista == VistaPadron
+            ? $"padron_clientes_{_corte:yyyyMMdd}.xlsx"
+            : $"panel_clientes_{_dimension.ToLower()}_{_desdeAp:yyyyMMdd}_{_hastaAp:yyyyMMdd}.xlsx";
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    // ── Formato ──
+    private static string Fmt(int n) => n.ToString("#,0", _ar);
+    private static string Fmt(decimal n) => n.ToString("#,0", _ar);
+    private static string Cero(int n) => n > 0 ? Fmt(n) : "·";
+
+    /// <summary>
+    /// Importes abreviados: con miles de millones, el número completo rompe el ancho de la
+    /// columna. El valor exacto va siempre en el `title` de la celda.
+    /// </summary>
+    private static string Plata(decimal v)
+    {
+        if (v == 0) return "·";
+        var abs = Math.Abs(v);
+        if (abs >= 1_000_000_000m) return $"$ {v / 1_000_000_000m:#,0.0} MM";
+        if (abs >= 1_000_000m) return $"$ {v / 1_000_000m:#,0.0} M";
+        return $"$ {v:#,0}";
+    }
+
+    private static string PlataFull(decimal v) => v == 0 ? "sin facturación" : $"$ {v.ToString("#,0.00", _ar)}";
+
+    /// <summary>Un valor de la métrica activa, formateado como plata o como cantidad.</summary>
+    private string Val(decimal v, string signo = "") =>
+        EsPlata ? signo + Plata(v) : signo + (v == 0 ? "·" : Fmt(v));
+
+    private string ValFull(decimal v) => EsPlata ? PlataFull(v) : Fmt(v) + " " + _metrica.ToLowerInvariant();
+
+    private static string MesHeader(string mes) =>
+        mes.Length == 7 ? $"{mes.Substring(5, 2)}/{mes.Substring(2, 2)}" : mes;
+
+    private static string FechaCorta(DateOnly? f) => f is null ? "nunca" : f.Value.ToString("MM/yyyy", _ar);
+
+    /// <summary>Nombres largos en el eje de las barras: se recortan para que no coman el gráfico.</summary>
+    private static string Recortar(string s) => s.Length <= 26 ? s : s[..25] + "…";
+}

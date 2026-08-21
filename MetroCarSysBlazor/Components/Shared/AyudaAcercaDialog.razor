@@ -1,0 +1,147 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   Ayuda → Acerca de Buslink (07/08/2026).
+
+   Ficha de identidad del sistema pensada para SOPORTE: qué versión y qué build está
+   corriendo el usuario que llama. El botón «Copiar» lo deja en el portapapeles para
+   pegarlo en un WhatsApp o un mail.
+
+   ⚠ Datos de infraestructura (servidor y base de datos) se sacaron a pedido del dueño
+   (07/08/2026): no se muestran al usuario final.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+@using System.Reflection
+@inject IConfiguration Config
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject IWebHostEnvironment Env
+
+<MudDialog Class="zoom-viaje-dialog ayuda-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.Info" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Acerca de Buslink</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <div class="ayuda-acerca__marca">
+            <img src="images/buslink_icon_e.png" alt="BUS LINK" />
+            <div>
+                <div class="ayuda-acerca__nombre">BUS LINK</div>
+                <div class="ayuda-acerca__sub">Sistema de gestión de tráfico — NORTUR</div>
+            </div>
+        </div>
+
+        <div class="ayuda-acerca__datos">
+            @foreach (var (etiqueta, valor) in Datos)
+            {
+                <div class="ayuda-acerca__fila">
+                    <span class="ayuda-acerca__k">@etiqueta</span>
+                    <span class="ayuda-acerca__v">@valor</span>
+                </div>
+            }
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(SoporteMail) || !string.IsNullOrWhiteSpace(SoporteTel))
+        {
+            <div class="ayuda-acerca__soporte">
+                <MudIcon Icon="@Icons.Material.Outlined.SupportAgent" Size="Size.Small" Class="me-2" />
+                <span>
+                    Soporte:
+                    @if (!string.IsNullOrWhiteSpace(SoporteMail))
+                    {
+                        <a href="@($"mailto:{SoporteMail}")">@SoporteMail</a>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(SoporteTel))
+                    {
+                        <span> · @SoporteTel</span>
+                    }
+                </span>
+            </div>
+        }
+
+        <div class="ayuda-acerca__copy">@Copyright</div>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.ContentCopy"
+                   OnClick="CopiarDatos">Copiar datos</MudButton>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private string SoporteMail => Config["Ayuda:SoporteMail"]?.Trim() ?? "";
+    private string SoporteTel  => Config["Ayuda:SoporteTelefono"]?.Trim() ?? "";
+
+    private void Cerrar() => MudDialog.Close();
+
+    private List<(string, string)> Datos => new()
+    {
+        ("Versión",     Version),
+        ("Compilación", FechaCompilacion),
+        ("Entorno",     Env.EnvironmentName),
+    };
+
+    // Año dinámico: el copyright no queda viejo solo. 2026 es el año de la
+    // primera versión, así que hasta fin de 2026 se ve "© 2026"; en 2027 pasa
+    // a mostrarse como rango "© 2026-2027" (la convención de las webs actuales).
+    private const int AnioInicial = 2026;
+    private static string Copyright
+    {
+        get
+        {
+            var hoy = DateTime.Now.Year;
+            var anios = hoy > AnioInicial ? $"{AnioInicial}-{hoy}" : $"{AnioInicial}";
+            return $"© {anios} Buslink · NORTUR";
+        }
+    }
+
+    // La versión sale del <Version> del .csproj (hoy 0.9.x pre-producción).
+    private static string Version =>
+        Assembly.GetExecutingAssembly()
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+            ?? "—";
+
+    // Fecha de compilación = fecha del .dll en disco (bin\...\net10.0 en desarrollo,
+    // la carpeta publicada en el server). Es lo más fiable: con las builds
+    // determinísticas de .NET el timestamp interno del PE ya no es una fecha real.
+    private static string FechaCompilacion
+    {
+        get
+        {
+            try
+            {
+                var ruta = Assembly.GetExecutingAssembly().Location;
+                if (string.IsNullOrEmpty(ruta) || !File.Exists(ruta)) return "—";
+                return File.GetLastWriteTime(ruta).ToString("dd/MM/yyyy");
+            }
+            catch
+            {
+                return "—";
+            }
+        }
+    }
+
+    private async Task CopiarDatos()
+    {
+        var texto = string.Join("\n", Datos.Select(d => $"{d.Item1}: {d.Item2}"));
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", texto);
+            Snackbar.Add("Datos copiados al portapapeles.", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("No se pudo copiar (el navegador lo bloqueó).", Severity.Warning);
+        }
+    }
+}

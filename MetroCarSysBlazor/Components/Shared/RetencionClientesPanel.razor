@@ -1,0 +1,613 @@
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+
+@* ─────────────────────────────────────────────────────────────────────────────
+   Retención y riesgo — vista 3 del Panel de Clientes.
+
+   La vista de Cartera contesta "quién vale cuánto HOY". Esta contesta las dos
+   preguntas que la siguen: "¿a quién estoy perdiendo?" y "¿de quién dependo?".
+
+   Todo sale de comparar dos períodos (el pedido y el base, que trae la página
+   con una segunda consulta) más la recencia del padrón. Cero re-query acá.
+
+   La pieza central es la MATRIZ ABC × RECENCIA: la clasificación ABC ordena a
+   los clientes por el Pareto de la métrica (A = los que hacen el primer 80%,
+   B = hasta el 95%, C = la cola), y cruzarla con hace cuánto que no operan
+   pone el dedo en la celda que duele: un cliente A que está dormido.
+   ───────────────────────────────────────────────────────────────────────────── *@
+
+<div class="rfs-kpis mb-3">
+    <KpiCard Label="Se fueron" Value="@Fmt(_fugas.Count)" Sub="@_fugasSub" Color="@NorturColors.Rojo" />
+    <KpiCard Label="Perdido" Value="@ValorTxt(_perdido)" Sub="@($"lo que facturaban y ya no")" Color="#B45309" />
+    <KpiCard Label="Cayeron fuerte" Value="@Fmt(_caidas.Count)" Sub="@($"−{UmbralCaida:0} % o más")" Color="@NorturColors.Naranja" />
+    <KpiCard Label="Nuevos" Value="@Fmt(_nuevos.Count)" Sub="@_nuevosSub" Color="@NorturColors.Verde" />
+    <KpiCard Label="Dependencia" Value="@($"{_dependencia:0.0} %")" Sub="@_dependenciaSub" Color="#7C3AED" />
+    <KpiCard Label="Cancelación" Value="@($"{_cancelPct:0.0} %")" Sub="@_cancelSub" Color="#0EA5E9" />
+</div>
+
+<MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Style="border-radius:12px;"
+          Icon="@Icons.Material.Filled.CompareArrows">
+    Comparando <b>@PeriodoActual</b> contra <b>@PeriodoBase</b>@(EsAnioPasado ? " (mismo período del año pasado)" : " (el mismo largo, pegado atrás)").
+    @if (EsPlata && _cruzaAnios)
+    {
+        <span> Ojo: los períodos caen en <b>años distintos</b> y los importes están en pesos corrientes, así que parte de la variación es inflación.</span>
+    }
+</MudAlert>
+
+@if (!string.IsNullOrEmpty(AvisoLiquidacion))
+{
+    @* Sin este aviso la vista MIENTE en su número principal: los meses recientes todavía no
+       se liquidaron, así que parte de la "caída" es facturación que aún no se emitió. *@
+    <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3" Style="border-radius:12px;"
+              Icon="@Icons.Material.Filled.HourglassBottom">
+        @((MarkupString)AvisoLiquidacion) <b>Parte de lo que figura como caída es facturación pendiente de emitir</b>,
+        no clientes perdidos: mirá también la columna de viajes antes de sacar conclusiones.
+    </MudAlert>
+}
+
+<MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
+
+    @* ── Matriz ABC × recencia ── *@
+    <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
+        <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+            <div class="mb-2">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                    Dónde está el riesgo: importancia × hace cuánto que no operan
+                    <AyudaReporte Ruta="panel-clientes" Bloque="retencion" Chico="true" />
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                    <b>A</b> son los clientes que hacen el primer 80 % de @MetricaTxt, <b>B</b> hasta el 95 %, <b>C</b> la cola ·
+                    click en una celda para ver quiénes son · <b>las celdas naranjas y rojas de la fila A son las que duelen</b>
+                </MudText>
+            </div>
+
+            <div class="rfs-tabla-wrap">
+                <table class="rfs-tabla ret-matriz">
+                    <thead>
+                        <tr>
+                            <th class="rfs-col-fecha" style="min-width:120px;">Clase</th>
+                            @foreach (var s in _segmentos)
+                            {
+                                <th class="rfs-num">@s</th>
+                            }
+                            <th class="rfs-th-total">TOTAL</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var clase in _clases)
+                        {
+                            <tr>
+                                <td class="rfs-col-fecha">
+                                    <span class="ret-clase ret-clase--@clase.ToLowerInvariant()">@clase</span>
+                                    <span class="ret-clase__sub">@DescripcionClase(clase)</span>
+                                </td>
+                                @foreach (var seg in _segmentos)
+                                {
+                                    var celda = Celda(clase, seg);
+                                    var sel = _celdaSel == (clase, seg);
+                                    <td class="rfs-num @(celda.Count > 0 ? "rfs-click" : "rfs-cero") @ClaseRiesgo(clase, seg, celda.Count) @(sel ? "ret-celda--sel" : "")"
+                                        title="@TituloCelda(clase, seg, celda)"
+                                        @onclick="() => TogglearCelda(clase, seg)">
+                                        @if (celda.Count > 0)
+                                        {
+                                            <span class="ret-n">@Fmt(celda.Count)</span>
+                                            <span class="ret-monto">@ValorTxt(celda.Sum(MetricaDe))</span>
+                                        }
+                                        else
+                                        {
+                                            <span>·</span>
+                                        }
+                                    </td>
+                                }
+                                <td class="rfs-num rfs-tot">@Fmt(_porClase[clase].Count)</td>
+                            </tr>
+                        }
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td class="rfs-col-fecha rfs-tot">TOTAL</td>
+                            @foreach (var seg in _segmentos)
+                            {
+                                <td class="rfs-num rfs-tot">@Fmt(_todos.Count(c => SegmentoDe(c) == seg))</td>
+                            }
+                            <td class="rfs-num rfs-tot rfs-grantot">@Fmt(_todos.Count)</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </MudPaper>
+    </MudItem>
+
+    @* ── Las mayores caídas y subidas ── *@
+    <MudItem xs="12" md="5" Style="display:flex; flex-direction:column;">
+        <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+            <div class="mb-2">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                    Quiénes se movieron más
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                    Diferencia de @MetricaTxt contra el período base, en valor absoluto
+                </MudText>
+            </div>
+            @if (_movItems.Count > 0)
+            {
+                <ApexChart @key="_chartKey" TItem="MovItem" Options="_optsMov" Height="@_altoMov">
+                    <ApexPointSeries TItem="MovItem" Items="_movItems" Name="Variación"
+                                     SeriesType="SeriesType.Bar"
+                                     XValue="@(x => x.Nombre)" YValue="@(x => x.Delta)"
+                                     ShowDataLabels="true" />
+                </ApexChart>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Style="border-radius:12px;">
+                    Ningún cliente se movió respecto del período base.
+                </MudAlert>
+            }
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@* ── Tabla de clientes con su variación ── *@
+<MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
+    <div class="d-flex justify-space-between align-center flex-wrap mb-3" style="gap:8px;">
+        <div>
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                Clientes @(_estadoSel is null ? "" : "· " + EtiquetaEstado(_estadoSel))
+                @if (_celdaSel is not null)
+                {
+                    <span style="color:#DC2626; font-weight:600;">· clase @_celdaSel.Value.Clase, @_celdaSel.Value.Segmento</span>
+                }
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                @Fmt(_filtrados.Count) de @Fmt(_todos.Count) · click en el nombre para abrir la ficha ·
+                ordenados por lo que se perdió primero
+            </MudText>
+        </div>
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+            @foreach (var e in _estados)
+            {
+                <button type="button" class="ret-filtro @(_estadoSel == e.Clave ? "ret-filtro--on" : "")"
+                        title="@e.Detalle" @onclick="() => TogglearEstado(e.Clave)">
+                    <span class="ret-filtro__n" style="@($"color:{e.Color};")">@Fmt(e.Cantidad)</span>
+                    <span>@e.Titulo</span>
+                </button>
+            }
+            @if (_estadoSel is not null || _celdaSel is not null)
+            {
+                <MudButton Variant="Variant.Outlined" Color="MudColor.Default" OnClick="LimpiarFiltros"
+                           StartIcon="@Icons.Material.Filled.FilterAltOff"
+                           Style="border-radius:8px; height:36px; text-transform:none;">
+                    Quitar
+                </MudButton>
+            }
+        </div>
+    </div>
+
+    <div class="rfs-tabla-wrap">
+        <table class="rfs-tabla">
+            <thead>
+                <tr>
+                    <th class="rfs-col-fecha" style="min-width:230px;">Cliente</th>
+                    <th class="rfs-th-serv">Clase</th>
+                    <th class="rfs-th-serv">Estado</th>
+                    <th class="rfs-num">@MetricaCorta período</th>
+                    <th class="rfs-num">@MetricaCorta base</th>
+                    <th class="rfs-num">Variación</th>
+                    <th class="rfs-num">%</th>
+                    <th class="rfs-num" title="Viajes cancelados sobre el total del cliente en el período">% canc.</th>
+                    <th class="rfs-th-serv">Última reserva</th>
+                </tr>
+            </thead>
+            <tbody>
+                <Virtualize Items="_filtrados" Context="r" ItemSize="30" OverscanCount="12" SpacerElement="tr">
+                    <tr>
+                        <td class="rfs-col-fecha rfs-click"
+                            style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+                            title="@($"{r.Nombre} ({r.IdCliente}) · abrir la ficha")"
+                            @onclick="() => AbrirFicha.InvokeAsync(r.IdCliente)">@r.Nombre</td>
+                        <td class="rfs-th-serv">
+                            <span class="ret-clase ret-clase--@r.Clase.ToLowerInvariant()">@r.Clase</span>
+                        </td>
+                        <td class="rfs-th-serv">
+                            <span class="ret-badge" style="@($"background:{ColorEstado(r.Estado)};")">@EtiquetaEstado(r.Estado)</span>
+                        </td>
+                        <td class="rfs-num">@ValorTxt(r.Actual)</td>
+                        <td class="rfs-num" style="color:#7A90AD;">@ValorTxt(r.Base)</td>
+                        <td class="rfs-num @(r.Delta > 0 ? "rfs-var-up" : r.Delta < 0 ? "rfs-var-down" : "")">
+                            @(r.Delta == 0 ? "·" : (r.Delta > 0 ? "+" : "−") + ValorTxt(Math.Abs(r.Delta)))
+                        </td>
+                        <td class="rfs-num @(r.Delta > 0 ? "rfs-var-up" : r.Delta < 0 ? "rfs-var-down" : "")">
+                            @(r.Pct is null ? "·" : $"{(r.Pct >= 0 ? "+" : "−")}{Math.Abs(r.Pct.Value):0}%")
+                        </td>
+                        <td class="rfs-num @(r.PctCancelado >= 20 ? "pfl-alerta" : "")">
+                            @(r.Cancelados > 0 ? $"{r.PctCancelado:0.0}%" : "·")
+                        </td>
+                        <td class="rfs-th-serv">@(r.UltimaReserva is null ? "nunca" : r.UltimaReserva.Value.ToString("MM/yyyy"))</td>
+                    </tr>
+                </Virtualize>
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td class="rfs-col-fecha rfs-tot">TOTAL</td>
+                    <td class="rfs-th-serv rfs-tot">@Fmt(_filtrados.Count)</td>
+                    <td class="rfs-th-serv rfs-tot">·</td>
+                    <td class="rfs-num rfs-tot">@ValorTxt(_filtrados.Sum(x => x.Actual))</td>
+                    <td class="rfs-num rfs-tot">@ValorTxt(_filtrados.Sum(x => x.Base))</td>
+                    <td class="rfs-num rfs-tot rfs-grantot">
+                        @{ var d = _filtrados.Sum(x => x.Delta); }
+                        @(d == 0 ? "·" : (d > 0 ? "+" : "−") + ValorTxt(Math.Abs(d)))
+                    </td>
+                    <td class="rfs-num rfs-tot">·</td>
+                    <td class="rfs-num rfs-tot">·</td>
+                    <td class="rfs-th-serv rfs-tot">·</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public List<ClienteResumenRow> Actual { get; set; } = new();
+    [Parameter, EditorRequired] public List<ClienteResumenRow> Base { get; set; } = new();
+    [Parameter, EditorRequired] public string Metrica { get; set; } = ReportService.MetCliFacturado;
+    [Parameter, EditorRequired] public string PeriodoActual { get; set; } = "";
+    [Parameter, EditorRequired] public string PeriodoBase { get; set; } = "";
+    [Parameter] public bool EsAnioPasado { get; set; }
+    [Parameter] public bool CruzaAnios { get; set; }
+
+    /// <summary>
+    /// Aviso de rezago de liquidación que arma la página (HTML corto). Vacío = el período está
+    /// liquidado y la comparación se puede leer tal cual.
+    /// </summary>
+    [Parameter] public string? AvisoLiquidacion { get; set; }
+    [Parameter] public EventCallback<string> AbrirFicha { get; set; }
+
+    /// <summary>Lo que se ve en la tabla, para que el Excel exporte lo mismo.</summary>
+    public List<RetencionRow> Visibles => _filtrados;
+
+    /// <summary>Caída porcentual a partir de la cual un cliente entra en "cayeron fuerte".</summary>
+    private const double UmbralCaida = 40;
+
+    private static readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    // Los estados viven en el DTO (Services/ReportService.PanelClientes.cs) para que la
+    // pantalla y el Excel usen exactamente los mismos valores.
+    private const string EstFuga = RetencionRow.EstFuga;
+    private const string EstCaida = RetencionRow.EstCaida;
+    private const string EstEstable = RetencionRow.EstEstable;
+    private const string EstSube = RetencionRow.EstSube;
+    private const string EstNuevo = RetencionRow.EstNuevo;
+
+    private List<RetencionRow> _todos = new();
+    private List<RetencionRow> _filtrados = new();
+    private List<RetencionRow> _fugas = new(), _caidas = new(), _nuevos = new();
+
+    private static readonly string[] _clases = { "A", "B", "C" };
+    private static readonly string[] _segmentos =
+    {
+        ClientePadronRow.SegActivo, ClientePadronRow.SegTibio,
+        ClientePadronRow.SegDormido, ClientePadronRow.SegInactivo
+    };
+
+    private Dictionary<string, List<RetencionRow>> _porClase = new();
+    private (string Clase, string Segmento)? _celdaSel;
+    private string? _estadoSel;
+
+    private decimal _perdido;
+    private double _dependencia, _cancelPct;
+    private string _fugasSub = "", _nuevosSub = "", _dependenciaSub = "", _cancelSub = "";
+    private bool _cruzaAnios;
+
+    private record FiltroEstado(string Clave, string Titulo, string Detalle, string Color, int Cantidad);
+    private List<FiltroEstado> _estados = new();
+
+    private record MovItem(string Nombre, decimal Delta);
+    private List<MovItem> _movItems = new();
+    private int _altoMov = 320;
+    private Guid _chartKey = Guid.NewGuid();
+
+    private bool EsPlata => Metrica == ReportService.MetCliFacturado;
+    private string MetricaTxt => Metrica.ToLowerInvariant();
+    private string MetricaCorta => EsPlata ? "Facturado" : Metrica;
+
+    private ApexChartOptions<MovItem> _optsMov = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        PlotOptions = new()
+        {
+            Bar = new()
+            {
+                Horizontal = true, BorderRadius = 4, Distributed = true,
+                DataLabels = new() { Position = BarDataLabelPosition.Top }
+            }
+        },
+        Legend = new() { Show = false },
+        DataLabels = new()
+        {
+            Enabled = true, TextAnchor = TextAnchor.Start, OffsetX = 8,
+            Style = new() { FontSize = "11px", FontWeight = "600", Colors = new List<string> { "#334155" } },
+        },
+        // Sin formato el eje muestra los importes crudos (-600000000, -400000000…).
+        Xaxis = new()
+        {
+            Labels = new()
+            {
+                Style = new() { FontSize = "10px" },
+                Formatter = "function(val){ var v = Math.abs(val); var s = v >= 1e9 ? (v/1e9).toFixed(1)+' MM' : v >= 1e6 ? (v/1e6).toFixed(0)+' M' : v >= 1e3 ? (v/1e3).toFixed(0)+' k' : Math.round(v).toString(); return (val < 0 ? '−' : '') + s; }"
+            }
+        },
+        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px" }, MaxWidth = 150 } } },
+        Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
+        Theme = new() { Mode = Mode.Light },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
+    protected override void OnParametersSet()
+    {
+        _cruzaAnios = CruzaAnios;
+        Recalcular();
+    }
+
+    private decimal MetricaDe(RetencionRow r) => r.Actual;
+
+    private void Recalcular()
+    {
+        var baseMap = Base.ToDictionary(c => c.IdCliente, StringComparer.OrdinalIgnoreCase);
+        var actualMap = Actual.ToDictionary(c => c.IdCliente, StringComparer.OrdinalIgnoreCase);
+
+        decimal Met(ClienteResumenRow c) => Metrica switch
+        {
+            ReportService.MetCliViajes => c.Viajes,
+            ReportService.MetCliPax => c.Pax,
+            _ => c.Facturado,
+        };
+
+        // La clase ABC sale del período ACTUAL, pero un cliente que se fue tiene que conservar
+        // la importancia que tenía: para ellos se usa su lugar en el período BASE. Si no, todas
+        // las fugas caerían en "C" y el informe se comería justamente el caso grave.
+        var claseActual = ClasificarAbc(Actual, Met);
+        var claseBase = ClasificarAbc(Base, Met);
+
+        var ids = actualMap.Keys.Union(baseMap.Keys, StringComparer.OrdinalIgnoreCase);
+
+        _todos = ids.Select(id =>
+        {
+            actualMap.TryGetValue(id, out var a);
+            baseMap.TryGetValue(id, out var b);
+            var vAct = a is null ? 0 : Met(a);
+            var vBase = b is null ? 0 : Met(b);
+            var delta = vAct - vBase;
+            double? pct = vBase > 0 ? (double)(delta * 100 / vBase) : null;
+
+            var estado = vAct <= 0 && vBase > 0 ? EstFuga
+                       : vBase <= 0 && vAct > 0 ? EstNuevo
+                       : pct is not null && pct <= -UmbralCaida ? EstCaida
+                       : pct is not null && pct >= UmbralCaida ? EstSube
+                       : EstEstable;
+
+            var clase = a is not null && claseActual.TryGetValue(id, out var ca) ? ca
+                      : claseBase.TryGetValue(id, out var cb) ? cb
+                      : "C";
+
+            var refe = a ?? b!;
+            return new RetencionRow(
+                IdCliente: id,
+                Nombre: refe.Nombre,
+                Clase: clase,
+                Estado: estado,
+                Segmento: refe.Segmento,
+                Actual: vAct,
+                Base: vBase,
+                Delta: delta,
+                Pct: pct,
+                Viajes: a?.Viajes ?? 0,
+                Cancelados: a?.Cancelados ?? 0,
+                UltimaReserva: refe.UltimaReserva);
+        }).ToList();
+
+        _fugas = _todos.Where(r => r.Estado == EstFuga).ToList();
+        _caidas = _todos.Where(r => r.Estado == EstCaida).ToList();
+        _nuevos = _todos.Where(r => r.Estado == EstNuevo).ToList();
+
+        _perdido = _fugas.Sum(r => r.Base) + _caidas.Sum(r => -r.Delta);
+        _fugasSub = _fugas.Count > 0
+            ? $"facturaban {ValorTxt(_fugas.Sum(r => r.Base))}"
+            : "nadie dejó de operar";
+        _nuevosSub = _nuevos.Count > 0
+            ? $"aportan {ValorTxt(_nuevos.Sum(r => r.Actual))}"
+            : "sin altas en el período";
+
+        var totalAct = _todos.Sum(r => r.Actual);
+        var top1 = _todos.OrderByDescending(r => r.Actual).FirstOrDefault();
+        _dependencia = totalAct > 0 && top1 is not null ? (double)(top1.Actual * 100 / totalAct) : 0;
+        _dependenciaSub = top1 is not null ? $"del mayor cliente ({Recortar(top1.Nombre)})" : "sin clientes";
+
+        var viajes = _todos.Sum(r => r.Viajes);
+        var canc = _todos.Sum(r => r.Cancelados);
+        _cancelPct = viajes > 0 ? canc * 100.0 / viajes : 0;
+        _cancelSub = $"{Fmt(canc)} de {Fmt(viajes)} viajes";
+
+        _porClase = _clases.ToDictionary(c => c, c => _todos.Where(r => r.Clase == c).ToList());
+
+        ArmarFiltrosEstado();
+        ArmarGraficoMovimiento();
+        Filtrar();
+    }
+
+    /// <summary>
+    /// Clasificación ABC clásica sobre el Pareto de la métrica: A = los que acumulan el primer
+    /// 80 %, B = hasta el 95 %, C = la cola. Es la forma estándar de decir "importancia" sin
+    /// depender de montos fijos, que con inflación envejecen en un trimestre.
+    /// </summary>
+    private static Dictionary<string, string> ClasificarAbc(
+        List<ClienteResumenRow> filas, Func<ClienteResumenRow, decimal> met)
+    {
+        var res = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var total = filas.Sum(met);
+        if (total <= 0)
+        {
+            foreach (var f in filas) res[f.IdCliente] = "C";
+            return res;
+        }
+        decimal acum = 0;
+        foreach (var f in filas.OrderByDescending(met))
+        {
+            acum += met(f);
+            var pct = (double)(acum * 100 / total);
+            res[f.IdCliente] = pct <= 80 ? "A" : pct <= 95 ? "B" : "C";
+        }
+        return res;
+    }
+
+    private void ArmarFiltrosEstado()
+    {
+        _estados = new List<FiltroEstado>
+        {
+            new(EstFuga, "se fueron", "Facturaban en el período base y en este no registran nada.", "#DC2626", _fugas.Count),
+            new(EstCaida, "cayeron", $"Bajaron {UmbralCaida:0} % o más contra el período base.", "#EA580C", _caidas.Count),
+            new(EstEstable, "estables", "Se movieron poco respecto del período base.", "#64748B", _todos.Count(r => r.Estado == EstEstable)),
+            new(EstSube, "crecieron", $"Subieron {UmbralCaida:0} % o más contra el período base.", "#16A34A", _todos.Count(r => r.Estado == EstSube)),
+            new(EstNuevo, "nuevos", "No tenían actividad en el período base.", "#0EA5E9", _nuevos.Count),
+        }
+        .Where(e => e.Cantidad > 0)
+        .ToList();
+    }
+
+    private void ArmarGraficoMovimiento()
+    {
+        // Los 12 movimientos más grandes en valor absoluto: las caídas y las subidas que de
+        // verdad mueven la aguja, no las de los clientes chicos.
+        var top = _todos.Where(r => r.Delta != 0)
+                        .OrderByDescending(r => Math.Abs(r.Delta))
+                        .Take(12)
+                        .OrderBy(r => r.Delta)
+                        .ToList();
+
+        _movItems = top.Select(r => new MovItem(Recortar(r.Nombre), r.Delta)).ToList();
+        _altoMov = Math.Max(280, _movItems.Count * 30);
+        _optsMov.Colors = top.Select(r => r.Delta >= 0 ? "#16A34A" : "#DC2626").ToList();
+
+        if (_optsMov.DataLabels is not null)
+            // Número invariante: con la coma decimal de es-AR, ApexCharts no parsea las opciones.
+            _optsMov.DataLabels.Formatter = EsPlata
+                ? "function(val){ var v = Math.abs(val); var s = v >= 1e9 ? (v/1e9).toFixed(1)+'MM' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : Math.round(v).toLocaleString('es-AR'); return (val<0?'−$':'+$')+s; }"
+                : "function(val){ return (val<0?'−':'+') + Math.abs(val).toLocaleString('es-AR'); }";
+        _chartKey = Guid.NewGuid();
+    }
+
+    private List<RetencionRow> Celda(string clase, string segmento) =>
+        _porClase.TryGetValue(clase, out var filas)
+            ? filas.Where(r => SegmentoDe(r) == segmento).ToList()
+            : new();
+
+    private static string SegmentoDe(RetencionRow r) =>
+        r.Segmento == ClientePadronRow.SegNunca ? ClientePadronRow.SegInactivo : r.Segmento;
+
+    /// <summary>
+    /// El color de la celda: lo que importa no es el segmento solo, sino el cruce. Un cliente
+    /// clase A dormido es rojo; el mismo estado en un C es apenas un dato.
+    /// </summary>
+    private static string ClaseRiesgo(string clase, string segmento, int cantidad)
+    {
+        if (cantidad == 0) return "";
+        if (clase == "A")
+            return segmento switch
+            {
+                ClientePadronRow.SegDormido => "ret-riesgo--alto",
+                ClientePadronRow.SegInactivo => "ret-riesgo--alto",
+                ClientePadronRow.SegTibio => "ret-riesgo--medio",
+                _ => "",
+            };
+        if (clase == "B")
+            return segmento is ClientePadronRow.SegDormido or ClientePadronRow.SegInactivo
+                ? "ret-riesgo--medio" : "";
+        return "";
+    }
+
+    private string TituloCelda(string clase, string segmento, List<RetencionRow> celda) =>
+        celda.Count == 0
+            ? $"Sin clientes clase {clase} en estado {segmento}"
+            : $"{celda.Count} cliente(s) clase {clase} · {segmento} · {ValorTxt(celda.Sum(MetricaDe))} de {MetricaTxt} en el período";
+
+    private static string DescripcionClase(string clase) => clase switch
+    {
+        "A" => "el 80 % del negocio",
+        "B" => "hasta el 95 %",
+        _ => "la cola",
+    };
+
+    private void TogglearCelda(string clase, string segmento)
+    {
+        if (Celda(clase, segmento).Count == 0) return;
+        _celdaSel = _celdaSel == (clase, segmento) ? null : (clase, segmento);
+        Filtrar();
+    }
+
+    private void TogglearEstado(string estado)
+    {
+        _estadoSel = _estadoSel == estado ? null : estado;
+        Filtrar();
+    }
+
+    private void LimpiarFiltros()
+    {
+        _celdaSel = null;
+        _estadoSel = null;
+        Filtrar();
+    }
+
+    private void Filtrar()
+    {
+        IEnumerable<RetencionRow> q = _todos;
+
+        if (_celdaSel is { } c)
+            q = q.Where(r => r.Clase == c.Clase && SegmentoDe(r) == c.Segmento);
+
+        if (_estadoSel is not null)
+            q = q.Where(r => r.Estado == _estadoSel);
+
+        // Lo perdido primero: la tabla es para actuar, no para contemplar.
+        _filtrados = q.OrderBy(r => r.Delta).ThenByDescending(r => r.Base).ToList();
+    }
+
+    private static string EtiquetaEstado(string estado) => estado switch
+    {
+        EstFuga => "se fue",
+        EstCaida => "cayó",
+        EstSube => "creció",
+        EstNuevo => "nuevo",
+        _ => "estable",
+    };
+
+    private static string ColorEstado(string estado) => estado switch
+    {
+        EstFuga => "#DC2626",
+        EstCaida => "#EA580C",
+        EstSube => "#16A34A",
+        EstNuevo => "#0EA5E9",
+        _ => "#94A3B8",
+    };
+
+    // ── Formato ──
+    private static string Fmt(int n) => n.ToString("#,0", _ar);
+    private static string Fmt(decimal n) => n.ToString("#,0", _ar);
+
+    private string ValorTxt(decimal v)
+    {
+        if (!EsPlata) return v == 0 ? "·" : Fmt(v);
+        if (v == 0) return "·";
+        var abs = Math.Abs(v);
+        if (abs >= 1_000_000_000m) return $"$ {v / 1_000_000_000m:#,0.0} MM";
+        if (abs >= 1_000_000m) return $"$ {v / 1_000_000m:#,0.0} M";
+        return $"$ {v:#,0}";
+    }
+
+    private static string Recortar(string s) => s.Length <= 24 ? s : s[..23] + "…";
+}

@@ -1,0 +1,734 @@
+﻿@page "/panel-operador"
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+@* ─────────────────────────────────────────────────────────────────────────────
+   Panel del Operador — informe NUEVO (no existe en el Metrocar/FoxPro).
+   EN DESARROLLO: se ve solo bajo Informes → En desarrollo (permiso 'S').
+
+   Contesta quién carga el trabajo administrativo, con qué anticipación, con qué
+   calidad, y quién modifica lo que cargó otro. Sale de los cuatro campos de
+   auditoría de `viaje` (u_create/f_create/u_modify/f_modify).
+
+   ⚠ El período filtra por FECHA DE CARGA, no por fecha del viaje. Es el único
+   informe del sistema que lo hace, así que la pantalla lo dice en tres lados.
+
+   Cuatro consultas chicas (~12 operadores) y todo lo demás en memoria: el
+   cross-filter no vuelve a la base.
+   ───────────────────────────────────────────────────────────────────────────── *@
+
+<PageTitle>BusLink</PageTitle>
+
+<div class="page-header mb-3">
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+            Panel del Operador
+        </MudText>
+        <span class="nt-badge-dev" title="Informe en evaluación: todavía no se publicó al resto de los módulos. Cuando el cliente lo apruebe pasa a Sistema.">
+            <MudIcon Icon="@Icons.Material.Filled.Science" Size="MudSize.Small" />
+            En desarrollo
+        </span>
+        <AyudaReporte Ruta="panel-operador" />
+    </div>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Quién carga el trabajo, con cuánta antelación y quién modifica lo del otro · Nortur
+    </MudText>
+</div>
+
+@* ── Barra de filtros (filtros a la izquierda, acciones juntas a la derecha) ── *@
+<MudPaper Elevation="1" Class="rfs-filtros mb-3">
+    <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudSize.Small" Style="color:#003AA0; flex-shrink:0;" />
+
+    <div class="rfs-fechas">
+        <MudDatePicker Label="Cargadas desde" Date="_desde" DateChanged="@(d => { _desde = d; MarcarPendiente(); })"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:170px;"
+                       title="Fecha en que se CARGÓ la reserva en el sistema, no la fecha del viaje." />
+        <MudDatePicker Label="Hasta" Date="_hasta" DateChanged="@(d => { _hasta = d; MarcarPendiente(); })"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+    </div>
+
+    <span style="flex:1 1 auto;"></span>
+
+    <div style="display:flex; gap:6px; flex-shrink:0;">
+        <MudButton Variant="Variant.Filled" Color="@(_pendiente ? MudColor.Warning : MudColor.Primary)"
+                   OnClick="Cargar" Disabled="_cargando"
+                   StartIcon="@(_pendiente ? Icons.Material.Filled.PriorityHigh : Icons.Material.Filled.Search)"
+                   Style="border-radius:8px; height:40px; text-transform:none;">
+            @(_cargando ? "Cargando..." : "Aplicar filtros")
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                   StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                   Disabled="@(_cargando || _perfiles.Count == 0)"
+                   Style="border-radius:8px; height:40px; text-transform:none;">
+            Excel
+        </MudButton>
+    </div>
+</MudPaper>
+
+@if (_pendiente && !_cargando)
+{
+    <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3" Style="border-radius:12px;"
+              Icon="@Icons.Material.Filled.Update">
+        Lo que se ve abajo <b>todavía no incluye</b> el cambio de fechas — apretá <b>Aplicar filtros</b>.
+    </MudAlert>
+}
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else if (_perfiles.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Style="border-radius:12px;">
+        <b>No hay reservas cargadas entre el @_desdeAp.ToString("dd/MM/yyyy") y el @_hastaAp.ToString("dd/MM/yyyy").</b>
+        Ojo que el período es por <b>fecha de carga</b>, no por fecha del viaje: si estás mirando
+        un período en el que nadie cargó nada (o la réplica todavía no lo trajo), la pantalla
+        queda vacía aunque haya viajes en esas fechas. Probá ampliando el <b>Desde</b>.
+    </MudAlert>
+}
+else
+{
+    <div class="@(_pendiente ? "rfs-desactualizado" : "")">
+
+    @* ── KPIs ── *@
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="Reservas cargadas" Value="@Fmt(_kAltas)" Sub="@_kAltasSub" Color="@NorturColors.Azul" />
+        <KpiCard Label="Operadores" Value="@Fmt(_kOperadores)" Sub="@_kOperadoresSub" Color="@NorturColors.AzulNoche" />
+        <KpiCard Label="Concentración" Value="@($"{_kConcentracion:0} %")" Sub="@_kConcentracionSub" Color="@(_kConcentracion >= 60 ? NorturColors.Rojo : NorturColors.Naranja)" />
+        <KpiCard Label="Antelación media" Value="@_kAntelacion" Sub="@_kAntelacionSub" Color="@NorturColors.Verde" />
+        <KpiCard Label="Modificaciones" Value="@Fmt(_kModificaciones)" Sub="@_kModificacionesSub" Color="@NorturColors.Naranja" />
+        <KpiCard Label="Sobre lo de otro" Value="@Fmt(_kCruzadas)" Sub="@_kCruzadasSub" Color="@(_kCruzadas > 0 ? NorturColors.Rojo : NorturColors.Azul)" />
+    </div>
+
+    @* ── Aviso permanente: qué mide el período (es el malentendido más probable) ── *@
+    <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Style="border-radius:12px;"
+              Icon="@Icons.Material.Filled.Info">
+        El período mide <b>cuándo se cargó</b> la reserva (no cuándo viaja): una reserva cargada
+        hoy para diciembre cuenta en el día de hoy.
+        <b>No hay hora de carga</b> — el sistema guarda solo la fecha.
+    </MudAlert>
+
+    @if (_fantasmas.Count > 0)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3" Style="border-radius:12px;"
+                  Icon="@Icons.Material.Filled.PersonOff">
+            <b>@_fantasmas.Count usuario(s) sin padrón:</b> @string.Join(", ", _fantasmas.Select(f => $"{f.Operador} ({Fmt(f.Altas)} altas)")).
+            Cargaron reservas con un usuario que <b>hoy no figura</b> en Usuarios y Permisos
+            (o está dado de baja). Conviene revisarlo antes del día D.
+        </MudAlert>
+    }
+
+    <MudGrid Class="mb-3">
+
+        @* ── Ranking por operador (cross-filter) ── *@
+        <MudItem xs="12" md="5">
+            <MudPaper Elevation="1" Class="pa-3" Style="border-radius:14px; height:100%;">
+                <div class="rfs-bar-head">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                        Altas por operador
+                        <AyudaReporte Ruta="panel-operador" Bloque="ranking" Chico="true" />
+                    </MudText>
+                    @if (_focus is not null)
+                    {
+                        <MudButton Size="MudSize.Small" Variant="Variant.Text" Color="MudColor.Primary"
+                                   StartIcon="@Icons.Material.Filled.Close" OnClick="LimpiarFoco"
+                                   Style="text-transform:none;">
+                            Quitar filtro: @_focus
+                        </MudButton>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">Clic para enfocar</MudText>
+                    }
+                </div>
+
+                @* Barras HTML propias, no ApexCharts (11/08/2026). Con estos datos —un operador
+                   con 10.997 altas y otro con 7— los datalabels de ApexCharts se montan sobre
+                   las barras cortas por más OffsetX que se les dé, y encima obligan a remontar
+                   el chart en cada foco. En HTML el número vive FUERA de la barra, así que la
+                   escala no lo afecta nunca, y el foco es un onclick común. *@
+                <div class="op-rank mt-2">
+                    @foreach (var b in _barItems)
+                    {
+                        var pct = _totalAltas > 0 ? b.Altas * 100.0 / _totalAltas : 0;
+                        <div class="op-rank__fila @(EnFoco(b.Operador) ? "" : "op-rank--apagada") @(_focus == b.Operador ? "op-rank--foco" : "")"
+                             @onclick="() => ToggleFoco(b.Operador)"
+                             title="@($"{b.Operador}: {Fmt(b.Altas)} altas ({pct:0.0} % del período). Clic para enfocar el tablero.")">
+                            <span class="op-rank__nom">@b.Operador</span>
+                            <span class="op-rank__barra">
+                                <span style="@($"width:{Ancho(_barMax > 0 ? b.Altas * 100.0 / _barMax : 0)}; background:{ColorDe(b.Operador)};")"></span>
+                            </span>
+                            <span class="op-rank__val">
+                                @Fmt(b.Altas)<span class="op-rank__pct">@($"{pct:0.0} %")</span>
+                            </span>
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+        </MudItem>
+
+        @* ── Evolución de la carga ── *@
+        <MudItem xs="12" md="7">
+            <MudPaper Elevation="1" Class="pa-3" Style="border-radius:14px; height:100%;">
+                <div class="rfs-bar-head">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                        Cuándo se carga @(_focus is null ? "" : $"· {_focus}")
+                        <AyudaReporte Ruta="panel-operador" Bloque="evolucion" Chico="true" />
+                    </MudText>
+                    <MudText Typo="Typo.caption" Style="color:#94A3B8;">
+                        @(_porMes ? "agrupado por mes" : "por día de carga")
+                    </MudText>
+                </div>
+
+                <div @key="_keyEvol">
+                    <ApexChart TItem="EvolItem" Options="_optsEvol" Height="300">
+                        <ApexPointSeries TItem="EvolItem" Items="_evolItems" Name="Altas"
+                                         SeriesType="SeriesType.Area"
+                                         XValue="@(x => x.Etiqueta)" YValue="@(x => x.Altas)" />
+                    </ApexChart>
+                </div>
+
+                @* La carga por día de semana sale de la misma serie, calculada en C#: DATEPART
+                   de SQL depende de SET DATEFIRST y daría distinto según el idioma del server. *@
+                <div class="op-dows">
+                    @foreach (var d in _porDow)
+                    {
+                        <div class="op-dow @(d.Altas == 0 ? "op-dow--cero" : "")"
+                             title="@($"{d.Dia}: {Fmt(d.Altas)} altas cargadas")">
+                            <span class="op-dow__n">@(d.Altas == 0 ? "·" : Fmt(d.Altas))</span>
+                            <span class="op-dow__d">@d.Dia.Substring(0, 3)</span>
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @* ── Perfil por operador ── *@
+    <MudPaper Elevation="1" Class="pa-0 mb-3" Style="border-radius:14px; overflow:hidden;">
+        <div class="pa-3 pb-1">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                Perfil de cada operador
+                <AyudaReporte Ruta="panel-operador" Bloque="perfil" Chico="true" />
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#7A90AD;">
+                Clic en una fila para enfocar todo el tablero en ese operador.
+                <b>Antelación</b> = días entre la carga y el viaje.
+            </MudText>
+        </div>
+
+        <div style="overflow-x:auto;">
+            <table class="op-tabla">
+                <thead>
+                    <tr>
+                        <th class="op-th-oper">Operador</th>
+                        <th>Altas</th>
+                        <th>Part.</th>
+                        <th>Días</th>
+                        <th>Altas/día</th>
+                        <th>Clientes</th>
+                        <th>Antelación</th>
+                        <th>Retroact.</th>
+                        <th>Cancel.</th>
+                        <th>Sin asignar</th>
+                        <th>Modificó</th>
+                        <th>De otros</th>
+                        <th>Le tocaron</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var p in _perfiles)
+                    {
+                        <tr class="@(EnFoco(p.Operador) ? "" : "op-fila--apagada") @(_focus == p.Operador ? "op-fila--foco" : "")"
+                            @onclick="() => ToggleFoco(p.Operador)">
+                            <td class="op-th-oper">
+                                <span class="op-oper">@p.Operador</span>
+                                @if (p.EstadoUsuario != EstadoUsuarioOperador.Vigente)
+                                {
+                                    <span class="op-chip op-chip--alerta" title="@($"Este usuario {(p.EstadoUsuario == EstadoUsuarioOperador.NoExiste ? "no figura en el padrón de Usuarios y Permisos" : "está dado de baja en Usuarios y Permisos")}, pero tiene cargas en el período.")">
+                                        @(p.EstadoUsuario == EstadoUsuarioOperador.NoExiste ? "sin padrón" : "de baja")
+                                    </span>
+                                }
+                                @if (p.SoloModifica)
+                                {
+                                    <span class="op-chip" title="No cargó reservas en el período: solo modificó las de otros.">solo corrige</span>
+                                }
+                            </td>
+                            <td class="op-num op-num--fuerte">@Cero(p.Altas)</td>
+                            <td class="op-num">@(p.Altas > 0 && _totalAltas > 0 ? $"{p.Altas * 100.0 / _totalAltas:0.0} %" : "·")</td>
+                            <td class="op-num">@Cero(p.DiasConCarga)</td>
+                            <td class="op-num">@(p.DiasConCarga > 0 ? p.AltasPorDia.ToString("#,0.0", _ar) : "·")</td>
+                            <td class="op-num">@Cero(p.Clientes)</td>
+                            <td class="op-num" title="Promedio de días entre que se cargó la reserva y la fecha del viaje.">
+                                @(p.AntelacionProm is double a ? $"{a:0.0} d" : "·")
+                            </td>
+                            <td class="op-num @(p.Retroactivas > 0 ? "op-num--alerta" : "")"
+                                title="Reservas cargadas DESPUÉS de que el viaje ocurrió.">
+                                @Cero(p.Retroactivas)
+                            </td>
+                            <td class="op-num" title="@($"{p.Canceladas:#,0} de sus {p.Altas:#,0} altas terminaron canceladas")">
+                                @(p.Altas > 0 ? $"{p.PctCanceladas:0.0} %" : "·")
+                            </td>
+                            <td class="op-num" title="@($"{p.SinAsignar:#,0} de sus {p.Altas:#,0} altas siguen sin unidad")">
+                                @(p.Altas > 0 ? $"{p.PctSinAsignar:0.0} %" : "·")
+                            </td>
+                            <td class="op-num">@Cero(p.Modificaciones)</td>
+                            <td class="op-num @(p.ModificoDeOtros > 0 ? "op-num--cruz" : "")"
+                                title="Reservas de OTRO operador que esta persona modificó.">
+                                @Cero(p.ModificoDeOtros)
+                            </td>
+                            <td class="op-num @(p.AltasTocadasPorOtro > 0 ? "op-num--cruz" : "")"
+                                title="Reservas cargadas por esta persona que después modificó otro.">
+                                @Cero(p.AltasTocadasPorOtro)
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td class="op-th-oper">TOTAL</td>
+                        <td class="op-num op-num--fuerte">@Fmt(_perfiles.Sum(p => p.Altas))</td>
+                        <td class="op-num">100 %</td>
+                        <td class="op-num">·</td>
+                        <td class="op-num">·</td>
+                        <td class="op-num">·</td>
+                        <td class="op-num">·</td>
+                        <td class="op-num">@Cero(_perfiles.Sum(p => p.Retroactivas))</td>
+                        <td class="op-num">·</td>
+                        <td class="op-num">·</td>
+                        <td class="op-num">@Cero(_perfiles.Sum(p => p.Modificaciones))</td>
+                        <td class="op-num">@Cero(_perfiles.Sum(p => p.ModificoDeOtros))</td>
+                        <td class="op-num">@Cero(_perfiles.Sum(p => p.AltasTocadasPorOtro))</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </MudPaper>
+
+    <MudGrid>
+        @* ── Matriz quién modifica lo de quién ──
+           Va en 8/12 porque son una columna por operador + total: con 7/12 la última columna
+           quedaba fuera de la caja y había que descubrir el scroll para verla. *@
+        <MudItem xs="12" md="8">
+            <MudPaper Elevation="1" Class="pa-0" Style="border-radius:14px; overflow:hidden; height:100%;">
+                <div class="pa-3 pb-1">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                        Quién modifica lo de quién
+                        <AyudaReporte Ruta="panel-operador" Bloque="matriz" Chico="true" />
+                    </MudText>
+                    <MudText Typo="Typo.caption" Style="color:#7A90AD;">
+                        Filas = quién cargó · Columnas = quién modificó. La diagonal (se corrige a
+                        sí mismo) va en gris: lo que hay que leer es lo de <b>afuera</b>.
+                        <b>Es un piso</b>: el sistema guarda solo la última mano que tocó cada reserva.
+                    </MudText>
+                </div>
+
+                @if (_matrizOpers.Count == 0)
+                {
+                    <div class="pa-3">
+                        <MudText Typo="Typo.body2" Style="color:#7A90AD;">
+                            No hubo modificaciones registradas en el período.
+                        </MudText>
+                    </div>
+                }
+                else
+                {
+                    <div style="overflow-x:auto;">
+                        <table class="op-tabla op-matriz">
+                            <thead>
+                                <tr>
+                                    <th class="op-th-oper">Cargó ↓ / Modificó →</th>
+                                    @foreach (var m in _matrizOpers)
+                                    {
+                                        <th class="op-num">@Corto(m)</th>
+                                    }
+                                    <th class="op-num">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var c in _matrizOpers)
+                                {
+                                    <tr class="@(EnFoco(c) ? "" : "op-fila--apagada")">
+                                        <td class="op-th-oper">@c</td>
+                                        @foreach (var m in _matrizOpers)
+                                        {
+                                            var v = MatrizVal(c, m);
+                                            var propia = string.Equals(c, m, StringComparison.OrdinalIgnoreCase);
+                                            <td class="op-num @(propia ? "op-celda--propia" : v > 0 ? "op-celda--cruz" : "")"
+                                                title="@(v == 0 ? "—" : propia
+                                                    ? $"{c} corrigió {v:#,0} reserva(s) que había cargado"
+                                                    : $"{m} modificó {v:#,0} reserva(s) cargada(s) por {c}")">
+                                                @(v == 0 ? "·" : Fmt(v))
+                                            </td>
+                                        }
+                                        <td class="op-num op-num--fuerte">@Cero(_matrizOpers.Sum(m => MatrizVal(c, m)))</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </MudPaper>
+        </MudItem>
+
+        @* ── Qué carga: los clientes del operador ── *@
+        <MudItem xs="12" md="4">
+            <MudPaper Elevation="1" Class="pa-3" Style="border-radius:14px; height:100%;">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                    Qué carga @(_focus ?? "cada operador")
+                    <AyudaReporte Ruta="panel-operador" Bloque="clientes" Chico="true" />
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color:#7A90AD;">
+                    @if (_focus is null)
+                    {
+                        <text>Los clientes que más se cargan en el período. Enfocá un operador
+                        para ver los suyos — es lo que le da contexto a la concentración.</text>
+                    }
+                    else
+                    {
+                        <text>Sus principales clientes. Si uno solo se lleva casi todo, la
+                        concentración es del <b>contrato</b>, no de la persona.</text>
+                    }
+                </MudText>
+
+                <div class="op-clientes mt-2">
+                    @foreach (var c in _clientesTop)
+                    {
+                        var pct = _clientesTotal > 0 ? c.Altas * 100.0 / _clientesTotal : 0;
+                        <div class="op-cli" title="@($"{c.Cliente}: {c.Altas:#,0} altas ({pct:0.0} % de lo cargado)")">
+                            <div class="op-cli__head">
+                                <span class="op-cli__nom">@c.Cliente</span>
+                                <span class="op-cli__val">@Fmt(c.Altas) <span class="op-cli__pct">@($"{pct:0.0} %")</span></span>
+                            </div>
+                            <div class="op-cli__barra"><span style="@($"width:{Ancho(pct)};")"></span></div>
+                        </div>
+                    }
+                    @if (_clientesTop.Count == 0)
+                    {
+                        <MudText Typo="Typo.body2" Style="color:#7A90AD;">Sin datos de cliente en el período.</MudText>
+                    }
+                </div>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    </div>
+}
+
+@code {
+    private static readonly System.Globalization.CultureInfo _ar = new("es-AR");
+
+    // ── Filtros (edición) y su snapshot aplicado ──
+    private DateTime? _desde = DateTime.Today.AddDays(-30);
+    private DateTime? _hasta = DateTime.Today;
+    private DateOnly _desdeAp, _hastaAp;
+    private bool _pendiente;
+    private bool _cargando = true;
+
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+
+    // ── Datos crudos del período (se traen una vez por filtro) ──
+    private List<OperadorPerfilRow> _perfiles = new();
+    private List<OperadorMatrizRow> _matriz = new();
+    private List<OperadorDiaRow> _evolucion = new();
+    private List<OperadorClienteRow> _clientes = new();
+
+    // ── Estado derivado (se recalcula en memoria, sin volver a SQL) ──
+    private string? _focus;
+    private int _totalAltas;
+    private List<OperadorPerfilRow> _fantasmas = new();
+    private List<string> _matrizOpers = new();
+    private Dictionary<(string, string), int> _matrizMap = new();
+    private List<BarItem> _barItems = new();
+    private List<EvolItem> _evolItems = new();
+    private List<DowItem> _porDow = new();
+    private List<OperadorClienteRow> _clientesTop = new();
+    private int _clientesTotal;
+    private bool _porMes;
+    private int _barMax;
+
+    // El único chart ApexCharts que queda es la evolución. Se REMONTA con @key en cada cambio
+    // de foco en vez de actualizarse en el lugar: es una sola serie chica, y el remonte evita
+    // toda la familia de bugs de update parcial. El ranking es HTML, no necesita key.
+    private Guid _keyEvol = Guid.NewGuid();
+
+    // ── KPIs ──
+    private int _kAltas, _kOperadores, _kModificaciones, _kCruzadas;
+    private double _kConcentracion;
+    private string _kAltasSub = "", _kOperadoresSub = "", _kConcentracionSub = "";
+    private string _kAntelacion = "·", _kAntelacionSub = "", _kModificacionesSub = "", _kCruzadasSub = "";
+
+    private ApexChartOptions<EvolItem> _optsEvol = new();
+
+    // Paleta categórica del proyecto: el color sigue al OPERADOR, no a la posición.
+    private static readonly List<string> _palette = new()
+    { "#2058D0", "#F99410", "#16A34A", "#DC2626", "#0EA5E9",
+      "#7C3AED", "#B45309", "#DB2777", "#0D9488", "#65A30D" };
+    private const string _colorResto = "#94A3B8";
+    private Dictionary<string, string> _colorPorOper = new();
+
+    private string ColorDe(string o) => _colorPorOper.TryGetValue(o, out var c) ? c : _colorResto;
+
+    /// <summary>
+    /// Highlight estilo Power BI: con foco activo, el resto se atenúa (por CSS, no por color
+    /// de relleno) y los valores quedan intactos — se sigue pudiendo comparar contra el todo.
+    /// </summary>
+    private bool EnFoco(string o) => _focus is null || _focus == o;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+
+        // Guarda de permiso: el catálogo es el que sabe qué letra pide esta ruta (hoy 'S',
+        // porque el informe está en desarrollo). Así no queda el permiso escrito en dos lados
+        // y al graduar el informe la guarda sigue el cambio sola.
+        if (!InformesCatalogo.PuedeVerRuta(Permisos, "panel-operador"))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+
+        await Cargar();
+    }
+
+    private void MarcarPendiente() => _pendiente = true;
+
+    private async Task Cargar()
+    {
+        if (_desde is null || _hasta is null) return;
+
+        _cargando = true;
+        StateHasChanged();
+
+        _desdeAp = DateOnly.FromDateTime(_desde.Value);
+        _hastaAp = DateOnly.FromDateTime(_hasta.Value);
+        _focus = null;   // datos nuevos: el operador enfocado puede ya no estar
+
+        var tPerfil = Reports.GetOperadorPerfilAsync(_desdeAp, _hastaAp);
+        var tMatriz = Reports.GetOperadorMatrizAsync(_desdeAp, _hastaAp);
+        var tEvol = Reports.GetOperadorEvolucionAsync(_desdeAp, _hastaAp);
+        var tCli = Reports.GetOperadorClientesAsync(_desdeAp, _hastaAp);
+        await Task.WhenAll(tPerfil, tMatriz, tEvol, tCli);
+
+        _perfiles = tPerfil.Result;
+        _matriz = tMatriz.Result;
+        _evolucion = tEvol.Result;
+        _clientes = tCli.Result;
+
+        _totalAltas = _perfiles.Sum(p => p.Altas);
+        _fantasmas = _perfiles.Where(p => p.EstadoUsuario != EstadoUsuarioOperador.Vigente && p.Altas > 0).ToList();
+
+        // Color por operador según el ranking de altas: estable dentro del mismo dataset.
+        _colorPorOper = _perfiles
+            .OrderByDescending(p => p.Altas)
+            .Select((p, i) => (p.Operador, i))
+            .ToDictionary(t => t.Operador, t => t.i < _palette.Count ? _palette[t.i] : _colorResto);
+
+        // Matriz: los operadores del eje son los que cargaron o modificaron algo.
+        _matrizMap = _matriz.ToDictionary(m => (m.Creador, m.Modificador), m => m.Cantidad);
+        _matrizOpers = _matriz.Select(m => m.Creador)
+            .Concat(_matriz.Select(m => m.Modificador))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(o => _perfiles.FirstOrDefault(p => p.Operador == o)?.Altas ?? 0)
+            .ThenBy(o => o)
+            .ToList();
+
+        // Rango largo → agrupar la evolución por mes (365 puntos diarios no se leen).
+        _porMes = _hastaAp.DayNumber - _desdeAp.DayNumber > 62;
+
+        _pendiente = false;
+        _cargando = false;
+        _keyEvol = Guid.NewGuid();
+        Recalcular();
+    }
+
+    private void ToggleFoco(string oper)
+    {
+        _focus = _focus == oper ? null : oper;
+        Recalcular();
+        _keyEvol = Guid.NewGuid();   // remonta la evolución con los datos del foco
+    }
+
+    private void LimpiarFoco()
+    {
+        _focus = null;
+        Recalcular();
+        _keyEvol = Guid.NewGuid();
+    }
+
+    /// <summary>
+    /// Todo el tablero, en memoria. El ranking de barras se arma SIEMPRE con el dataset
+    /// completo (solo cambian sus colores con el foco); KPIs, evolución y clientes se
+    /// recalculan sobre el subconjunto enfocado.
+    /// </summary>
+    private void Recalcular()
+    {
+        // ── Ranking: dataset completo (el foco solo lo apaga, no lo filtra) ──
+        _barItems = _perfiles
+            .Where(p => p.Altas > 0)
+            .OrderByDescending(p => p.Altas)
+            .Select(p => new BarItem(p.Operador, p.Altas))
+            .ToList();
+        _barMax = _barItems.Count > 0 ? _barItems.Max(b => b.Altas) : 0;
+
+        // ── Subconjunto enfocado ──
+        var evolFoco = _evolucion.Where(e => EnFoco(e.Operador)).ToList();
+        var perfFoco = _perfiles.Where(p => EnFoco(p.Operador)).ToList();
+
+        // ── Evolución ──
+        _evolItems = _porMes
+            ? evolFoco.GroupBy(e => new DateOnly(e.Fecha.Year, e.Fecha.Month, 1))
+                      .OrderBy(g => g.Key)
+                      .Select(g => new EvolItem(g.Key.ToString("MM/yyyy"), g.Sum(x => x.Altas)))
+                      .ToList()
+            : evolFoco.GroupBy(e => e.Fecha)
+                      .OrderBy(g => g.Key)
+                      .Select(g => new EvolItem(g.Key.ToString("dd/MM"), g.Sum(x => x.Altas)))
+                      .ToList();
+
+        _optsEvol = new ApexChartOptions<EvolItem>
+        {
+            Chart = new() { Toolbar = new() { Show = false }, Animations = new() { Enabled = false } },
+            Colors = new List<string> { _focus is not null ? ColorDe(_focus) : NorturColors.Azul },
+            Stroke = new() { Curve = Curve.Smooth, Width = 2 },
+            Fill = new() { Type = FillType.Gradient, Gradient = new() { OpacityFrom = 0.35, OpacityTo = 0.05 } },
+            DataLabels = new() { Enabled = false },
+            Xaxis = new() { Labels = new() { Rotate = -45, HideOverlappingLabels = true } },
+            Grid = new() { BorderColor = "#EEF2F9" },
+        };
+
+        // ── Carga por día de semana (calculada en C#, no con DATEPART) ──
+        var dows = new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday,
+                           DayOfWeek.Friday, DayOfWeek.Saturday, DayOfWeek.Sunday };
+        _porDow = dows.Select(d => new DowItem(
+            NombreDia(d),
+            evolFoco.Where(e => e.Fecha.DayOfWeek == d).Sum(e => e.Altas))).ToList();
+
+        // ── Clientes (el contexto de la concentración) ──
+        var cliFoco = _clientes.Where(c => EnFoco(c.Operador)).ToList();
+        _clientesTotal = cliFoco.Sum(c => c.Altas);
+        _clientesTop = cliFoco
+            .GroupBy(c => c.Cliente)
+            .Select(g => new OperadorClienteRow(_focus ?? "—", g.Key, g.Sum(x => x.Altas)))
+            .OrderByDescending(c => c.Altas)
+            .Take(8)
+            .ToList();
+
+        // ── KPIs ──
+        var altasFoco = perfFoco.Sum(p => p.Altas);
+        _kAltas = altasFoco;
+        _kAltasSub = _focus is null
+            ? $"{_desdeAp:dd/MM/yyyy} – {_hastaAp:dd/MM/yyyy}"
+            : $"{(_totalAltas > 0 ? altasFoco * 100.0 / _totalAltas : 0):0.0} % del total del período";
+
+        _kOperadores = _perfiles.Count(p => p.Altas > 0);
+        var soloCorrigen = _perfiles.Count(p => p.SoloModifica);
+        _kOperadoresSub = soloCorrigen > 0
+            ? $"cargaron altas · {soloCorrigen} más solo corrigen"
+            : "cargaron al menos una reserva";
+
+        var top = _perfiles.OrderByDescending(p => p.Altas).FirstOrDefault();
+        _kConcentracion = _totalAltas > 0 && top is not null ? top.Altas * 100.0 / _totalAltas : 0;
+        _kConcentracionSub = top is not null && top.Altas > 0
+            ? $"{top.Operador} · {Fmt(top.Altas)} de {Fmt(_totalAltas)} altas"
+            : "sin altas en el período";
+
+        // Antelación ponderada por altas: el promedio simple le daría el mismo peso al
+        // operador de 8 altas que al de 46.000.
+        var conAnt = perfFoco.Where(p => p.AntelacionProm is not null && p.Altas > 0).ToList();
+        var pesoTotal = conAnt.Sum(p => p.Altas);
+        if (pesoTotal > 0)
+        {
+            var prom = conAnt.Sum(p => p.AntelacionProm!.Value * p.Altas) / pesoTotal;
+            _kAntelacion = $"{prom:0.0} d";
+            var retro = perfFoco.Sum(p => p.Retroactivas);
+            _kAntelacionSub = retro > 0
+                ? $"antes del viaje · {Fmt(retro)} cargada(s) tarde"
+                : "de anticipación media al viaje";
+        }
+        else
+        {
+            _kAntelacion = "·";
+            _kAntelacionSub = "sin datos de antelación";
+        }
+
+        _kModificaciones = perfFoco.Sum(p => p.Modificaciones);
+        _kModificacionesSub = altasFoco > 0
+            ? $"{(_kModificaciones * 100.0 / altasFoco):0.0} % de lo cargado · solo la última mano"
+            : "solo se guarda la última mano";
+
+        _kCruzadas = perfFoco.Sum(p => p.ModificoDeOtros);
+        _kCruzadasSub = _kModificaciones > 0
+            ? $"{(_kCruzadas * 100.0 / _kModificaciones):0.0} % de las modificaciones"
+            : "sin modificaciones en el período";
+    }
+
+    private int MatrizVal(string creador, string modificador) =>
+        _matrizMap.TryGetValue((creador, modificador), out var v) ? v : 0;
+
+    private async Task DescargarExcel()
+    {
+        var bytes = Excel.PanelOperador(_perfiles, _matriz, _evolucion, _desdeAp, _hastaAp);
+        var nombre = $"panel_operador_{_desdeAp:yyyyMMdd}_{_hastaAp:yyyyMMdd}.xlsx";
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    private static string NombreDia(DayOfWeek d) => d switch
+    {
+        DayOfWeek.Monday => "Lunes",
+        DayOfWeek.Tuesday => "Martes",
+        DayOfWeek.Wednesday => "Miércoles",
+        DayOfWeek.Thursday => "Jueves",
+        DayOfWeek.Friday => "Viernes",
+        DayOfWeek.Saturday => "Sábado",
+        _ => "Domingo",
+    };
+
+    /// <summary>Nombre acortado para los encabezados de la matriz, que son muchas columnas.</summary>
+    private static string Corto(string o) => o.Length <= 9 ? o : o[..8] + "…";
+
+    private static string Fmt(int n) => n.ToString("#,0", _ar);
+    private static string Cero(int n) => n > 0 ? Fmt(n) : "·";
+
+    /// <summary>
+    /// Ancho de una barra como porcentaje CSS. **Va SIEMPRE en InvariantCulture**: la app corre
+    /// en es-AR, donde el separador decimal es la coma, y `width:81,7%` es CSS INVÁLIDO. El
+    /// navegador descarta la regla y el &lt;span&gt; (display:block, sin ancho propio) pasa a
+    /// ocupar el 100% del contenedor → todas las barras salían del mismo largo.
+    ///
+    /// El síntoma engaña porque los valores que caen justo en un entero ("1%") sí funcionan:
+    /// se ve UNA barra bien y el resto llenas. Misma familia que la trampa de los formatters
+    /// JS del Panel de Clientes: cualquier número que viaje a CSS o a JavaScript se formatea
+    /// con punto, nunca con la cultura de la UI.
+    /// </summary>
+    private static string Ancho(double pct)
+    {
+        var v = Math.Clamp(pct, 0, 100);
+        // Piso visible para que una categoría chica no desaparezca del todo.
+        if (v > 0 && v < 0.8) v = 0.8;
+        return v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + "%";
+    }
+
+    public record BarItem(string Operador, int Altas);
+    public record EvolItem(string Etiqueta, int Altas);
+    public record DowItem(string Dia, int Altas);
+}

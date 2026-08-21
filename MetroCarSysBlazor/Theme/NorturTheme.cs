@@ -17,6 +17,8 @@ public static class NorturColors
     public const string AzulClaro = "#E8EFF9";
     public const string Verde = "#16A34A";
     public const string Rojo = "#DC2626";
+    /// <summary>Quinto acento para KPIs (los 4 clásicos ya estaban tomados). Hue de la paleta dataviz.</summary>
+    public const string Violeta = "#7C3AED";
 }
 
 public static class NorturTheme
@@ -28,7 +30,7 @@ public static class NorturTheme
             Primary = NorturColors.Azul,
             Secondary = NorturColors.Naranja,
             AppbarBackground = NorturColors.AzulNoche,
-            Background = "#C8D4E3",
+            Background = "#D5D9E2",
             Surface = "#FFFFFF",
             DrawerBackground = "#B5C4D8",
             Success = NorturColors.Verde,

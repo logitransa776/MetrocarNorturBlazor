@@ -1,0 +1,92 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   Drill-down del Panel de Flota: las unidades detrás de un número del tablero,
+   una por una, con su actividad del período. Solo lectura, sin query propia
+   (los datos llegan ya filtrados desde la página).
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.DirectionsBus" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Unidades de la flota</span>
+            <span class="zoom-title-bar__nro">@Subtitulo</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <div class="d-flex align-center flex-wrap mb-2" style="gap:16px;">
+            <MudText Typo="Typo.body2" Style="color:#5B7290;">
+                <b style="color:#112F5B;">@Items.Count.ToString("#,0", _ar)</b> unidades ·
+                <b style="color:#112F5B;">@Items.Sum(i => i.Pax).ToString("#,0", _ar)</b> butacas ·
+                <b style="color:#112F5B;">@Items.Count(i => i.EsOciosa).ToString("#,0", _ar)</b> sin uso en el período
+            </MudText>
+        </div>
+
+        <MudTable Items="@Items" Dense="true" Hover="true" Striped="true"
+                  Virtualize="true" FixedHeader="true" Height="58vh"
+                  T="FlotaUnidadRow">
+            <HeaderContent>
+                <MudTh Style="white-space:nowrap;">Interno</MudTh>
+                <MudTh>Dominio</MudTh>
+                <MudTh>Tipo</MudTh>
+                <MudTh>Marca y modelo</MudTh>
+                <MudTh Style="text-align:right;">Año</MudTh>
+                <MudTh Style="text-align:right;">Butacas</MudTh>
+                <MudTh>Uso</MudTh>
+                <MudTh>Titular</MudTh>
+                <MudTh>Situación</MudTh>
+                <MudTh Style="text-align:right;">Viajes</MudTh>
+                <MudTh Style="text-align:right;">Días</MudTh>
+                <MudTh Style="text-align:right;">Km</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd Style="white-space:nowrap; font-weight:600; color:#112F5B;">@context.InternoNT</MudTd>
+                <MudTd Style="white-space:nowrap;">@context.Dominio</MudTd>
+                <MudTd Style="white-space:nowrap;">@context.Tipo</MudTd>
+                <MudTd>@(string.IsNullOrWhiteSpace(context.Marca) ? "—" : context.Marca)</MudTd>
+                <MudTd Style="text-align:right;">@(context.Antiguedad is null ? "—" : context.Modelo.ToString())</MudTd>
+                <MudTd Style="text-align:right;">@(context.Pax > 0 ? context.Pax.ToString() : "—")</MudTd>
+                <MudTd Style="white-space:nowrap;">@(string.IsNullOrWhiteSpace(context.Uso) ? "—" : context.Uso)</MudTd>
+                <MudTd Style="white-space:nowrap;">@(string.IsNullOrWhiteSpace(context.Titular) ? "—" : context.Titular)</MudTd>
+                <MudTd>
+                    <span class="rfs-estado" style="@EstiloSituacion(context)">@Situacion(context)</span>
+                </MudTd>
+                <MudTd Style="text-align:right;">@(context.Viajes > 0 ? context.Viajes.ToString("#,0", _ar) : "—")</MudTd>
+                <MudTd Style="text-align:right;">@(context.DiasTrabajados > 0 ? context.DiasTrabajados.ToString() : "—")</MudTd>
+                @* Sin odómetro confiable no se inventa un número: se dice que no hay dato. *@
+                <MudTd Style="text-align:right;" title="@(context.TieneKm ? $"{context.MesesOdometroOk} mes(es) de odómetro válidos" : "Sin lecturas de odómetro confiables en el período")">
+                    @(context.TieneKm ? context.Km.ToString("#,0", _ar) : "—")
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Subtitulo { get; set; } = "";
+    [Parameter] public List<FlotaUnidadRow> Items { get; set; } = new();
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    // Tres situaciones que importan para leer la flota: de baja, activa sin usar, activa.
+    private static string Situacion(FlotaUnidadRow u) =>
+        u.EsBaja ? (u.FBaja is not null ? $"Baja {u.FBaja:MM/yyyy}" : "De baja")
+        : u.EsOciosa ? "Sin uso"
+        : "Operativa";
+
+    private static string EstiloSituacion(FlotaUnidadRow u) =>
+        u.EsBaja ? "background:#F1F5F9; color:#475569;"
+        : u.EsOciosa ? "background:#FEF3C7; color:#92400E;"
+        : "background:#DCFCE7; color:#166534;";
+
+    private void Cerrar() => MudDialog.Close();
+}

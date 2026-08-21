@@ -1,0 +1,870 @@
+﻿@page "/panel-flota"
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject IDialogService DialogService
+@rendermode InteractiveServer
+
+@* ─────────────────────────────────────────────────────────────────────────────
+   Panel de Flota — informe NUEVO (no existe en el Metrocar/FoxPro).
+
+   Contesta las tres preguntas de la flota en un solo tablero:
+     · QUÉ TENGO    → composición (unidades, butacas, antigüedad, titular)
+     · QUÉ NO TENGO → demanda por tipo pedido vs unidades, medida en SIN ASIGNAR
+     · QUÉ NO USO   → unidades activas sin un solo viaje en el período
+
+   Dos consultas y todo lo demás en memoria (~412 unidades): los switches de
+   universo, el cambio de dimensión y el cross-filter no vuelven a la base.
+   ───────────────────────────────────────────────────────────────────────────── *@
+
+<PageTitle>BusLink</PageTitle>
+
+<div class="page-header mb-3">
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+            Panel de Flota
+        </MudText>
+        @* El informe está EN DESARROLLO en el catálogo: el badge lo dice también acá, para que
+           quien lo abre sepa que está en evaluación y no publicado a la operación. *@
+        <span class="nt-badge-dev" title="Informe en evaluación: se publica al módulo Flota cuando el cliente lo apruebe.">
+            <MudIcon Icon="@Icons.Material.Filled.Science" Size="MudSize.Small" />
+            En desarrollo
+        </span>
+        <AyudaReporte Ruta="panel-flota" />
+    </div>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Qué unidades hay, de qué tipo y qué capacidad · Nortur
+    </MudText>
+</div>
+
+@* ── Barra de filtros (filtros a la izquierda, acciones juntas a la derecha) ── *@
+<MudPaper Elevation="1" Class="rfs-filtros mb-3">
+    <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudSize.Small" Style="color:#003AA0; flex-shrink:0;" />
+
+    <div class="rfs-fechas">
+        <MudDatePicker Label="Desde" Date="_desde" DateChanged="@(d => _desde = d)"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+        <MudDatePicker Label="Hasta" Date="_hasta" DateChanged="@(d => _hasta = d)"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+    </div>
+
+    @* Universo: se aplica AL INSTANTE (es un filtro en memoria, no cuesta una query). *@
+    <MudSelect T="string" Label="Universo" MultiSelection="true"
+               SelectedValues="_universoSel" SelectedValuesChanged="CambiarUniverso"
+               Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:210px;"
+               title="Qué unidades entran en el conteo. Propias y contratadas son la flota que opera hoy; las dadas de baja (vendidas o desafectadas) están para ver el histórico. Se aplica al instante."
+               MultiSelectionTextFunc="@(s => s.Count == 3 ? "Toda la flota" : string.Join(", ", s))">
+        @foreach (var u in _universos)
+        {
+            <MudSelectItem T="string" Value="@u">@u</MudSelectItem>
+        }
+    </MudSelect>
+
+    @* Dimensión: también al instante — es un corte del mismo dataset. *@
+    <MudSelect T="string" Label="Desglosar por" Value="_dimension" ValueChanged="CambiarDimension"
+               Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:175px;"
+               title="Con qué criterio abrir la flota: por tipo de vehículo (BUS, VAN, MINI…), por titular (NORTUR y los fleteros), por antigüedad o por capacidad de butacas. Se aplica al instante.">
+        @foreach (var d in ReportService.DimensionesFlota)
+        {
+            <MudSelectItem T="string" Value="@d">@EtiquetaDim(d)</MudSelectItem>
+        }
+    </MudSelect>
+
+    <span style="flex:1 1 auto;"></span>
+
+    <div style="display:flex; gap:6px; flex-shrink:0;">
+        <MudButton Variant="Variant.Filled" Color="@(_pendientes > 0 ? MudColor.Warning : MudColor.Primary)"
+                   OnClick="Cargar" Disabled="_cargando"
+                   StartIcon="@(_pendientes > 0 ? Icons.Material.Filled.PriorityHigh : Icons.Material.Filled.Search)"
+                   Style="border-radius:8px; height:40px; text-transform:none;">
+            @(_cargando ? "Cargando..." : _pendientes > 0 ? $"Aplicar filtros ({_pendientes})" : "Aplicar filtros")
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                   StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                   Disabled="@(_cargando || _unidades.Count == 0)"
+                   Style="border-radius:8px; height:40px; text-transform:none;">
+            Excel
+        </MudButton>
+    </div>
+</MudPaper>
+
+@if (_pendientes > 0 && !_cargando)
+{
+    <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3" Style="border-radius:12px;"
+              Icon="@Icons.Material.Filled.Update">
+        Lo que se ve abajo <b>todavía no incluye</b> el cambio de fechas — apretá <b>Aplicar filtros</b> para actualizar.
+    </MudAlert>
+}
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else if (_unidades.Count == 0)
+{
+    <MudAlert Severity="Severity.Warning" Style="border-radius:12px;">No se pudo leer la flota.</MudAlert>
+}
+else if (_base.Count == 0)
+{
+    <MudAlert Severity="Severity.Warning" Style="border-radius:12px;">
+        No hay unidades en el universo elegido. Tildá al menos una opción en <b>Universo</b>.
+    </MudAlert>
+}
+else
+{
+    <div class="@(_pendientes > 0 ? "rfs-desactualizado" : "")">
+
+    @* ── KPIs ── *@
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="Unidades" Value="@Fmt(_kUnidades)" Sub="@_kUnidadesSub" Color="@NorturColors.Azul" />
+        <KpiCard Label="Butacas" Value="@Fmt(_kButacas)" Sub="capacidad instalada" Color="@NorturColors.Verde" />
+        <KpiCard Label="@EtiquetaDimPlural" Value="@_kCategorias.ToString()" Sub="en la flota" Color="@NorturColors.Naranja" />
+        <KpiCard Label="Sin uso" Value="@Fmt(_kOciosas)" Sub="@_kOciosasSub" Color="#B45309" />
+        <KpiCard Label="Viajes sin asignar" Value="@Fmt(_kSinAsignar)" Sub="@_kSinAsignarSub" Color="@NorturColors.Rojo" />
+        <KpiCard Label="Antigüedad promedio" Value="@_kAntiguedad" Sub="@_kAntiguedadSub" Color="#7C3AED" />
+    </div>
+
+    @* La aclaración es parte del informe, no un adorno: la tabla `vehiculo` no guarda historia,
+       así que el plantel es siempre el de hoy y el período solo mide la actividad. *@
+    <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Style="border-radius:12px;"
+              Icon="@Icons.Material.Filled.Info">
+        El <b>plantel es la foto de hoy</b> (el sistema no guarda cuántas unidades había en una fecha pasada).
+        El período <b>@PeriodoTxt</b> mide la <b>actividad</b>: viajes, días trabajados, kilómetros y viajes sin asignar.
+    </MudAlert>
+
+    @* ── Composición: unidades por categoría + butacas por categoría ──
+       El @key remonta los gráficos cuando cambia la FORMA de los datos (otro período, otro
+       universo, otra dimensión): sin él, el de barras se quedaba con las categorías anteriores
+       —al pasar a "Antigüedad" seguía mostrando BUS/VAN/MINI—. En el cambio de FOCO NO se
+       regenera: ahí los gráficos se actualizan en su lugar, que es lo que evita el parpadeo. *@
+    <MudGrid @key="_chartsKey" Spacing="3" Class="mb-3" Style="align-items:stretch;">
+        <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
+            <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                @CabeceraFoco($"Unidades por {EtiquetaDimSingular}")
+                <ApexChart TItem="BarItem" Options="_optsBar" Height="@_altoBarras" @ref="_barChart"
+                           OnDataPointSelection="OnBarSelection">
+                    <ApexPointSeries TItem="BarItem" Items="_barItems" Name="Unidades"
+                                     SeriesType="SeriesType.Bar"
+                                     XValue="@(x => x.Cat)" YValue="@(x => x.Valor)"
+                                     ShowDataLabels="true" />
+                </ApexChart>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="5" Style="display:flex; flex-direction:column;">
+            <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                @CabeceraFoco("Butacas — capacidad instalada")
+                @* Torta limpia + cantidad y % en la LEYENDA (ApexCharts no tiene leader lines).
+                   @key propio: se remonta en cada foco para que la leyenda no quede con los
+                   valores del render anterior (regla del cross-filter). *@
+                <ApexChart @key="_pieKey" TItem="PieItem" Options="_optsPie" Height="360"
+                           OnDataPointSelection="OnPieSelection">
+                    <ApexPointSeries TItem="PieItem" Items="_pieItems" Name="Butacas"
+                                     SeriesType="SeriesType.Pie"
+                                     XValue="@(x => x.Cat)" YValue="@(x => x.Valor)" />
+                </ApexChart>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @* ── Oferta vs demanda por tipo — "de qué no hay" ── *@
+    <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
+        <div class="mb-2">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                Oferta vs demanda por tipo de vehículo
+                <AyudaReporte Ruta="panel-flota" Bloque="oferta" Chico="true" />
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                Los <b>sin asignar</b> son los servicios que se pidieron de cada tipo y no encontraron unidad: es la medida
+                del faltante. La demanda sale del tipo pedido en la reserva, que puede no existir en la flota (y al revés).
+            </MudText>
+        </div>
+
+        <MudGrid Spacing="3" Style="align-items:stretch;">
+            <MudItem xs="12" md="7">
+                <div class="rfs-tabla-wrap" style="max-height:340px;">
+                    <table class="rfs-tabla">
+                        <thead>
+                            <tr>
+                                <th class="rfs-col-fecha">Tipo</th>
+                                <th class="rfs-num" title="Unidades activas de ese tipo en la flota (propias + contratadas)">Unidades</th>
+                                <th class="rfs-num" title="Unidades distintas que efectivamente hicieron algún viaje">Trabajaron</th>
+                                <th class="rfs-num" title="Viajes pedidos de ese tipo en el período (todos los estados)">Pedidos</th>
+                                <th class="rfs-num" title="Viajes que quedaron sin unidad asignada">Sin asignar</th>
+                                <th class="rfs-num" title="Qué porcentaje de lo pedido quedó sin cubrir">% sin cubrir</th>
+                                <th class="rfs-num" title="Carga media: viajes pedidos por cada unidad activa del tipo">Viajes/unidad</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var f in _ofertaDemanda)
+                            {
+                                var atenua = AtenuaTipo(f.Tipo) ? "rfs-atenua" : "";
+                                <tr>
+                                    <td class="rfs-col-fecha @atenua">@f.Tipo</td>
+                                    <td class="rfs-num @atenua @(f.Unidades == 0 ? "pfl-alerta" : "")">@(f.Unidades > 0 ? Fmt(f.Unidades) : "sin flota")</td>
+                                    <td class="rfs-num @atenua">@(f.Unidades > 0 ? Fmt(f.Trabajaron) : "·")</td>
+                                    <td class="rfs-num @atenua">@(f.Pedidos > 0 ? Fmt(f.Pedidos) : "·")</td>
+                                    <td class="rfs-num @atenua @(f.SinAsignar > 0 ? "pfl-alerta" : "")">@(f.SinAsignar > 0 ? Fmt(f.SinAsignar) : "·")</td>
+                                    <td class="rfs-num @atenua">@(f.Pedidos > 0 ? $"{f.PctSinCubrir:0.0}%" : "·")</td>
+                                    <td class="rfs-num @atenua">@(f.Unidades > 0 && f.Pedidos > 0 ? f.ViajesPorUnidad.ToString("#,0.0", _ar) : "·")</td>
+                                </tr>
+                            }
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <td class="rfs-col-fecha rfs-tot">TOTAL</td>
+                                <td class="rfs-num rfs-tot">@Fmt(_ofertaDemanda.Sum(x => x.Unidades))</td>
+                                <td class="rfs-num rfs-tot">@Fmt(_ofertaDemanda.Sum(x => x.Trabajaron))</td>
+                                <td class="rfs-num rfs-tot">@Fmt(_ofertaDemanda.Sum(x => x.Pedidos))</td>
+                                <td class="rfs-num rfs-tot rfs-grantot">@Fmt(_ofertaDemanda.Sum(x => x.SinAsignar))</td>
+                                <td class="rfs-num rfs-tot">@PctSinCubrirTotal</td>
+                                <td class="rfs-num rfs-tot">·</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </MudItem>
+            <MudItem xs="12" md="5">
+                @if (_sinAsignarItems.Count > 0)
+                {
+                    <ApexChart @key="_chartsKey" TItem="BarItem" Options="_optsFalta" Height="@_altoFalta" @ref="_faltaChart">
+                        <ApexPointSeries TItem="BarItem" Items="_sinAsignarItems" Name="Sin asignar"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="@(x => x.Cat)" YValue="@(x => x.Valor)"
+                                         ShowDataLabels="true" />
+                    </ApexChart>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Success" Dense="true" Style="border-radius:12px;">
+                        En este período <b>no quedó ningún viaje sin asignar</b>: la flota cubrió toda la demanda.
+                    </MudAlert>
+                }
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    @* ── Tabla resumen por la dimensión elegida ── *@
+    <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
+        <div class="mb-3">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                Detalle por @EtiquetaDimSingular
+                <AyudaReporte Ruta="panel-flota" Bloque="detalle" Chico="true" />
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                Click en una fila para ver las unidades una por una · click en el nombre para enfocar el tablero
+            </MudText>
+        </div>
+        <div class="rfs-tabla-wrap">
+            <table class="rfs-tabla">
+                <thead>
+                    <tr>
+                        <th class="rfs-col-fecha">@EtiquetaDimSingularTit</th>
+                        <th class="rfs-num">Unidades</th>
+                        <th class="rfs-num">Propias</th>
+                        <th class="rfs-num">Contratadas</th>
+                        @if (_uniBajas)
+                        {
+                            <th class="rfs-num">De baja</th>
+                        }
+                        <th class="rfs-num">Butacas</th>
+                        <th class="rfs-num" title="Promedio de años de las unidades con año de modelo cargado">Antigüedad</th>
+                        <th class="rfs-num" title="Unidades activas que no hicieron ni un viaje en el período">Sin uso</th>
+                        <th class="rfs-num">Viajes</th>
+                        <th class="rfs-num" title="Km del odómetro en el período, solo de las unidades con lecturas confiables">Km</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in _resumen)
+                    {
+                        var atenua = !EnFoco(r.Cat) ? "rfs-atenua" : "";
+                        <tr>
+                            <td class="rfs-col-fecha rfs-click @atenua @(EnFocoDuro(r.Cat) ? "pfl-cat-foco" : "")"
+                                title="Clic para enfocar el tablero en @r.Cat"
+                                @onclick="() => ToggleFoco(r.Cat)">
+                                <span class="pfl-punto" style="@($"background:{ColorDe(r.Cat)};")"></span>@r.Cat
+                            </td>
+                            <td class="rfs-num rfs-click @atenua" title="Ver las @r.Unidades unidades de @r.Cat"
+                                @onclick="() => AbrirUnidades(r.Cat)">@Fmt(r.Unidades)</td>
+                            <td class="rfs-num @atenua">@Cero(r.Propias)</td>
+                            <td class="rfs-num @atenua">@Cero(r.Contratadas)</td>
+                            @if (_uniBajas)
+                            {
+                                <td class="rfs-num @atenua">@Cero(r.Bajas)</td>
+                            }
+                            <td class="rfs-num @atenua">@Cero(r.Butacas)</td>
+                            <td class="rfs-num @atenua">@(r.AntiguedadProm is null ? "·" : $"{r.AntiguedadProm:0.0} a")</td>
+                            <td class="rfs-num @atenua @(r.Ociosas > 0 ? "pfl-alerta" : "")">@Cero(r.Ociosas)</td>
+                            <td class="rfs-num @atenua">@Cero(r.Viajes)</td>
+                            <td class="rfs-num @atenua" title="@r.KmTitulo">@(r.UnidadesConKm > 0 ? Fmt(r.Km) : "·")</td>
+                        </tr>
+                    }
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td class="rfs-col-fecha rfs-tot">TOTAL@(_focus is null ? "" : $" ({_focus})")</td>
+                        <td class="rfs-num rfs-tot rfs-grantot">@Fmt(_tUnidades)</td>
+                        <td class="rfs-num rfs-tot">@Fmt(_tPropias)</td>
+                        <td class="rfs-num rfs-tot">@Fmt(_tContratadas)</td>
+                        @if (_uniBajas)
+                        {
+                            <td class="rfs-num rfs-tot">@Fmt(_tBajas)</td>
+                        }
+                        <td class="rfs-num rfs-tot">@Fmt(_tButacas)</td>
+                        <td class="rfs-num rfs-tot">@_kAntiguedad</td>
+                        <td class="rfs-num rfs-tot">@Fmt(_tOciosas)</td>
+                        <td class="rfs-num rfs-tot">@Fmt(_tViajes)</td>
+                        <td class="rfs-num rfs-tot">@Fmt(_tKm)</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        @if (_kmDudosos > 0)
+        {
+            @* La calidad del dato se muestra, no se esconde: `vehiculo_km` se carga a mano y
+               tiene errores de tipeo de varios órdenes de magnitud. *@
+            <MudText Typo="Typo.caption" Class="mt-2" Style="color:#B45309; display:block;">
+                ⚠ @_kmDudosos @(_kmDudosos == 1 ? "lectura de odómetro quedó" : "lecturas de odómetro quedaron") fuera del cálculo de km por
+                superar los @Fmt(ReportService.KmMaximoPorMes) km en un mes (error de carga). Los km de arriba son solo los de las lecturas confiables.
+            </MudText>
+        }
+    </MudPaper>
+
+    </div>
+}
+
+@code {
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+    private static readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    // ── Filtros ──
+    private DateTime? _desde = new DateTime(DateTime.Today.Year, 1, 1);
+    private DateTime? _hasta = DateTime.Today;
+
+    private const string UniPropias = "Propias";
+    private const string UniContratadas = "Contratadas";
+    private const string UniBajas = "De baja";
+    private static readonly string[] _universos = { UniPropias, UniContratadas, UniBajas };
+
+    // Default: la flota que opera hoy. Las de baja se suman a pedido (sirven para el histórico).
+    private IReadOnlyCollection<string> _universoSel = new HashSet<string> { UniPropias, UniContratadas };
+    private bool _uniPropias => _universoSel.Contains(UniPropias);
+    private bool _uniContratadas => _universoSel.Contains(UniContratadas);
+    private bool _uniBajas => _universoSel.Contains(UniBajas);
+
+    private string _dimension = ReportService.DimFlotaTipo;
+
+    // Fechas ya aplicadas (snapshot): el Excel y el drill-down tienen que corresponder a lo
+    // que se está viendo, no a lo que el usuario editó sin aplicar.
+    private DateOnly _desdeAp, _hastaAp;
+
+    private int _pendientes
+    {
+        get
+        {
+            if (_unidades.Count == 0 && !_cargando) return 0;
+            var n = 0;
+            if (_desde is not null && DateOnly.FromDateTime(_desde.Value) != _desdeAp) n++;
+            if (_hasta is not null && DateOnly.FromDateTime(_hasta.Value) != _hastaAp) n++;
+            return n;
+        }
+    }
+
+    // ── Datos ──
+    private List<FlotaUnidadRow> _unidades = new();      // todo lo que devolvió la base
+    private List<FlotaDemandaRow> _demanda = new();
+    private List<FlotaUnidadRow> _base = new();          // filtrado por universo (sin foco)
+    private bool _cargando;
+
+    // ── Cross-filter ──
+    private string? _focus;
+    private bool EnFoco(string cat) => _focus is null || _focus == cat;
+    private bool EnFocoDuro(string cat) => _focus == cat;
+
+    // El panel de demanda solo puede seguir el foco cuando la dimensión ES el tipo de vehículo:
+    // la demanda vive en `viaje` y no sabe nada de titulares, antigüedad ni butacas.
+    private bool AtenuaTipo(string tipo) =>
+        _focus is not null && _dimension == ReportService.DimFlotaTipo && _focus != tipo;
+
+    // ── KPIs ──
+    private int _kUnidades, _kButacas, _kCategorias, _kOciosas, _kSinAsignar, _kmDudosos;
+    private string _kUnidadesSub = "", _kOciosasSub = "", _kSinAsignarSub = "";
+    private string _kAntiguedad = "·", _kAntiguedadSub = "";
+    private string PeriodoTxt => $"{_desdeAp:dd/MM/yyyy} – {_hastaAp:dd/MM/yyyy}";
+
+    // ── Tabla resumen ── (los records viven en el service: la pantalla y el Excel
+    //    comparten la misma forma, así no hay dos versiones del mismo número)
+    private List<FlotaResumenCatRow> _resumen = new();
+    private int _tUnidades, _tPropias, _tContratadas, _tBajas, _tButacas, _tOciosas, _tViajes;
+    private long _tKm;
+
+    // ── Oferta vs demanda ──
+    private List<FlotaOfertaDemandaRow> _ofertaDemanda = new();
+    private string PctSinCubrirTotal
+    {
+        get
+        {
+            var ped = _ofertaDemanda.Sum(x => x.Pedidos);
+            return ped > 0 ? $"{_ofertaDemanda.Sum(x => x.SinAsignar) * 100.0 / ped:0.0}%" : "·";
+        }
+    }
+
+    // ── Gráficos ──
+    private record BarItem(string Cat, decimal Valor);
+    private record PieItem(string Cat, decimal Valor);
+    private List<BarItem> _barItems = new();
+    private List<PieItem> _pieItems = new();
+    private List<BarItem> _sinAsignarItems = new();
+    private int _altoBarras = 360, _altoFalta = 300;
+    private ApexChart<BarItem>? _barChart;
+    private ApexChart<BarItem>? _faltaChart;
+    // _chartsKey remonta los gráficos cuando cambia la FORMA de los datos (período, universo,
+    // dimensión). _pieKey además se regenera en cada foco: la torta necesita remontarse para
+    // que su leyenda no quede con los valores del render anterior.
+    private Guid _chartsKey = Guid.NewGuid();
+    private Guid _pieKey = Guid.NewGuid();
+
+    // Paleta categórica del proyecto (color por ENTIDAD, igual en todos los gráficos).
+    private static readonly List<string> _palette = new()
+    {
+        "#2058D0", "#F99410", "#16A34A", "#DC2626", "#0EA5E9",
+        "#7C3AED", "#B45309", "#DB2777", "#0D9488", "#65A30D",
+        "#4F46E5", "#EA580C", "#059669", "#9333EA", "#0891B2"
+    };
+    private const string _colorOtros = "#94A3B8";
+    private Dictionary<string, string> _colorPorCat = new();
+    private string ColorDe(string cat) => _colorPorCat.TryGetValue(cat, out var c) ? c : _colorOtros;
+    private string ColorFoco(string cat) =>
+        (_focus is null || cat == _focus) ? ColorDe(cat) : "#D9E1EC";
+
+    // ── Etiquetas de la dimensión ──
+    private static string EtiquetaDim(string d) => d switch
+    {
+        ReportService.DimFlotaTitular => "Titular",
+        ReportService.DimFlotaAntiguedad => "Antigüedad",
+        ReportService.DimFlotaCapacidad => "Capacidad",
+        _ => "Tipo de vehículo",
+    };
+    private string EtiquetaDimSingular => _dimension switch
+    {
+        ReportService.DimFlotaTitular => "titular",
+        ReportService.DimFlotaAntiguedad => "tramo de antigüedad",
+        ReportService.DimFlotaCapacidad => "tramo de capacidad",
+        _ => "tipo",
+    };
+    private string EtiquetaDimSingularTit =>
+        char.ToUpper(EtiquetaDimSingular[0]) + EtiquetaDimSingular[1..];
+    private string EtiquetaDimPlural => _dimension switch
+    {
+        ReportService.DimFlotaTitular => "Titulares",
+        ReportService.DimFlotaAntiguedad => "Tramos de edad",
+        ReportService.DimFlotaCapacidad => "Tramos de capacidad",
+        _ => "Tipos distintos",
+    };
+
+    private RenderFragment CabeceraFoco(string titulo) => __builder =>
+    {
+        <div class="rfs-bar-head mb-2">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@titulo</MudText>
+            @if (_focus is not null)
+            {
+                <div class="rfs-focus">
+                    <span class="rfs-focus__lbl">Filtrado:</span>
+                    <span class="rfs-focus__val" style="@($"background:{ColorDe(_focus)};")">@_focus</span>
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                   OnClick="LimpiarFoco" title="Quitar filtro"
+                                   Style="color:#64748B; padding:2px;" />
+                </div>
+            }
+            else
+            {
+                <span class="rfs-focus-hint">💡 Clic en una categoría para enfocar el tablero</span>
+            }
+        </div>
+    };
+
+    private ApexChartOptions<BarItem> _optsBar = OpcionesBarras("#2058D0");
+    private ApexChartOptions<BarItem> _optsFalta = OpcionesBarras("#DC2626");
+
+    // Barras horizontales con el número afuera al final (patrón del proyecto). Se usa igual
+    // para "Unidades por categoría" y para "Viajes sin asignar por tipo".
+    private static ApexChartOptions<BarItem> OpcionesBarras(string color) => new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        PlotOptions = new()
+        {
+            Bar = new()
+            {
+                Horizontal = true, BorderRadius = 4,
+                BorderRadiusApplication = BorderRadiusApplication.End, Distributed = true,
+                DataLabels = new() { Position = BarDataLabelPosition.Top }
+            }
+        },
+        Legend = new() { Show = false },
+        DataLabels = new()
+        {
+            Enabled = true,
+            TextAnchor = TextAnchor.Start,
+            // 22 y no 8: los datos de flota son MUY dispares (BUS 89 vs HIACE 2) y con ≤20 el
+            // label de la barra corta se mete adentro de la barra (trampa medida en el proyecto).
+            OffsetX = 22,
+            Style = new() { FontSize = "11px", FontWeight = "600", Colors = new List<string> { "#334155" } },
+            Formatter = "function(val){ var p = __TOTAL__ > 0 ? Math.round(val * 100 / __TOTAL__) : 0; return val.toLocaleString('es-AR') + ' (' + p + '%)'; }",
+        },
+        Colors = new List<string> { color },
+        Xaxis = new() { Labels = new() { Style = new() { FontSize = "11px" } } },
+        Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px" }, MaxWidth = 170 } } },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        Grid = new() { BorderColor = "#E8EFF9", StrokeDashArray = 4 },
+        Theme = new() { Mode = Mode.Light },
+        // Sin realce interno de ApexCharts: el highlight del foco lo maneja el color.
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
+    private ApexChartOptions<PieItem> _optsPie = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        Colors = _palette,
+        Legend = new()
+        {
+            Show = true, Position = LegendPosition.Bottom, FontSize = "12px",
+            OnItemClick = new() { ToggleDataSeries = false },
+            Formatter = "function(name, opts){ var v = opts.w.globals.series[opts.seriesIndex]; return name + ': ' + v.toLocaleString('es-AR'); }",
+        },
+        DataLabels = new() { Enabled = false },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR') + ' butacas'; }" } },
+        Theme = new() { Mode = Mode.Light },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        // La letra la decide el catálogo, no esta página: hoy pide 'S' porque el informe está
+        // EN DESARROLLO, y volverá a pedir 'V' (Vehículos y Choferes) el día que se lo gradúe.
+        if (!InformesCatalogo.PuedeVerRuta(Permisos, "panel-flota"))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await Cargar();
+    }
+
+    private async Task Cargar()
+    {
+        if (_desde is null || _hasta is null) return;
+
+        _cargando = true;
+        StateHasChanged();
+
+        _desdeAp = DateOnly.FromDateTime(_desde.Value);
+        _hastaAp = DateOnly.FromDateTime(_hasta.Value);
+        _focus = null;   // datos nuevos → el foco anterior puede ya no existir
+
+        var unidades = Reports.GetFlotaUnidadesAsync(_desdeAp, _hastaAp);
+        var demanda = Reports.GetFlotaDemandaAsync(_desdeAp, _hastaAp);
+        await Task.WhenAll(unidades, demanda);
+        _unidades = unidades.Result;
+        _demanda = demanda.Result;
+
+        Recalcular();
+        RemontarGraficos();
+        _cargando = false;
+    }
+
+    // Universo y dimensión son cortes del MISMO dataset: se aplican al instante, sin re-query.
+    private void CambiarUniverso(IEnumerable<string> sel)
+    {
+        _universoSel = sel.ToHashSet();
+        _focus = null;
+        Recalcular();
+        RemontarGraficos();
+    }
+
+    private void CambiarDimension(string dim)
+    {
+        _dimension = dim;
+        _focus = null;   // el foco era una categoría de la dimensión anterior
+        Recalcular();
+        RemontarGraficos();
+    }
+
+    /// <summary>
+    /// Cambió la FORMA de los datos (otras categorías, otra cantidad de barras): los gráficos
+    /// se remontan. Actualizarlos "en su lugar" acá los dejaría con las categorías viejas.
+    /// </summary>
+    private void RemontarGraficos()
+    {
+        _chartsKey = Guid.NewGuid();
+        _pieKey = Guid.NewGuid();
+    }
+
+    /// <summary>Universo elegido: qué unidades entran en el conteo.</summary>
+    private bool PasaUniverso(FlotaUnidadRow u)
+    {
+        if (u.EsBaja) return _uniBajas;
+        if (u.EsContratada) return _uniContratadas;
+        return _uniPropias;   // PROPIO, o sin dato de uso
+    }
+
+    private void Recalcular()
+    {
+        _base = _unidades.Where(PasaUniverso).ToList();
+        if (_base.Count == 0)
+        {
+            _resumen = new(); _barItems = new(); _pieItems = new();
+            _ofertaDemanda = new(); _sinAsignarItems = new();
+            return;
+        }
+
+        // ── Resumen por categoría: SIEMPRE todas las categorías del universo ──
+        // (no dependen del foco: el foco atenúa, así el usuario puede cambiar de categoría).
+        _resumen = _base
+            .GroupBy(u => u.Categoria(_dimension))
+            .Select(g => new FlotaResumenCatRow(
+                Cat: g.Key,
+                Unidades: g.Count(),
+                Propias: g.Count(u => !u.EsBaja && u.EsPropia),
+                Contratadas: g.Count(u => !u.EsBaja && u.EsContratada),
+                Bajas: g.Count(u => u.EsBaja),
+                Butacas: g.Sum(u => u.Pax),
+                AntiguedadProm: g.Any(u => u.Antiguedad is not null)
+                    ? g.Where(u => u.Antiguedad is not null).Average(u => u.Antiguedad!.Value)
+                    : null,
+                Ociosas: g.Count(u => u.EsOciosa),
+                Viajes: g.Sum(u => u.Viajes),
+                Km: g.Where(u => u.TieneKm).Sum(u => u.Km),
+                UnidadesConKm: g.Count(u => u.TieneKm)))
+            .OrderByDescending(r => r.Unidades)
+            .ThenBy(r => r.Cat)
+            .ToList();
+
+        // Los tramos de antigüedad y capacidad se leen mejor en su orden natural que por volumen.
+        if (_esDimensionOrdinal)
+            _resumen = _resumen.OrderBy(r => OrdenTramo(r.Cat)).ToList();
+
+        // Color por entidad: el ranking por cantidad define el hue, y ese color acompaña a la
+        // categoría en las barras, en la torta y en el punto de la tabla.
+        _colorPorCat = _resumen
+            .OrderByDescending(r => r.Unidades)
+            .Select((r, i) => (r.Cat, i))
+            .ToDictionary(t => t.Cat, t => t.i < _palette.Count ? _palette[t.i] : _colorOtros);
+
+        // ── Gráficos de composición: valores completos, el foco solo cambia los colores ──
+        // Las barras siguen el MISMO orden que la tabla: ranking por cantidad en las
+        // dimensiones nominales (tipo, titular) y orden natural en las ordinales (antigüedad,
+        // capacidad) — una escala de edad leída por volumen se entiende mal.
+        var ordenGraf = _esDimensionOrdinal
+            ? _resumen
+            : _resumen.OrderByDescending(r => r.Unidades).ToList();
+        _barItems = ordenGraf.Select(r => new BarItem(r.Cat, r.Unidades)).ToList();
+        _altoBarras = Math.Max(280, _barItems.Count * 34);
+        AplicarTotal(_optsBar, _barItems.Sum(b => (int)b.Valor), _barItems.Count > 0 ? (int)_barItems.Max(b => b.Valor) : 0);
+        _optsBar.Colors = _barItems.Select(b => ColorFoco(b.Cat)).ToList();
+
+        _pieItems = ordenGraf.Where(r => r.Butacas > 0)
+            .OrderByDescending(r => r.Butacas)
+            .Select(r => new PieItem(r.Cat, r.Butacas))
+            .ToList();
+        _optsPie.Colors = _pieItems.Select(p => ColorFoco(p.Cat)).ToList();
+        var totalButacas = _pieItems.Sum(p => (int)p.Valor);
+        if (_optsPie.Legend is not null)
+            _optsPie.Legend.Formatter =
+                $"function(name, opts){{ var v = opts.w.globals.series[opts.seriesIndex]; var p = {totalButacas} > 0 ? Math.round(v * 100 / {totalButacas}) : 0; return name + ': ' + v.toLocaleString('es-AR') + ' (' + p + '%)'; }}";
+
+        // ── Oferta vs demanda por TIPO (siempre por tipo, sea cual sea la dimensión) ──
+        // El universo se respeta en la oferta; la demanda es del período completo.
+        var flotaActivaPorTipo = _base
+            .Where(u => !u.EsBaja)
+            .GroupBy(u => string.IsNullOrWhiteSpace(u.Tipo) ? "Sin tipo" : u.Tipo)
+            .ToDictionary(g => g.Key, g => (Unidades: g.Count(), Trabajaron: g.Count(u => u.Viajes > 0)));
+        var demandaPorTipo = _demanda.ToDictionary(d => d.Tipo, d => d);
+
+        _ofertaDemanda = flotaActivaPorTipo.Keys.Union(demandaPorTipo.Keys)
+            .Select(t => new FlotaOfertaDemandaRow(
+                Tipo: t,
+                Unidades: flotaActivaPorTipo.TryGetValue(t, out var f) ? f.Unidades : 0,
+                Trabajaron: flotaActivaPorTipo.TryGetValue(t, out var f2) ? f2.Trabajaron : 0,
+                Pedidos: demandaPorTipo.TryGetValue(t, out var d) ? d.Viajes : 0,
+                SinAsignar: demandaPorTipo.TryGetValue(t, out var d2) ? d2.SinAsignar : 0))
+            .OrderByDescending(x => x.Pedidos)
+            .ThenByDescending(x => x.Unidades)
+            .ToList();
+
+        _sinAsignarItems = _ofertaDemanda.Where(x => x.SinAsignar > 0)
+            .OrderByDescending(x => x.SinAsignar)
+            .Select(x => new BarItem(x.Tipo, x.SinAsignar))
+            .ToList();
+        _altoFalta = Math.Max(240, _sinAsignarItems.Count * 40);
+        AplicarTotal(_optsFalta, _sinAsignarItems.Sum(b => (int)b.Valor),
+                     _sinAsignarItems.Count > 0 ? (int)_sinAsignarItems.Max(b => b.Valor) : 0);
+        _optsFalta.Colors = _sinAsignarItems
+            .Select(b => AtenuaTipo(b.Cat) ? "#D9E1EC" : "#DC2626")
+            .ToList();
+
+        // ── KPIs y totales: sobre el universo CON el foco aplicado ──
+        var datos = _focus is null ? _base : _base.Where(u => u.Categoria(_dimension) == _focus).ToList();
+
+        _kUnidades = datos.Count;
+        _tUnidades = _kUnidades;
+        _tPropias = _kPropias(datos);
+        _tContratadas = datos.Count(u => !u.EsBaja && u.EsContratada);
+        _tBajas = datos.Count(u => u.EsBaja);
+        _kButacas = _tButacas = datos.Sum(u => u.Pax);
+        _kCategorias = datos.Select(u => u.Categoria(_dimension)).Distinct().Count();
+        _kOciosas = _tOciosas = datos.Count(u => u.EsOciosa);
+        _tViajes = datos.Sum(u => u.Viajes);
+        _tKm = datos.Where(u => u.TieneKm).Sum(u => u.Km);
+        _kmDudosos = datos.Sum(u => u.MesesOdometroRaro);
+
+        // Subtítulos cortos a propósito: son 6 KPIs en fila y el texto largo se corta con "…".
+        _kUnidadesSub = _tBajas > 0
+            ? $"{_tPropias} prop · {_tContratadas} contr · {_tBajas} baja"
+            : $"{_tPropias} propias · {_tContratadas} contr.";
+
+        var activas = datos.Count(u => !u.EsBaja);
+        _kOciosasSub = activas > 0
+            ? $"{(_kOciosas * 100.0 / activas):0} % de {activas} activas"
+            : "sin unidades activas";
+
+        // Los sin asignar del KPI siguen el foco solo cuando la dimensión es el tipo.
+        var sinAsignarVisible = (_focus is not null && _dimension == ReportService.DimFlotaTipo)
+            ? _ofertaDemanda.Where(x => x.Tipo == _focus)
+            : _ofertaDemanda;
+        _kSinAsignar = sinAsignarVisible.Sum(x => x.SinAsignar);
+        var pedidos = sinAsignarVisible.Sum(x => x.Pedidos);
+        _kSinAsignarSub = pedidos > 0
+            ? $"{(_kSinAsignar * 100.0 / pedidos):0.0} % de {Fmt(pedidos)} pedidos"
+            : "sin demanda en el período";
+
+        var conEdad = datos.Where(u => u.Antiguedad is not null).ToList();
+        _kAntiguedad = conEdad.Count > 0 ? $"{conEdad.Average(u => u.Antiguedad!.Value):0.0} años" : "·";
+        _kAntiguedadSub = conEdad.Count == datos.Count
+            ? "sobre el año de modelo"
+            : $"{datos.Count - conEdad.Count} sin año de modelo cargado";
+    }
+
+    private static int _kPropias(List<FlotaUnidadRow> datos) => datos.Count(u => !u.EsBaja && u.EsPropia);
+
+    /// <summary>
+    /// Antigüedad y capacidad son escalas ORDINALES (los tramos tienen un orden propio);
+    /// tipo y titular son nominales (se ordenan por volumen).
+    /// </summary>
+    private bool _esDimensionOrdinal =>
+        _dimension is ReportService.DimFlotaAntiguedad or ReportService.DimFlotaCapacidad;
+
+    /// <summary>Orden natural de los tramos (el texto de la categoría empieza por el número).</summary>
+    private static int OrdenTramo(string cat) => cat switch
+    {
+        "Sin dato" => 99,
+        "0 a 3 años" => 0,
+        "4 a 7 años" => 1,
+        "8 a 12 años" => 2,
+        "13 años o más" => 3,
+        "1 a 5 butacas" => 0,
+        "6 a 19 butacas" => 1,
+        "20 a 29 butacas" => 2,
+        "30 a 45 butacas" => 3,
+        "46 butacas o más" => 4,
+        _ => 50,
+    };
+
+    // Inyecta el total (para el % del datalabel) y el margen del eje X, para que el número
+    // del final de la barra más larga no se corte contra el borde.
+    private static void AplicarTotal(ApexChartOptions<BarItem> opts, int total, int maxValor)
+    {
+        if (opts.DataLabels is not null)
+            opts.DataLabels.Formatter =
+                "function(val){ var p = " + total + " > 0 ? Math.round(val * 100 / " + total + ") : 0; return val.toLocaleString('es-AR') + ' (' + p + '%)'; }";
+        if (opts.Xaxis is not null)
+        {
+            opts.Xaxis.Min = 0;
+            opts.Xaxis.Max = maxValor > 0 ? maxValor * 1.30 : 1;
+        }
+    }
+
+    // ── Cross-filter ──
+    private async Task ToggleFoco(string cat)
+    {
+        _focus = _focus == cat ? null : cat;
+        Recalcular();
+        _pieKey = Guid.NewGuid();   // la torta se remonta (el update en el lugar le rompe la leyenda)
+        // Los gráficos de barras cambian solo de color: update en el lugar, sin parpadeo.
+        if (_barChart is not null) await _barChart.UpdateOptionsAsync(true, true, false);
+        if (_faltaChart is not null) await _faltaChart.UpdateOptionsAsync(true, true, false);
+    }
+
+    private Task LimpiarFoco() => ToggleFoco(_focus ?? "");
+
+    private async Task OnBarSelection(SelectedData<BarItem> e)
+    {
+        var cat = e.DataPoint?.Items?.FirstOrDefault()?.Cat;
+        if (cat is not null) await ToggleFoco(cat);
+    }
+
+    private async Task OnPieSelection(SelectedData<PieItem> e)
+    {
+        var cat = e.DataPoint?.Items?.FirstOrDefault()?.Cat;
+        if (cat is not null) await ToggleFoco(cat);
+    }
+
+    // ── Drill-down: las unidades de una categoría, una por una ──
+    private async Task AbrirUnidades(string cat)
+    {
+        var items = _base.Where(u => u.Categoria(_dimension) == cat)
+                         .OrderBy(u => u.Interno == 0 ? int.MaxValue : u.Interno)
+                         .ThenBy(u => u.Dominio)
+                         .ToList();
+        if (items.Count == 0) return;
+
+        var parametros = new DialogParameters<FlotaUnidadesDialog>
+        {
+            { x => x.Items, items },
+            { x => x.Subtitulo, $"{EtiquetaDimSingularTit}: {cat} · actividad de {PeriodoTxt}" }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.ExtraLarge, FullWidth = true,
+            CloseButton = false, CloseOnEscapeKey = true, BackdropClick = true
+        };
+        await DialogService.ShowAsync<FlotaUnidadesDialog>("Unidades de la flota", parametros, opciones);
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = Excel.PanelFlota(
+            _base, _resumen, _ofertaDemanda, EtiquetaDimSingularTit, _desdeAp, _hastaAp);
+        var nombre = $"panel_flota_{_dimension.ToLower()}_{_desdeAp:yyyyMMdd}_{_hastaAp:yyyyMMdd}.xlsx";
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    private static string Fmt(int n) => n.ToString("#,0", _ar);
+    private static string Fmt(long n) => n.ToString("#,0", _ar);
+    private static string Cero(int n) => n > 0 ? Fmt(n) : "·";
+    private static string Cero(long n) => n > 0 ? Fmt(n) : "·";
+}

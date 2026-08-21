@@ -3,8 +3,10 @@ namespace MetroCarSysBlazor.Services;
 /// <summary>
 /// Catálogo de los 16 módulos/permisos del string <c>usuario.acceso</c> — la fuente única de
 /// verdad para el ABM de Usuarios. El ORDEN de esta lista ES el orden de concatenación del
-/// string en el FoxPro (<c>usuario_abm.scx</c>): S R T C D V L F A E U B H X N M. Al grabar,
+/// string en el FoxPro (<c>usuario_abm.scx</c>): S R T C D V L F A E U B I X N M. Al grabar,
 /// el string se arma recorriendo esta lista en orden y agregando la letra de cada checkbox tildado.
+/// NOTA (24/07/2026): la posición 'H' (Scheduler, sin uso) se reutilizó para 'I' = Acceso por
+/// Internet, para no agregar una 17ª letra (el campo <c>acceso</c> es nvarchar(15), ya al tope).
 /// </summary>
 public static class PermisosCatalogo
 {
@@ -31,7 +33,7 @@ public static class PermisosCatalogo
         new('E', "Estadisticas",            "Reservado (sin uso en el sistema actual)"),
         new('U', "Utilitarios",             "Menú Utilitarios"),
         new('B', "Back-Up",                 "Usuario de servicio: abre el Backup al ingresar"),
-        new('H', "Scheduler",               "Utilitarios → Scheduler"),
+        new('I', "Acceso por Internet",     "Permite ingresar desde fuera de la red interna (Internet). Sin esta opción, el usuario solo entra desde la LAN de la empresa."),
         new('X', "Tablero de comando",      "Sistema → Tablero de Control (solo SUPERVISOR)", SoloSupervisor: true),
         new('N', "Cuentas Corrientes",      "Facturación → Cuentas Corrientes"),
         new('M', "Combustible y Consumos",  "Menú Combustible"),
@@ -62,7 +64,8 @@ public static class PermisosCatalogo
         'V' or 'L'             => "#16A34A",  // Flota / Taller (verde)
         'F' or 'N'             => "#B45309",  // Facturación / Ctas Ctes (ocre — dinero)
         'M'                     => "#DB2777",  // Combustible (magenta)
-        'U' or 'B' or 'H' or 'E' => "#64748B", // Utilitarios / servicio / reservado (gris azulado)
+        'I'                     => "#0891B2",  // Acceso por Internet (cian — red/conectividad)
+        'U' or 'B' or 'E'       => "#64748B",  // Utilitarios / servicio / reservado (gris azulado)
         _                       => "#94A3B8",
     };
 

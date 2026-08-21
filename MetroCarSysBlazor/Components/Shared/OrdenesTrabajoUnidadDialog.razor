@@ -1,0 +1,128 @@
+@inject ReportService Reports
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   "Orden de trabajo" del menú contextual del panel BUSES.
+   FoxPro: DO FORM taller_orden_trabajo WITH 0, id_vehiculo, interno, id_chofer —
+   daba de ALTA una OT en `taller_service` + N ítems en `taller_service_item`, y además
+   insertaba una novedad automática en `libro_novedad`.
+
+   ⚠ CIRCUITO DISCONTINUADO. `taller_service` por año de d_create: 2016→1.317, 2017→736,
+   2018→552, 2019→2.544, 2020→1.020, 2021→2, después NADA. NORTUR dejó de usar el módulo
+   Taller hace 5 años. Por eso (decisión del usuario, 04/08/2026) se migra SOLO la consulta
+   del historial: no tiene sentido construir el alta de un circuito abandonado.
+
+   Se busca por DOMINIO, no por interno: los internos se reasignan entre unidades con los
+   años y estas OT son históricas. `fecha_ini` tiene fechas corruptas (MAX = año 2169) →
+   se ordena y se muestra por `d_create`.
+   Plano: docs/PlanoFoxPro/trafico/TRAFICO_BUSES_MENU.md
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog hist-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.Build" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Órdenes de trabajo de la unidad</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">Solo lectura</span>
+            <span class="zoom-title-bar__nro">Interno&nbsp;@Interno · @Dominio</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @* El operador tiene que entender por qué no ve OT recientes: no es un bug de Buslink,
+           es que el módulo Taller del Metrocar dejó de usarse. *@
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">
+            El circuito de órdenes de trabajo del Metrocar dejó de usarse en 2021 — esto es
+            historial de consulta.
+        </MudAlert>
+
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:180px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_filas.Count == 0)
+        {
+            <div class="hist-empty">La unidad @Dominio no tiene órdenes de trabajo registradas.</div>
+        }
+        else
+        {
+            <div class="nov-count">
+                @_filas.Count orden@(_filas.Count == 1 ? "" : "es")@(_filas.Count == 100 ? " (últimas 100)" : "")
+            </div>
+            <div class="hist-grid-wrap">
+                <table class="hist-grid">
+                    <thead>
+                        <tr>
+                            <th class="r">Nº</th>
+                            <th>Tipo</th>
+                            <th>Creación</th>
+                            <th>Entrada</th>
+                            <th>Salida</th>
+                            <th class="r">Odómetro</th>
+                            <th>Urgencia</th>
+                            <th class="r">Ítems</th>
+                            <th>Novedad / Comentario</th>
+                            <th>Usuario</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var f in _filas)
+                        {
+                            <tr>
+                                <td class="r">@(f.Orden > 0 ? f.Orden.ToString() : f.Id.ToString())</td>
+                                <td>@Dato(f.Tipo)</td>
+                                <td>@Fecha(f.FCreacion)</td>
+                                <td>@Fecha(f.FechaIni)</td>
+                                <td>@Fecha(f.FechaFin)</td>
+                                <td class="r">@(f.Odometro > 0 ? f.Odometro.ToString("N0", _ar) : "—")</td>
+                                <td>@Dato(f.Urgencia)</td>
+                                <td class="r">@f.Items</td>
+                                <td title="@($"{f.Novedad} {f.Comentario}".Trim())">
+                                    @Dato(string.IsNullOrWhiteSpace(f.Novedad) ? f.Comentario : f.Novedad)
+                                </td>
+                                <td>@Dato(f.Usuario)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Dominio de la unidad — la clave estable con la que se buscan las OT históricas.</summary>
+    [Parameter] public string Dominio { get; set; } = "";
+    /// <summary>Interno actual, solo para el encabezado.</summary>
+    [Parameter] public int Interno { get; set; }
+
+    private List<OrdenTrabajoUnidadRow> _filas = new();
+    private bool _cargando = true;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override async Task OnInitializedAsync()
+    {
+        _filas = await Reports.GetOrdenesTrabajoUnidadAsync(Dominio);
+        _cargando = false;
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private static string Dato(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s.Trim();
+
+    // Las fechas corruptas del FoxPro (año 2169, 309…) se muestran como "—" en vez de mentir.
+    private string Fecha(DateTime? d) =>
+        d is null || d.Value.Year < 2000 || d.Value.Year > 2100 ? "—" : d.Value.ToString("dd/MM/yyyy", _ar);
+}

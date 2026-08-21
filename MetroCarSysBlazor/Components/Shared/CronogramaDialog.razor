@@ -1,0 +1,380 @@
+@inject ReportService Reports
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Cambio de CRONOGRAMA (diagramación) — réplica de trafico_cambia_cronograma.scx, el diálogo
+   que abren las teclas F6-F9 (y cualquier letra) sobre la grilla de Tráfico.
+
+   Plano: docs/PlanoFoxPro/trafico/TRAFICO_CRONOGRAMA.md
+
+   Qué mueve: la unidad PREVISTA del servicio, no la asignación real.
+     U/Pr = cronogram2  (la que planificó el diagramador)
+     U/Cb = cronograma  (la vigente)   ← esto es lo que se cambia
+     U/As = interno     (la que sale de verdad — la escribe Asignar)
+
+   Dos modos, los decide el PERMISO del usuario (D gana sobre T, como el Do Case del FoxPro):
+     · diagramador (D): escribe U/Pr y U/Cb, sin motivo, sin log, y habilita el masivo.
+     · operador (T): escribe solo U/Cb, motivo OBLIGATORIO, deja log CBIO UNIDAD.
+
+   ⚠ ANDAMIAJE (03/08/2026): la escritura está construida (AbmService.CambiarCronograma*) pero
+   los botones de grabar están DESHABILITADOS — `viaje` sigue con dueño FoxPro hasta el día D.
+   Activar: AbmFeatureFlags.CronogramaAbmActivo = true + bloquear las teclas en FoxPro + apagar
+   la sync de `viaje`.
+
+   🐛 NO se copia el bug del masivo del fuente (grababa el interno pelado, "49" en vez de
+   "NT0049", ignorando además los radios S/C y NORTUR). Acá el masivo arma el código igual que
+   el simple. Ver el comentario en AbmService.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha cron-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.EventSeat" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@(EsDiagramador ? "Diagrama" : "Cambio de Unidad")</span>
+            <span class="zoom-title-bar__nro">Reserva&nbsp;#@Fila.IdViaje</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:200px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else
+        {
+            @* Los dos textbox de solo lectura del FoxPro (Text1 = cronograma actual,
+               Text3 = unidad solicitada) + el recorrido, para no tener que mirar la grilla. *@
+            <div class="zoom-row">
+                <div class="zoom-field zoom-field--sm">
+                    <div class="zoom-field__label">Cronograma actual (U/Cb)</div>
+                    <div class="zoom-field__value cron-actual">@Guion(Fila.UCb)</div>
+                </div>
+                <div class="zoom-field zoom-field--sm">
+                    <div class="zoom-field__label">Programada (U/Pr)</div>
+                    <div class="zoom-field__value">@Guion(Fila.UPr)</div>
+                </div>
+                <div class="zoom-field zoom-field--sm">
+                    <div class="zoom-field__label">Unidad solicitada</div>
+                    <div class="zoom-field__value">@Guion(Fila.Veh)</div>
+                </div>
+                <div class="zoom-field">
+                    <div class="zoom-field__label">Servicio</div>
+                    <div class="zoom-field__value" title="@Fila.Recorrido">@Fila.HIni · @Guion(Fila.Recorrido)</div>
+                </div>
+            </div>
+
+            <div class="cron-sep"></div>
+
+            @* El Optiongroup1 de 3 radios. La opción 3 toma su texto de parametro.id_cliente_prueba
+               (= NORTUR), igual que el Init del FoxPro. *@
+            <div class="cron-opciones">
+                <span class="cron-opciones__label">Asignar a</span>
+                <button type="button" class="cron-op @(_opcion == OpcionCron.Cronograma ? "cron-op--on" : "")"
+                        @onclick="@(() => SetOpcion(OpcionCron.Cronograma))">Cronograma</button>
+                <button type="button" class="cron-op @(_opcion == OpcionCron.SinCronograma ? "cron-op--on" : "")"
+                        @onclick="@(() => SetOpcion(OpcionCron.SinCronograma))">S/C</button>
+                <button type="button" class="cron-op @(_opcion == OpcionCron.Empresa ? "cron-op--on" : "")"
+                        @onclick="@(() => SetOpcion(OpcionCron.Empresa))">@_nombreEmpresa</button>
+            </div>
+
+            <div class="cron-combos">
+                <MudSelect T="string" Label="Fletero" Value="_prefijoFletero"
+                           ValueChanged="OnFleteroChanged" Dense="true" Margin="Margin.Dense"
+                           Variant="Variant.Outlined" Disabled="@(_opcion != OpcionCron.Cronograma)"
+                           Style="min-width:260px;">
+                    @foreach (var f in _fleteros)
+                    {
+                        <MudSelectItem T="string" Value="@f.Prefijo">@f.Prefijo — @f.Nombre</MudSelectItem>
+                    }
+                </MudSelect>
+
+                @* El combo de internos se deshabilita cuando el fletero NO se diagrama por
+                   interno Y el usuario es diagramador: ahí el cronograma es la empresa entera
+                   (arma_combo_interno del FoxPro). El operador SIEMPRE carga interno. *@
+                <MudSelect T="int?" Label="Interno" Value="_interno" ValueChanged="OnInternoChanged"
+                           Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                           Disabled="@(!InternoHabilitado)" Style="min-width:150px;">
+                    @foreach (var i in _internos)
+                    {
+                        <MudSelectItem T="int?" Value="@i">@i</MudSelectItem>
+                    }
+                </MudSelect>
+
+                @* Motivo: solo operador, y obligatorio. En diagramador el FoxPro lo deshabilita. *@
+                <MudSelect T="string" Label="Motivo del cambio" @bind-Value="_motivo"
+                           Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                           Disabled="@EsDiagramador" Style="min-width:280px;">
+                    @foreach (var m in _motivos)
+                    {
+                        <MudSelectItem T="string" Value="@m">@m</MudSelectItem>
+                    }
+                </MudSelect>
+            </div>
+
+            <div class="cron-preview">
+                <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Small" />
+                <span>Queda como <strong>@(string.IsNullOrEmpty(CronogramaNuevo) ? "—" : CronogramaNuevo)</strong></span>
+                @if (!EsDiagramador)
+                {
+                    <span class="cron-preview__nota">· solo U/Cb (se respeta lo que programó el diagramador)</span>
+                }
+                else
+                {
+                    <span class="cron-preview__nota">· U/Pr y U/Cb</span>
+                }
+            </div>
+
+            @* Preview del masivo — decisión del usuario 03/08/2026. El FoxPro solo avisa cuando
+               el cambio toca más de un cronograma distinto; acá SIEMPRE se dice qué se va a
+               tocar antes de apretar. La regla de alcance es la del FoxPro: las filas A LA
+               VISTA con el mismo cronograma anterior y todavía SIN interno asignado. *@
+            @if (EsDiagramador)
+            {
+                <div class="cron-masivo">
+                    <MudCheckBox T="bool" Value="_masivo" ValueChanged="@((bool v) => { _masivo = v; })"
+                                 Dense="true" Color="Color.Warning">
+                        Aplicar a todas las reservas con cronograma <strong>@Guion(Fila.UCb)</strong> sin unidad asignada
+                    </MudCheckBox>
+                    @if (_masivo)
+                    {
+                        @if (_alcanceMasivo.Count == 0)
+                        {
+                            <MudAlert Severity="Severity.Info" Dense="true" Class="mt-1">
+                                No hay otras reservas a la vista en esa condición: el cambio va a afectar solo a esta.
+                            </MudAlert>
+                        }
+                        else
+                        {
+                            <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-1">
+                                Va a cambiar <strong>@_alcanceMasivo.Count reserva@(_alcanceMasivo.Count == 1 ? "" : "s")</strong>
+                                de las que estás viendo: @ResumenAlcance
+                            </MudAlert>
+                        }
+                    }
+                </div>
+            }
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+            }
+
+            <div class="cli-footer">
+                <div class="cli-footer__hint">
+                    <MudIcon Icon="@(_abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                    @(_abmActivo
+                        ? (EsDiagramador ? "Modo diagramador" : "Modo operador · queda registrado en el historial")
+                        : "Escritura preparada · se habilita con el circuito de Tráfico (día D)")
+                </div>
+                <div class="cli-footer__btns">
+                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar"
+                               Disabled="@(!_abmActivo || _grabando || !PuedeGrabar)">
+                        @(_grabando ? "Grabando…" : _masivo ? "Cambiar todas" : "Cambiar esta reserva")
+                    </MudButton>
+                    <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="Cerrar">Cancelar</MudButton>
+                </div>
+            </div>
+        }
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>La fila sobre la que se disparó (la activa o la del clic derecho).</summary>
+    [Parameter] public PlanillaTraficoRow Fila { get; set; } = default!;
+    /// <summary>Filas A LA VISTA — el universo del cambio masivo, igual que el cursor del FoxPro.</summary>
+    [Parameter] public IReadOnlyList<PlanillaTraficoRow> Visibles { get; set; } = Array.Empty<PlanillaTraficoRow>();
+    /// <summary>true si el usuario tiene el permiso 'D'. Decide el modo, como el Do Case del FoxPro.</summary>
+    [Parameter] public bool EsDiagramador { get; set; }
+    /// <summary>Opción pre-seleccionada por la tecla (F6=S/C, F7=NORTUR, F8=fletero, F9=flota propia).</summary>
+    [Parameter] public string Atajo { get; set; } = "";
+    /// <summary>Letra tipeada sobre la grilla: filtra el combo de internos, como el FoxPro.</summary>
+    [Parameter] public string Letra { get; set; } = "";
+    [Parameter] public string Usuario { get; set; } = "";
+
+    public enum OpcionCron { Cronograma, SinCronograma, Empresa }
+
+    private static bool _abmActivo => AbmFeatureFlags.CronogramaAbmActivo;
+
+    private List<FleteroCronogramaRow> _fleteros = new();
+    private List<int> _internos = new();
+    private List<string> _motivos = new();
+    private List<PlanillaTraficoRow> _alcanceMasivo = new();
+
+    private OpcionCron _opcion = OpcionCron.Cronograma;
+    private string _prefijoFletero = "";
+    private int? _interno;
+    private string _motivo = "";
+    private string _nombreEmpresa = "NORTUR";
+    private bool _masivo, _cargando = true, _grabando;
+    private string? _error;
+
+    private FleteroCronogramaRow? FleteroActual =>
+        _fleteros.FirstOrDefault(f => f.Prefijo == _prefijoFletero);
+
+    // Réplica de arma_combo_interno: el diagramador solo carga interno si el fletero se
+    // diagrama por interno (hoy NT y TS); el operador siempre.
+    private bool InternoHabilitado =>
+        _opcion == OpcionCron.Cronograma && (!EsDiagramador || (FleteroActual?.Diagrama ?? false));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _fleteros = await Reports.GetFleterosCronogramaAsync();
+        _motivos = await Reports.GetMotivosCambioUnidadAsync();
+        _nombreEmpresa = await Reports.GetClientePruebaAsync();
+
+        // Atajo de tecla → radio pre-seleccionado (mapeo del .exe, ver plano §2).
+        _opcion = Atajo switch
+        {
+            "F6" => OpcionCron.SinCronograma,
+            "F7" => OpcionCron.Empresa,
+            _ => OpcionCron.Cronograma
+        };
+
+        // F9 = flota propia → arranca en el fletero que diagrama (NT). El resto arranca en el
+        // primero del catálogo, igual que el Init del FoxPro.
+        var inicial = Atajo == "F9"
+            ? _fleteros.FirstOrDefault(f => f.Diagrama) ?? _fleteros.FirstOrDefault()
+            : _fleteros.FirstOrDefault();
+        _prefijoFletero = inicial?.Prefijo ?? "";
+
+        if (_motivos.Count > 0) _motivo = _motivos[0];
+        await CargarInternos();
+        RecalcularAlcance();
+        _cargando = false;
+    }
+
+    private async Task CargarInternos()
+    {
+        _internos = string.IsNullOrEmpty(_prefijoFletero)
+            ? new()
+            : await Reports.GetInternosPorFleteroAsync(_prefijoFletero);
+
+        // La letra tipeada sobre la grilla arranca posicionando el combo en el primer interno
+        // que empieza con ese dígito — es lo que hace el `Keyboard lpLetra Clear` del FoxPro.
+        if (!string.IsNullOrEmpty(Letra))
+        {
+            var match = _internos.FirstOrDefault(i => i.ToString().StartsWith(Letra));
+            if (match != 0) _interno = match;
+        }
+        if (_interno is null || !_internos.Contains(_interno.Value))
+            _interno = _internos.FirstOrDefault();
+    }
+
+    private async Task OnFleteroChanged(string prefijo)
+    {
+        _prefijoFletero = prefijo;
+        _interno = null;
+        await CargarInternos();
+        RecalcularAlcance();
+    }
+
+    private void OnInternoChanged(int? interno)
+    {
+        _interno = interno;
+        RecalcularAlcance();
+    }
+
+    private void SetOpcion(OpcionCron o)
+    {
+        _opcion = o;
+        RecalcularAlcance();
+    }
+
+    /// <summary>
+    /// El código que se va a grabar. Réplica del Do Case de bAceptar.Click:
+    ///   Cronograma + fletero que diagrama → prefijo + interno con 4 dígitos ("NT0049")
+    ///   Cronograma + fletero que NO diagrama (solo diagramador) → la empresa entera ("TEDESCHI")
+    ///   S/C → "S/C"   ·   NORTUR → parametro.id_cliente_prueba
+    /// </summary>
+    private string CronogramaNuevo
+    {
+        get
+        {
+            switch (_opcion)
+            {
+                case OpcionCron.SinCronograma: return "S/C";
+                case OpcionCron.Empresa: return _nombreEmpresa;
+                default:
+                    var f = FleteroActual;
+                    if (f is null) return "";
+                    if (EsDiagramador && !f.Diagrama) return f.IdContratado;
+                    return _interno is null ? "" : f.Prefijo + _interno.Value.ToString("0000");
+            }
+        }
+    }
+
+    private bool PuedeGrabar =>
+        !string.IsNullOrEmpty(CronogramaNuevo) &&
+        (EsDiagramador || !string.IsNullOrWhiteSpace(_motivo));
+
+    /// <summary>
+    /// El alcance del masivo, con la regla EXACTA del FoxPro: las filas del cursor (= lo que
+    /// está a la vista, con los filtros que tenga puestos) cuyo cronograma es el ANTERIOR y que
+    /// todavía no tienen interno asignado. Se excluye la fila actual, que se cambia igual.
+    /// </summary>
+    private void RecalcularAlcance()
+    {
+        var anterior = (Fila.UCb ?? "").Trim();
+        _alcanceMasivo = Visibles
+            .Where(f => f.IdViaje != Fila.IdViaje
+                     && (f.UCb ?? "").Trim() == anterior
+                     && (f.Interno ?? 0) == 0)
+            .ToList();
+    }
+
+    private string ResumenAlcance
+    {
+        get
+        {
+            var muestra = _alcanceMasivo.Take(4).Select(f => $"#{f.IdViaje} ({f.HIni})");
+            var texto = string.Join(", ", muestra);
+            return _alcanceMasivo.Count > 4 ? $"{texto} y {_alcanceMasivo.Count - 4} más" : texto;
+        }
+    }
+
+    private async Task Grabar()
+    {
+        _error = null;
+        if (!PuedeGrabar)
+        {
+            _error = EsDiagramador
+                ? "No se cargó el cronograma o no existe la unidad."
+                : "Debe cargar un motivo de cambio de unidad.";
+            return;
+        }
+
+        _grabando = true;
+        var modo = EsDiagramador ? AbmService.ModoCronograma.Diagramador : AbmService.ModoCronograma.Operador;
+
+        AbmService.AbmResult r;
+        if (_masivo && EsDiagramador)
+        {
+            // La fila actual va primero y después las del alcance, todas en una transacción.
+            var lote = new List<(int, DateOnly)> { (Fila.IdViaje, Fila.Fecha) };
+            lote.AddRange(_alcanceMasivo.Select(f => (f.IdViaje, f.Fecha)));
+            r = await Abm.CambiarCronogramaMasivoAsync(lote, CronogramaNuevo, Usuario);
+        }
+        else
+        {
+            r = await Abm.CambiarCronogramaAsync(
+                Fila.IdViaje, Fila.Fecha, CronogramaNuevo, modo, _motivo, Usuario);
+        }
+        _grabando = false;
+
+        if (!r.Ok) { _error = r.Error; return; }
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private static string Guion(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s.Trim();
+}

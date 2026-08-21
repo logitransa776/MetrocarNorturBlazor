@@ -1,0 +1,159 @@
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   "Liberar unidad" del menú contextual del panel BUSES (bar 22).
+   FoxPro: liberar_viaje_x_problema() → DO FORM trafico_vehiculo_libera.
+
+   🔴 EL NOMBRE DEL ÍTEM MIENTE. En el Metrocar dice "Liberar unidad: pasa a Sin Asignar",
+   pero el fuente NO toca `viaje`: todo el bloque que hacía `Update viaje Set estado_viaje...`,
+   el viaje_log y el vehiculo_km está COMENTADO (*!*). Lo único vivo es:
+       Update vehiculo Set estado = "LIBERADO", hs_inicio = {//::}, id_viaje = 0 Where Id = nId
+   O sea: es una liberación de emergencia de la UNIDAD (la despega del viaje para poder
+   reasignarla). El viaje queda exactamente como estaba.
+
+   Se replica FIEL —corregirlo sería cambiar el comportamiento del sistema, no migrarlo—
+   pero el título y el texto de este diálogo dicen lo que realmente pasa, y se avisa que
+   el servicio no cambia de estado.
+
+   No confundir con: "Libe" de la toolbar (= FINALIZAR el viaje) ni con el "Sin Asignar"
+   del Zoom del Viaje (ese sí revierte el estado del servicio).
+
+   ⚠️ ANDAMIAJE: escritura apagada por AbmFeatureFlags.LiberarUnidadActivo.
+   Plano: docs/PlanoFoxPro/trafico/TRAFICO_BUSES_MENU.md
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.LockOpen" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Liberar unidad</span>
+            @if (!_abmActivo)
+            {
+                <span class="zoom-title-bar__chip" style="margin-left:10px;">Escritura preparada</span>
+            }
+            <span class="zoom-title-bar__nro">Interno&nbsp;@Bus.Interno · @Bus.Cronograma</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_bloqueo is not null)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">@_bloqueo</MudAlert>
+        }
+        else
+        {
+            <MudText Typo="Typo.body1" Class="mb-3">
+                Se despega la unidad del viaje que tiene asignado, para poder reasignarla.
+            </MudText>
+
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Después de liberar, la unidad queda</span>
+                <div class="zoom-row">
+                    @F("Estado", $"{Dato(Bus.Estado)}  →  LIBERADO", acento: true, ancho: 2)
+                    @F("Nº de viaje", $"{(Bus.IdViaje is > 0 ? Bus.IdViaje.ToString() : "—")}  →  sin viaje", ancho: 2)
+                    @F("Hs. inicio", $"{(Bus.HsInicio?.ToString("dd/MM HH:mm", _ar) ?? "—")}  →  vacío", ancho: 2)
+                    @F("Conductor", Dato(Bus.NombreChofer), ancho: 2)
+                </div>
+            </div>
+
+            @* Esto es lo más importante del diálogo: en el Metrocar el ítem promete algo que no
+               hace, y el despachante puede quedarse esperando que el servicio cambie de estado. *@
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+                <b>El servicio NO cambia de estado.</b> Aunque el Metrocar rotule esta acción
+                como "pasa a Sin Asignar", solo se libera la unidad
+                @if (Bus.IdViaje is > 0)
+                {
+                    <text>— el viaje #@Bus.IdViaje sigue como está.</text>
+                }
+                <text> Para revertir el estado del servicio hay que usar "Sin Asignar" desde el Zoom del Viaje.</text>
+            </MudAlert>
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+            }
+        }
+    </DialogContent>
+
+    <DialogActions>
+        @if (_bloqueo is null)
+        {
+            <span class="nov-alta__hint">
+                <MudIcon Icon="@(_abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                @(_abmActivo
+                    ? "Se graba sobre la unidad"
+                    : "Escritura preparada · se habilita con el circuito de Tráfico (día D)")
+            </span>
+        }
+        <MudSpacer />
+        <MudButton Variant="Variant.Text" OnClick="Cerrar">Cancelar</MudButton>
+        @if (_bloqueo is null)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Warning"
+                       StartIcon="@Icons.Material.Filled.LockOpen" OnClick="Grabar"
+                       Disabled="@(!_abmActivo || _grabando)">
+                @(_grabando ? "Liberando…" : "Liberar unidad")
+            </MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public PanelBusRow Bus { get; set; } = default!;
+    [Parameter] public string Usuario { get; set; } = "";
+
+    private static bool _abmActivo => AbmFeatureFlags.LiberarUnidadActivo;
+
+    private bool _grabando;
+    private string? _error, _bloqueo;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override void OnInitialized() => _bloqueo = Validar();
+
+    // El form del FoxPro no hace nada si la unidad ya está LIBERADA (If estado # "LIBERADO"),
+    // y busca la unidad por cronograma → sin cronograma no hay forma de identificarla.
+    private string? Validar()
+    {
+        if (string.IsNullOrWhiteSpace(Bus.Cronograma))
+            return "La unidad no tiene cronograma cargado — el Metrocar la busca por ese campo.";
+        if ((Bus.Estado ?? "").Trim() == "LIBERADO")
+            return "La unidad ya está LIBERADA — no hay nada que liberar.";
+        return null;
+    }
+
+    private async Task Grabar()
+    {
+        _error = null;
+        _grabando = true;
+        var r = await Abm.LiberarUnidadAsync(Bus.Cronograma, Usuario);
+        _grabando = false;
+        if (!r.Ok) { _error = r.Error; return; }
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private static string Dato(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s.Trim();
+
+    private RenderFragment F(string label, string valor, string? cssValor = null, bool acento = false, int ancho = 1) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", $"zoom-field zoom-field--{ancho}");
+        b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label");
+        b.AddContent(4, label); b.CloseElement();
+        var cls = acento ? "zoom-field__value zoom-field__value--acento" : "zoom-field__value";
+        if (!string.IsNullOrEmpty(cssValor)) cls += " " + cssValor;
+        b.OpenElement(5, "div");
+        b.AddAttribute(6, "class", cls);
+        b.AddContent(7, valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+}

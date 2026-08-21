@@ -1,0 +1,482 @@
+@using System.Globalization
+@implements IDisposable
+@inject IDialogService DialogService
+@inject ExcelExportService Excel
+@inject IJSRuntime JS
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   TABLERO DE OCUPACIÓN DE FLOTA (31/07/2026) — pedido del usuario.
+   Barras horarias por unidad sobre los servicios que la planilla tiene A LA VISTA
+   (con sus filtros): no hace query propia, recibe las filas ya filtradas.
+
+   Se dibuja con divs posicionados por porcentaje (no ApexCharts): con ~350 barras y
+   ~100 unidades, el render CSS es lo único que no castiga a Blazor Server, y así el
+   encabezado horario queda fijo y el clic en la barra abre el Zoom del Viaje directo.
+
+   El armado (unidad, ubicación en el eje, pistas, corte a las 02:00) vive en
+   Services/OcupacionFlota.cs — compartido con el Excel para que no discrepen.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog ocup-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.Schedule" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Ocupación de flota</span>
+            <span class="zoom-title-bar__nro">@Subtitulo</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @* ── Barra de resumen + controles ─────────────────────────────────────── *@
+        <div class="ocup-toolbar">
+            <span class="ocup-resumen">
+                <b>@_v.UnidadesReales</b> @(_v.UnidadesReales == 1 ? "unidad" : "unidades") ·
+                <b>@_v.Servicios</b> @(_v.Servicios == 1 ? "servicio" : "servicios")
+            </span>
+
+            @* ── ¿Está todo asignado? (04/08/2026, pedido del usuario) ─────────────────
+               La pregunta se responde de un golpe de vista SIN abrir nada más: o hay un
+               chip ámbar con cuántos faltan (y es el filtro para ir a verlos), o hay un
+               visto verde. Gemelo del chip de conflictos, y excluyentes entre sí. *@
+            @if (_t.SinCronograma > 0)
+            {
+                <button type="button" class="ocup-sc @(_soloSinUnidad ? "ocup-sc--on" : "")"
+                        @onclick="ToggleSinUnidad"
+                        title="@(_soloSinUnidad
+                                 ? "Volver a mostrar la flota completa"
+                                 : "Ver solo los servicios que todavía no tienen interno asignado (fila S/C)")">
+                    <MudIcon Icon="@Icons.Material.Filled.HelpOutline" Style="font-size:0.9rem;" />
+                    <span>@_t.SinCronograma sin unidad</span>
+                    @if (_soloSinUnidad)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.Close" Style="font-size:0.85rem; opacity:0.85;" />
+                    }
+                </button>
+            }
+            else if (_t.Servicios > 0)
+            {
+                <span class="ocup-ok" title="Todos los servicios a la vista tienen interno asignado en el cronograma.">
+                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Style="font-size:0.9rem;" />
+                    <span>Todos con unidad</span>
+                </span>
+            }
+
+            @* El contador de conflictos ES el filtro (01/08/2026): es donde va el ojo cuando
+               buscás problemas, así que en vez de ser texto muerto, clic → el tablero deja
+               solo las unidades que se pisan; clic de nuevo → vuelve todo. *@
+            @if (_t.Solapes > 0)
+            {
+                <button type="button" class="ocup-conf @(_soloConflictos ? "ocup-conf--on" : "")"
+                        @onclick="ToggleConflictos"
+                        title="@(_soloConflictos
+                                 ? "Mostrar todas las unidades otra vez"
+                                 : "Ver solo las unidades con servicios que se pisan (con todos sus servicios, para poder resolverlo)")">
+                    <MudIcon Icon="@Icons.Material.Filled.Warning" Style="font-size:0.9rem;" />
+                    <span>@_t.Solapes en conflicto</span>
+                    @if (_soloConflictos)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.Close" Style="font-size:0.85rem; opacity:0.85;" />
+                    }
+                </button>
+            }
+
+            <span style="flex:1 1 auto;"></span>
+
+            <div class="ocup-ctrls">
+                <span class="ocup-ctrls__lbl">Duración</span>
+                <div class="ocup-seg">
+                    <button type="button" class="@(_real ? "" : "ocup-seg__on")" @onclick="() => SetReal(false)"
+                            title="Programada: de H.Ini a H.Fin (hs_fin_apr). Es el dato que siempre está cargado, también en fechas futuras.">
+                        Programada
+                    </button>
+                    <button type="button" class="@(_real ? "ocup-seg__on" : "")" @onclick="() => SetReal(true)"
+                            title="Real: de H.Ini a H.Cie (hs_fin), el cierre efectivo. Los servicios que todavía no terminaron caen a H.Fin.">
+                        Real
+                    </button>
+                </div>
+
+                <span class="ocup-ctrls__lbl">Orden</span>
+                <select class="filtro-combo" value="@_orden"
+                        @onchange="@(e => SetOrden(e.Value?.ToString() ?? OcupacionFlota.OrdenUnidad))"
+                        title="Cómo se ordenan las unidades">
+                    <option value="@OcupacionFlota.OrdenUnidad">Por unidad</option>
+                    <option value="@OcupacionFlota.OrdenHoras">Más ocupadas</option>
+                </select>
+            </div>
+        </div>
+
+        @* ── Estado "solo conflictos": tiene que ser imposible de pasar por alto, para que
+             nadie lea un tablero recortado creyendo que es el día entero ────────────── *@
+        @if (_soloConflictos)
+        {
+            <div class="ocup-foco">
+                <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Style="font-size:0.95rem;" />
+                <span>
+                    Mostrando <b>solo las @_v.UnidadesReales @(_v.UnidadesReales == 1 ? "unidad" : "unidades") con cruces de horario</b>,
+                    con todos sus servicios del día.
+                </span>
+                <span style="flex:1 1 auto;"></span>
+                <button type="button" class="ocup-foco__quitar" @onclick="ToggleConflictos">
+                    <MudIcon Icon="@Icons.Material.Filled.Close" Style="font-size:0.85rem;" />
+                    <span>Ver todas</span>
+                </button>
+            </div>
+        }
+        else if (_soloSinUnidad)
+        {
+            <div class="ocup-foco ocup-foco--sc">
+                <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Style="font-size:0.95rem;" />
+                <span>
+                    Mostrando <b>solo los @_v.Servicios servicios sin interno asignado</b> — la flota diagramada quedó oculta.
+                </span>
+                <span style="flex:1 1 auto;"></span>
+                <button type="button" class="ocup-foco__quitar" @onclick="ToggleSinUnidad">
+                    <MudIcon Icon="@Icons.Material.Filled.Close" Style="font-size:0.85rem;" />
+                    <span>Ver todo</span>
+                </button>
+            </div>
+        }
+
+        @* ── Avisos: lo que quedó fuera del tablero ───────────────────────────── *@
+        @if (_t.Excluidos > 0 || _t.MultiDia)
+        {
+            <div class="ocup-aviso">
+                <MudIcon Icon="@Icons.Material.Filled.Info" Style="font-size:0.95rem;" />
+                <span>
+                    @* Los S/C ya NO se avisan acá: desde el 04/08/2026 se grafican en la
+                       fila-pool y su contador vive en el chip de la toolbar. *@
+                    @if (_t.SinHorario > 0)
+                    {
+                        <span><b>@_t.SinHorario</b> sin hora de inicio utilizable. </span>
+                    }
+                    @if (_t.MultiDia)
+                    {
+                        <span>El filtro activo abarca varios días: las jornadas se superponen en un mismo eje.</span>
+                    }
+                </span>
+            </div>
+        }
+
+        @* ── El tablero ───────────────────────────────────────────────────────── *@
+        @if (_v.Unidades.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+                @if (_soloConflictos)
+                {
+                    @* Pasa de verdad: en duración Real muchos cruces desaparecen (H.Fin los
+                       inventa con su default de 2 h). Mejor decirlo que mostrar un tablero vacío. *@
+                    <text>Con la duración @(_real ? "real (H.Cie)" : "programada (H.Fin)") no queda ninguna unidad con cruces de horario.</text>
+                }
+                else
+                {
+                    <text>No hay servicios a la vista con hora de inicio utilizable, así que no hay nada para graficar.</text>
+                }
+            </MudAlert>
+        }
+        else
+        {
+            @* --ocup-cols = horas del eje: con eso el CSS dibuja las líneas de hora del fondo
+               sin saber de antemano si el eje termina a las 24:00 o a las 02:00. *@
+            <div class="ocup-scroll" style="--ocup-cols:@(_t.FinEje / 60);">
+                @* Encabezado horario — queda fijo arriba al scrollear *@
+                <div class="ocup-row ocup-row--head">
+                    <div class="ocup-lbl ocup-lbl--head">Unidad</div>
+                    <div class="ocup-hs ocup-hs--head">Ocupado</div>
+                    <div class="ocup-axis">
+                        @foreach (var m in Ticks)
+                        {
+                            <div class="ocup-tick @(m % 360 == 0 ? "ocup-tick--fuerte" : "")" style="left:@Pct(m)%;">
+                                <span>@OcupacionFlota.Hhmm(m)</span>
+                            </div>
+                        }
+                        @if (_t.FinEje > OcupacionFlota.MinEje)
+                        {
+                            <div class="ocup-medianoche" style="left:@Pct(OcupacionFlota.MinEje)%;"
+                                 title="Medianoche — a la derecha, servicios del día siguiente (el eje corta a las 02:00)"></div>
+                        }
+                        @if (_esHoy)
+                        {
+                            <div class="ocup-ahora" style="left:@Pct(_nowMin)%;" title="Hora actual — se actualiza sola cada minuto">
+                                <span class="ocup-ahora__pill">@OcupacionFlota.Hhmm(_nowMin)</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                @* Zebra por UNIDAD, no por renglón: los sub-renglones de una unidad con
+                   solapes comparten el fondo de su unidad, así se lee como un bloque. *@
+                @for (var iu = 0; iu < _v.Unidades.Count; iu++)
+                {
+                    var u = _v.Unidades[iu];
+                    var alt = iu % 2 == 1 ? " ocup-row--alt" : "";
+                    for (var p = 0; p < u.Pistas.Count; p++)
+                    {
+                        var pista = u.Pistas[p];
+                        var esPrimera = p == 0;
+                        <div class="ocup-row@(alt) @(esPrimera ? "" : "ocup-row--sub") @(u.SinUnidad ? "ocup-row--sc" : "")">
+                            <div class="ocup-lbl" title="@TituloUnidad(u)">
+                                @(esPrimera ? u.Nombre : "↳")
+                            </div>
+                            <div class="ocup-hs">
+                                @if (esPrimera && u.SinUnidad)
+                                {
+                                    @* La fila-pool no tiene horas ocupadas (no hay unidad que ocupar):
+                                       lo que importa ahí es cuántos servicios faltan asignar. *@
+                                    <span class="ocup-hs__val ocup-hs__val--sc">pend.</span>
+                                    <span class="ocup-hs__n ocup-hs__n--sc">@u.Servicios</span>
+                                }
+                                else if (esPrimera)
+                                {
+                                    <span class="ocup-hs__val">@OcupacionFlota.Horas(u.MinutosOcupados)</span>
+                                    <span class="ocup-hs__n">@u.Servicios</span>
+                                }
+                            </div>
+                            <div class="ocup-track">
+                                @if (_t.FinEje > OcupacionFlota.MinEje)
+                                {
+                                    <div class="ocup-medianoche" style="left:@Pct(OcupacionFlota.MinEje)%;"></div>
+                                }
+                                @foreach (var b in pista)
+                                {
+                                    @* El tooltip NO es el `title` nativo (feo y sin contraste): los datos
+                                       viajan en data-tip-* y los pinta una tarjeta flotante de CSS que
+                                       arma descarga.js con listeners delegados. Eso la deja linda sin
+                                       gastar un round-trip de SignalR por cada hover. *@
+                                    @* OJO: en la fila-pool el sub-renglón NO es conflicto (son servicios
+                                       pendientes que coinciden en horario), así que no lleva --conf. *@
+                                    <div class="ocup-bar @(esPrimera || u.SinUnidad ? "" : "ocup-bar--conf") @(u.SinUnidad ? "ocup-bar--sc" : "") @(b.Dudosa ? "ocup-bar--dudosa" : "") @(b.Cortada ? "ocup-bar--cortada" : "")"
+                                         style="left:@Pct(b.Ini)%; width:@Pct(Math.Max(b.Duracion, 4))%; background:@b.Color;"
+                                         data-tip-titulo="@($"{(u.SinUnidad ? "Sin unidad asignada" : b.Fila.UnidadCronograma)} · {OcupacionFlota.Hhmm(b.Ini)} – {OcupacionFlota.Hhmm(b.Fin)}")"
+                                         data-tip-dur="@OcupacionFlota.Horas(b.Duracion)"
+                                         data-tip-rec="@RecorridoTexto(b.Fila)"
+                                         data-tip-cliente="@(b.Fila.Cliente == "" ? "—" : b.Fila.Cliente)"
+                                         data-tip-pax="@(b.Fila.Pax?.ToString() ?? "—")"
+                                         data-tip-chofer="@(b.Fila.Chofer == "" ? "sin asignar" : b.Fila.Chofer)"
+                                         data-tip-estado="@b.Fila.EstadoDisplay"
+                                         data-tip-tipo="@OcupacionFlota.NombreTipo(b.Tipo)"
+                                         data-tip-viaje="@b.Fila.IdViaje"
+                                         data-tip-aviso="@Aviso(b)"
+                                         @onclick="() => AbrirZoom(b.Fila)"></div>
+                                }
+                                @if (_esHoy)
+                                {
+                                    <div class="ocup-pasado" style="width:@Pct(_nowMin)%;"></div>
+                                }
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+
+            <div class="ocup-leyenda">
+                <span><i style="background:@OcupacionFlota.ColorEmpresa;"></i>Empresa</span>
+                <span><i style="background:@OcupacionFlota.ColorTurismo;"></i>Turismo</span>
+                <span><i style="background:@OcupacionFlota.ColorNortur;"></i>Nortur</span>
+                <span><i class="ocup-leyenda__conf"></i>Solape / dato a revisar</span>
+                <span><i class="ocup-leyenda__sc"></i>Sin unidad asignada (S/C)</span>
+                <span style="flex:1 1 auto;"></span>
+                <span class="ocup-leyenda__nota">
+                    Clic en una barra → Zoom del Viaje · @_v.Renglones renglones
+                    @if (_real) { <text> · duración real (H.Cie)</text> }
+                    else { <text> · duración programada (H.Fin)</text> }
+                </span>
+            </div>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Download"
+                   OnClick="DescargarExcel"
+                   Disabled="@(_v.Unidades.Count == 0)">
+            Excel
+        </MudButton>
+        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Filas visibles de la planilla (ya filtradas por la página).</summary>
+    [Parameter] public List<PlanillaTraficoRow> Filas { get; set; } = new();
+
+    /// <summary>Texto del encabezado: el día o la descripción del filtro activo.</summary>
+    [Parameter] public string Subtitulo { get; set; } = "";
+
+    /// <summary>Fecha de la planilla — solo para nombrar el archivo del Excel.</summary>
+    [Parameter] public DateOnly Dia { get; set; }
+
+    // _t = el tablero COMPLETO (de ahí sale el contador de conflictos y el largo del eje).
+    // _v = lo que se está VIENDO (igual a _t, o recortado a las unidades en conflicto).
+    private OcupacionFlota.Tablero _t = OcupacionFlota.Armar(Array.Empty<PlanillaTraficoRow>(), true);
+    private OcupacionFlota.Tablero _v = OcupacionFlota.Armar(Array.Empty<PlanillaTraficoRow>(), true);
+
+    // Arranca en REAL (H.Cie = hs_fin) por pedido del usuario (31/07/2026): el fin programado
+    // (H.Fin = hs_fin_apr) tiene un default de 2 h en ~30% de los servicios, así que la
+    // duración programada infla la ocupación.
+    private bool _real = true;                             // false = programada (H.Fin)
+    private string _orden = OcupacionFlota.OrdenUnidad;
+    private bool _soloConflictos;
+
+    // Foco "solo sin unidad" (04/08/2026). Excluyente con el de conflictos por decisión del
+    // usuario: son dos preguntas distintas (qué se pisa / qué falta asignar) y combinadas
+    // darían casi siempre un tablero vacío.
+    private bool _soloSinUnidad;
+
+    // Línea de "ahora" (03/08/2026, pedido del usuario, opción "cortina del pasado"):
+    // solo se dibuja cuando el tablero muestra el día de HOY, y se corre sola cada
+    // minuto mientras el diálogo está abierto. _esHoy se fija una sola vez en
+    // OnInitialized (Dia ya está asignado en ese punto del ciclo de vida de Blazor).
+    private bool _esHoy;
+    private int _nowMin;
+    private System.Threading.Timer? _timerAhora;
+
+    protected override void OnInitialized()
+    {
+        ActualizarAhora();
+        if (_esHoy)
+        {
+            var msAlProximoMinuto = 60_000 - (DateTime.Now.Second * 1000 + DateTime.Now.Millisecond);
+            _timerAhora = new System.Threading.Timer(_ => InvokeAsync(() =>
+            {
+                ActualizarAhora();
+                StateHasChanged();
+            }), null, msAlProximoMinuto, 60_000);
+        }
+    }
+
+    private void ActualizarAhora()
+    {
+        var ahora = DateTime.Now;
+        _esHoy = Dia == DateOnly.FromDateTime(ahora);
+        _nowMin = (int)(ahora - ahora.Date).TotalMinutes;
+    }
+
+    protected override void OnParametersSet() => Recalcular();
+
+    private void Recalcular()
+    {
+        _t = OcupacionFlota.Armar(Filas, _real, _orden);
+        _v = _soloConflictos ? OcupacionFlota.SoloConflictos(_t)
+           : _soloSinUnidad  ? OcupacionFlota.SoloSinUnidad(_t)
+           : _t;
+    }
+
+    private void ToggleConflictos()
+    {
+        _soloConflictos = !_soloConflictos;
+        if (_soloConflictos) _soloSinUnidad = false;
+        Recalcular();
+    }
+
+    private void ToggleSinUnidad()
+    {
+        _soloSinUnidad = !_soloSinUnidad;
+        if (_soloSinUnidad) _soloConflictos = false;
+        Recalcular();
+    }
+
+    private void SetReal(bool real)
+    {
+        if (_real == real) return;
+        _real = real;
+        Recalcular();
+    }
+
+    private void SetOrden(string orden)
+    {
+        if (_orden == orden) return;
+        _orden = orden;
+        Recalcular();
+    }
+
+    // Marcas del eje: una por hora. El eje llega hasta 24:00 o hasta las 02:00 si algo cruzó.
+    private IEnumerable<int> Ticks
+    {
+        get
+        {
+            for (var m = 0; m <= _t.FinEje; m += 60) yield return m;
+        }
+    }
+
+    // Posición en % dentro del eje. SIEMPRE con InvariantCulture: en es-AR el separador decimal
+    // es la coma y "left:12,5%" es CSS inválido (la barra se iría al 0).
+    private string Pct(double minutos) =>
+        (minutos / _t.FinEje * 100).ToString("0.####", CultureInfo.InvariantCulture);
+
+    // "DESDE a HASTA" → "DESDE ➜ HASTA", partiendo por el ' a ' correcto (RecorridoDesdeLen):
+    // hay tramos con ' a ' adentro ("VER A CIRUJANO"), así que no se puede partir por texto.
+    private static string RecorridoTexto(PlanillaTraficoRow f)
+    {
+        var r = f.Recorrido;
+        var len = f.RecorridoDesdeLen;
+        return len > 0 && r.Length > len + 3
+            ? r[..len].TrimEnd() + " ➜ " + r[(len + 3)..].TrimStart()
+            : r.Trim();
+    }
+
+    // Aviso de calidad de dato que muestra el tooltip (vacío = sin aviso).
+    private static string Aviso(OcupacionFlota.Barra b) =>
+          b.Cortada && b.Dudosa ? "Termina después de las 02:00 y la duración está fuera de rango — revisar H.Ini / H.Fin / H.Cie."
+        : b.Cortada             ? "Termina después de las 02:00: la barra se dibuja cortada."
+        : b.Dudosa              ? "Duración fuera de rango: revisar H.Ini / H.Fin / H.Cie de este viaje."
+        : "";
+
+    private static string TituloUnidad(OcupacionFlota.Unidad u)
+    {
+        if (u.SinUnidad)
+            return $"Sin unidad asignada — {u.Servicios} {(u.Servicios == 1 ? "servicio" : "servicios")} "
+                 + "sin interno (U/As, U/Cb y U/Pr en S/C). Los sub-renglones son "
+                 + "servicios pendientes que coinciden en horario, no conflictos de diagramación.";
+
+        var t = $"{u.Nombre} — {u.Servicios} {(u.Servicios == 1 ? "servicio" : "servicios")}, "
+              + $"{OcupacionFlota.Horas(u.MinutosOcupados)} ocupada";
+        return u.Solapes > 0 ? t + $" · {u.Solapes} en conflicto horario" : t;
+    }
+
+    private async Task AbrirZoom(PlanillaTraficoRow f)
+    {
+        var parametros = new DialogParameters<ZoomViajeDialog>
+        {
+            { x => x.IdViaje, f.IdViaje },
+            { x => x.FReserva, f.Fecha }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<ZoomViajeDialog>("Zoom del Viaje", parametros, opciones);
+    }
+
+    private async Task DescargarExcel()
+    {
+        // Se exporta lo que se está VIENDO (_v): si el tablero está filtrado por conflictos,
+        // el archivo trae eso — y lo dice en el subtítulo de la hoja.
+        var bytes = Excel.TableroOcupacion(_v, _real,
+              _soloConflictos ? Subtitulo + " · solo unidades con cruces de horario"
+            : _soloSinUnidad  ? Subtitulo + " · solo servicios sin unidad asignada"
+            : Subtitulo);
+        var nombre =
+              _soloConflictos ? $"ocupacion_flota_{Dia:yyyyMMdd}_conflictos.xlsx"
+            : _soloSinUnidad  ? $"ocupacion_flota_{Dia:yyyyMMdd}_sin_unidad.xlsx"
+            : $"ocupacion_flota_{Dia:yyyyMMdd}.xlsx";
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    public void Dispose() => _timerAhora?.Dispose();
+}

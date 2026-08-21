@@ -1,4 +1,4 @@
-@page "/reservas-por-cliente"
+﻿@page "/reservas-por-cliente"
 @using ApexCharts
 @using MudColor = MudBlazor.Color
 @using MudSize = MudBlazor.Size
@@ -9,6 +9,7 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject IDialogService DialogService
+@inject ISnackbar Snackbar
 @rendermode InteractiveServer
 
 <PageTitle>BusLink</PageTitle>
@@ -19,12 +20,12 @@
         Reservas por cliente
     </MudText>
     <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
-        Metrocar Nortur · viajes de transportación por cliente, mes y tipo de unidad
+        Nortur · viajes por cliente y mes, con comparación de períodos y análisis de cancelaciones
     </MudText>
 </div>
 
-@* ── Barra de filtros (horizontal, compacta) — mismo patrón que los otros informes de Reservas ── *@
-<MudPaper Elevation="1" Class="rfs-filtros mb-4">
+@* ── Barra de filtros (horizontal, compacta) — filtros a la izquierda, botonera a la derecha ── *@
+<MudPaper Elevation="1" Class="rfs-filtros rfs-filtros--fijo mb-4">
     <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudSize.Small" Style="color:#003AA0; flex-shrink:0;" />
 
     <div class="rfs-fechas">
@@ -38,31 +39,44 @@
                        Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
     </div>
 
+    @* Tipo de servicio: mismas 3 categorías que Banda Horaria. Solo Turismo tildado por
+       defecto = el alcance histórico del informe (los números no se mueven). *@
+    <div class="rfs-campo" style="width:190px;">
+        <MudSelect T="string" Label="Tipo de servicio" MultiSelection="true" @bind-SelectedValues="_categoriasSel"
+                   SelectAll="true" SelectAllText="Todos" Dense="true"
+                   Margin="Margin.Dense" Variant="Variant.Outlined"
+                   MultiSelectionTextFunc="@(s => s.Count == _categorias.Count ? "Todos" : string.Join(", ", s))">
+            @foreach (var c in _categorias)
+            {
+                <MudSelectItem T="string" Value="@c">@c</MudSelectItem>
+            }
+        </MudSelect>
+    </div>
+
     @* Ver: reservas activas (no canceladas) o análisis de canceladas. A diferencia del
        FoxPro, el modo canceladas SIEMPRE respeta el período y deja elegir los motivos. *@
-    <MudSelect T="string" Label="Ver" @bind-Value="_verSel" Dense="true"
-               Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:170px;">
-        <MudSelectItem T="string" Value="@("Activas")">Reservas activas</MudSelectItem>
-        <MudSelectItem T="string" Value="@("Canceladas")">Canceladas</MudSelectItem>
-    </MudSelect>
+    <div class="rfs-campo" style="width:170px;">
+        <MudSelect T="string" Label="Ver" @bind-Value="_verSel" Dense="true"
+                   Margin="Margin.Dense" Variant="Variant.Outlined">
+            <MudSelectItem T="string" Value="@("Activas")">Reservas activas</MudSelectItem>
+            <MudSelectItem T="string" Value="@("Canceladas")">Canceladas</MudSelectItem>
+        </MudSelect>
+    </div>
 
     @if (_verSel == "Canceladas")
     {
-        <MudSelect T="int" Label="Motivos" MultiSelection="true" @bind-SelectedValues="_motivosSel"
-                   SelectAll="true" SelectAllText="Todos" Dense="true"
-                   Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:230px;"
-                   MultiSelectionTextFunc="@(s => s.Count == _motivos.Count ? "Todos" : $"{s.Count} de {_motivos.Count}")">
-            @foreach (var m in _motivos)
-            {
-                <MudSelectItem T="int" Value="@m.Id">@m.Motivo</MudSelectItem>
-            }
-        </MudSelect>
+        <div class="rfs-campo" style="width:200px;">
+            <MudSelect T="int" Label="Motivos" MultiSelection="true" @bind-SelectedValues="_motivosSel"
+                       SelectAll="true" SelectAllText="Todos" Dense="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined"
+                       MultiSelectionTextFunc="@(s => s.Count == _motivos.Count ? "Todos" : $"{s.Count} de {_motivos.Count}")">
+                @foreach (var m in _motivos)
+                {
+                    <MudSelectItem T="int" Value="@m.Id">@m.Motivo</MudSelectItem>
+                }
+            </MudSelect>
+        </div>
     }
-
-    @* Internos: suma el cliente interno NORTUR (parametro.id_cliente — guardias y traslados
-       internos, ~30% del volumen acá). Excluido por defecto, como en los otros informes. *@
-    <MudSwitch T="bool" @bind-Value="_internos" Color="MudColor.Primary" Size="MudSize.Small"
-               Label="Internos" LabelPlacement="Placement.End" Style="flex-shrink:0;" />
 
     <div class="rfs-metrica">
         <MudRadioGroup T="string" Value="_metrica" ValueChanged="CambiarMetrica">
@@ -71,37 +85,27 @@
         </MudRadioGroup>
     </div>
 
-    @* Comparación mes contra mes: contra qué mes comparar cada mes (recálculo en memoria).
-       "Interanual" solo tiene números si el período abarca también el año anterior. *@
-    <MudSelect T="string" Label="Comparar" @bind-Value="_comparar" Dense="true"
-               Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:170px;">
-        <MudSelectItem T="string" Value="@("M1")">vs mes anterior</MudSelectItem>
-        <MudSelectItem T="string" Value="@("N")">vs N meses atrás</MudSelectItem>
-        <MudSelectItem T="string" Value="@("YoY")">vs año pasado</MudSelectItem>
-    </MudSelect>
-
-    @if (_comparar == "N")
-    {
-        <MudSelect T="int" Label="Salto" @bind-Value="_saltoN" Dense="true"
-                   Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:120px;">
-            <MudSelectItem T="int" Value="2">2 meses</MudSelectItem>
-            <MudSelectItem T="int" Value="3">3 meses</MudSelectItem>
-            <MudSelectItem T="int" Value="4">4 meses</MudSelectItem>
-            <MudSelectItem T="int" Value="6">6 meses</MudSelectItem>
+    @* Comparación de períodos: define un PERÍODO BASE que se trae de la base con una segunda
+       consulta (antes se calculaba solo con los meses ya cargados y por eso el interanual
+       quedaba vacío). Alimenta los KPIs, el gráfico mensual y la tabla a la vez. *@
+    <div class="rfs-campo" style="width:225px;">
+        <MudSelect T="string" Label="Comparar con" @bind-Value="_comparar" Dense="true"
+                   Margin="Margin.Dense" Variant="Variant.Outlined">
+            <MudSelectItem T="string" Value="@(CompNo)">Sin comparación</MudSelectItem>
+            <MudSelectItem T="string" Value="@(CompMesAnterior)">Mes anterior</MudSelectItem>
+            <MudSelectItem T="string" Value="@(CompAnioAnterior)">Mismo mes del año anterior</MudSelectItem>
         </MudSelect>
-    }
-
-    @* Variación: cambia toda la grilla a modo Δ (cada celda vs su mes base). En memoria. *@
-    <MudSwitch T="bool" @bind-Value="_verVariacion" Color="MudColor.Primary" Size="MudSize.Small"
-               Label="Variación" LabelPlacement="Placement.End" Style="flex-shrink:0;" />
+    </div>
 
     <span style="flex:1 1 auto;"></span>
 
-    <MudButton Variant="Variant.Filled" Color="MudColor.Primary"
-               OnClick="Cargar" Disabled="_cargando" StartIcon="@Icons.Material.Filled.Search"
-               Style="border-radius:8px; height:40px; text-transform:none; flex-shrink:0;">
-        @(_cargando ? "Cargando..." : "Aplicar filtros")
-    </MudButton>
+    <div style="display:flex; gap:6px; flex-shrink:0;">
+        <MudButton Variant="Variant.Filled" Color="MudColor.Primary"
+                   OnClick="Cargar" Disabled="_cargando" StartIcon="@Icons.Material.Filled.Search"
+                   Style="border-radius:8px; height:40px; text-transform:none;">
+            @(_cargando ? "Cargando..." : "Aplicar filtros")
+        </MudButton>
+    </div>
 </MudPaper>
 
 @if (_cargando)
@@ -114,29 +118,68 @@ else if (_filas.Count == 0)
 }
 else
 {
-    @* ── KPIs ── con foco activo se recalculan al subconjunto enfocado (cross-filter) *@
+    @* ── KPIs ── con foco activo se recalculan al subconjunto enfocado (cross-filter).
+       En modo Canceladas cambian de identidad: lo que importa ahí es la TASA y el motivo. *@
     <div class="rfs-kpis mb-3">
-        <KpiCard Label="@(_metrica == "Pax" ? "Total pax" : "Total viajes")" Value="@Fmt(_totalMetrica)"
-                 Sub="@($"prom. {Fmt(_promedioMensual)} {UnidadMetrica}/mes")" Color="@NorturColors.Azul" />
-        <KpiCard Label="Clientes con actividad" Value="@_clientesActivos.ToString()" Sub="en el período" Color="@NorturColors.Verde" />
-        <KpiCard Label="Cliente líder" Value="@_clienteLider"
-                 Sub="@($"{Fmt(_maxCliente)} {UnidadMetrica}")" Color="@NorturColors.Naranja" />
-        <KpiCard Label="Contratados" Value="@Fmt(_totalContratado)"
-                 Sub="@($"{_pctContratado}% del total")" Color="@NorturColors.Rojo" />
+        @if (!ModoCancel)
+        {
+            <KpiCard Label="@(_metrica == "Pax" ? "Total pax" : "Total viajes")" Value="@Fmt(_totalMetrica)"
+                     Sub="@SubTotal" Color="@NorturColors.Azul"
+                     Delta="@DeltaTxt(_totalMetrica, _totalBase)" DeltaClase="@DeltaCls(_totalMetrica, _totalBase)"
+                     Title="@TituloComparacion(_totalMetrica, _totalBase)" />
+            <KpiCard Label="Clientes activos" Value="@_clientesActivos.ToString()"
+                     Sub="@(HayComparacion ? $"vs {_clientesActivosBase}" : "en el período")"
+                     Color="@NorturColors.Verde"
+                     Delta="@DeltaTxt(_clientesActivos, _clientesActivosBase)" DeltaClase="@DeltaCls(_clientesActivos, _clientesActivosBase)"
+                     Title="@TituloComparacion(_clientesActivos, _clientesActivosBase)" />
+            <KpiCard Label="Cliente líder" Value="@_clienteLider"
+                     Sub="@($"{Fmt(_maxCliente)} {UnidadMetrica}")" Color="@NorturColors.Naranja"
+                     Title="@_clienteLider" />
+            <KpiCard Label="Contratados" Value="@Fmt(_totalContratado)"
+                     Sub="@($"{_pctContratado}% · ver detalle")" Color="@NorturColors.Rojo"
+                     Delta="@DeltaTxt(_totalContratado, _totalContratadoBase)" DeltaClase="@DeltaCls(_totalContratado, _totalContratadoBase)"
+                     OnClick="@(() => AbrirComposicionTipo("CONTRATADO"))"
+                     Title="Clic para ver de qué unidades y clientes está hecho este número" />
+        }
+        else
+        {
+            <KpiCard Label="@(_metrica == "Pax" ? "Pax cancelados" : "Canceladas")" Value="@Fmt(_totalMetrica)"
+                     Sub="@SubTotal" Color="@NorturColors.Rojo"
+                     Delta="@DeltaTxt(_totalMetrica, _totalBase)" DeltaClase="@DeltaClsInverso(_totalMetrica, _totalBase)"
+                     Title="@TituloComparacion(_totalMetrica, _totalBase)" />
+            <KpiCard Label="Tasa cancelación" Value="@($"{_tasaCancel:0.0}%")"
+                     Sub="@($"de {Fmt(_totalPeriodo)} reservas")" Color="@NorturColors.Naranja"
+                     Delta="@DeltaPctTxt(_tasaCancel, _tasaCancelBase)" DeltaClase="@DeltaClsInverso(_tasaCancel, _tasaCancelBase)"
+                     Title="@($"Canceladas / (canceladas + activas) del mismo período y tipo de servicio{(HayComparacion ? $" · {BaseLbl}: {_tasaCancelBase:0.0}%" : "")}")" />
+            @* Los nombres de motivo son larguísimos ("CANCELADO POR CLIENTE") y reventaban la
+               tarjeta: se muestra el sufijo, con el nombre completo en el tooltip. *@
+            <KpiCard Label="Motivo principal" Value="@MotivoCorto(_motivoLider)"
+                     Sub="@($"{Fmt(_maxMotivo)} de {Fmt(_totalMetrica)}")" Color="@NorturColors.Azul"
+                     OnClick="@(() => AbrirDetalleDim2(_motivoLider))"
+                     Title="@($"{_motivoLider} — clic para ver esas reservas")" />
+            <KpiCard Label="Más cancela" Value="@_clienteLider"
+                     Sub="@($"{Fmt(_maxCliente)} {UnidadMetrica}")" Color="@NorturColors.Verde"
+                     Title="@($"Cliente con más cancelaciones: {_clienteLider}")" />
+        }
     </div>
 
     <div @key="_chartsKey">
-        @* ── Barras apiladas mes × tipo (evolución mensual) ── *@
+        @* ── Evolución mensual ──
+           Sin comparación: barras APILADAS por la 2ª dimensión (composición del mes).
+           Con comparación: barras AGRUPADAS período vs período base — la lectura "X vs X-1"
+           que pidió la clienta, imposible de leer en un apilado. *@
         <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
-            @CabeceraFoco($"{(_metrica == "Pax" ? "Pax" : "Viajes")} por mes y tipo de unidad")
+            @CabeceraFoco(HayComparacion
+                ? $"{UnidadMetricaTit} por mes — período vs {BaseLbl}"
+                : $"{UnidadMetricaTit} por mes y {Dim2Label.ToLowerInvariant()}")
             <ApexChart TItem="ChartItem" Options="_optsBarMes" Height="320" @ref="_barMesChart"
                        OnDataPointSelection="OnBarMesSelection" OnLegendClicked="OnBarMesLegendClicked">
-                @foreach (var tipo in _tiposPresentes)
+                @foreach (var serie in _seriesMes)
                 {
-                    var t = tipo;
+                    var s = serie;
                     <ApexPointSeries TItem="ChartItem"
-                                     Items="_chartData.Where(x => x.Tipo == t).ToList()"
-                                     Name="@t"
+                                     Items="_chartData.Where(x => x.Serie == s).ToList()"
+                                     Name="@s"
                                      SeriesType="SeriesType.Bar"
                                      XValue="@(x => x.Mes)"
                                      YValue="@(x => x.Valor)" />
@@ -144,13 +187,13 @@ else
             </ApexChart>
         </MudPaper>
 
-        @* ── Ranking de clientes + donut por tipo ── *@
+        @* ── Ranking de clientes + composición de la 2ª dimensión ── *@
         <MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
             <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
                     <div class="rfs-bar-head mb-2">
                         <div class="rfs-bar-title">
-                            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@($"{(_metrica == "Pax" ? "Pax" : "Viajes")} por cliente — {TituloTopN}")</MudText>
+                            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@($"{UnidadMetricaTit} por cliente — {TituloTopN}")</MudText>
                             <MudSelect T="int" Value="_topN" ValueChanged="CambiarTopN"
                                        Label="Mostrar" Dense="true" Margin="Margin.Dense"
                                        Variant="Variant.Outlined" Class="rfs-topn-select">
@@ -175,65 +218,107 @@ else
             </MudItem>
             <MudItem xs="12" md="5" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
-                    @CabeceraFoco("Distribución por tipo de unidad")
-                    <ApexChart TItem="DonutItem" Options="_optsPieTipo" Height="320" @ref="_pieTipoChart"
-                               OnDataPointSelection="OnPieTipoSelection" OnLegendClicked="OnPieTipoLegendClicked">
+                    <div class="rfs-bar-head mb-2">
+                        <div class="rfs-bar-title">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                                @(ModoCancel ? "Cancelaciones por motivo" : "Distribución por tipo de unidad")
+                            </MudText>
+                            @if (!ModoCancel)
+                            {
+                                @* El criterio de "contratado" es una definición de negocio abierta: se elige
+                                   acá, al lado del gráfico que clasifica, y recalcula en memoria. *@
+                                <MudSelect T="string" Value="_criterio" ValueChanged="CambiarCriterio"
+                                           Label="Criterio" Dense="true" Margin="Margin.Dense"
+                                           Variant="Variant.Outlined" Class="rfs-topn-select" Style="width:190px;">
+                                    <MudSelectItem T="string" Value="@ReportService.CriterioUso">Por uso del vehículo</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@ReportService.CriterioFletero">Por dueño (fletero)</MudSelectItem>
+                                </MudSelect>
+                            }
+                        </div>
+                        @ChipsFoco
+                    </div>
+                    <ApexChart TItem="DonutItem" Options="_optsPieDim2" Height="300" @ref="_pieDim2Chart"
+                               OnDataPointSelection="OnPieDim2Selection" OnLegendClicked="OnPieDim2LegendClicked">
                         <ApexPointSeries TItem="DonutItem"
-                                         Items="_donutTipo"
+                                         Items="_donutDim2"
                                          Name="@UnidadMetrica"
                                          SeriesType="SeriesType.Donut"
                                          XValue="@(x => x.Label)"
                                          YValue="@(x => x.Valor)" />
                     </ApexChart>
+                    @if (!ModoCancel)
+                    {
+                        <MudText Typo="Typo.caption" Style="color:#8FA3BC; display:block; margin-top:4px;">
+                            @(_criterio == ReportService.CriterioFletero
+                                ? "Contratado = la unidad pertenece a un fletero distinto de NORTUR."
+                                : "Contratado = la ficha del vehículo tiene uso CONTRATADO.")
+                        </MudText>
+                    }
                 </MudPaper>
             </MudItem>
         </MudGrid>
     </div>
 
-    @* ── Tabla pivote cliente × mes ── *@
+    @* ── Tabla pivote cliente × (mes | motivo) ── *@
     <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
         <div class="d-flex justify-space-between align-center flex-wrap mb-3" style="gap:8px;">
             <div>
                 <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
-                    Detalle: @(_metrica == "Pax" ? "pax" : "viajes") por cliente y mes
-                    @if (_verVariacion)
+                    Detalle: @UnidadMetrica por cliente y @(EjeMotivo ? "motivo" : "mes")
+                    @if (HayComparacion && !EjeMotivo)
                     {
-                        <span style="color:#8FA3BC; font-weight:600;">· variación vs @BaseLbl</span>
+                        <span style="color:#8FA3BC; font-weight:600;">· comparado con @BaseLbl</span>
                     }
                 </MudText>
                 <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
-                    @if (_verVariacion)
-                    {
-                        @:Cada celda muestra el Δ vs @BaseLbl (verde sube · rojo baja) · la columna Tendencia resume el último mes
-                    }
-                    else
-                    {
-                        @:Click en una celda para ver los viajes uno por uno · click en el nombre de un cliente para enfocar el tablero
-                    }
+                    Click en una celda para ver los viajes uno por uno · click en el nombre de un cliente para enfocar el tablero
                 </MudText>
             </div>
-            <MudButton Variant="Variant.Filled" Color="MudColor.Success"
-                       StartIcon="@Icons.Material.Filled.Download"
-                       OnClick="DescargarExcel" Disabled="_cargandoDet"
-                       Style="border-radius:8px; text-transform:none;">
-                Descargar Excel
-            </MudButton>
+            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                @if (ModoCancel)
+                {
+                    <MudSelect T="bool" Value="_ejeMotivo" ValueChanged="CambiarEje" Label="Columnas"
+                               Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:130px;">
+                        <MudSelectItem T="bool" Value="false">Por mes</MudSelectItem>
+                        <MudSelectItem T="bool" Value="true">Por motivo</MudSelectItem>
+                    </MudSelect>
+                }
+                @if (HayComparacion && !EjeMotivo)
+                {
+                    @* Reemplaza al viejo switch "Variación", que vivía arriba en la barra de filtros
+                       y por eso parecía no hacer nada: su único efecto está acá abajo. *@
+                    <MudSelect T="string" Value="_modoCelda" ValueChanged="CambiarModoCelda" Label="Mostrar"
+                               Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:165px;">
+                        <MudSelectItem T="string" Value="@CeldaCantidad">Cantidad</MudSelectItem>
+                        <MudSelectItem T="string" Value="@CeldaVariacion">Variación</MudSelectItem>
+                        <MudSelectItem T="string" Value="@CeldaAmbos">Cantidad y variación</MudSelectItem>
+                    </MudSelect>
+                }
+                <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                           StartIcon="@Icons.Material.Filled.Download"
+                           OnClick="DescargarExcel" Disabled="_cargandoDet"
+                           Style="border-radius:8px; text-transform:none; height:40px;">
+                    Descargar Excel
+                </MudButton>
+            </div>
         </div>
         @if (_cargandoDet)
         {
             <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-2" Style="border-radius:4px;" />
         }
+        @* rfs-tabla-tend: habilita el sticky de la anteúltima columna (TOTAL) porque esta tabla
+           lleva una columna extra a la derecha. Los demás pivotes NO la llevan (ver app.css). *@
         <div class="rfs-tabla-wrap">
-            <table class="rfs-tabla">
+            <table class="rfs-tabla rfs-tabla-tend @(HayComparacion ? "rfs-tabla-comp" : "")">
                 <thead>
                     <tr>
                         <th class="rfs-col-fecha" style="min-width:220px;">Cliente</th>
-                        @foreach (var m in _pivMeses)
+                        @foreach (var c in _pivCols)
                         {
-                            <th class="rfs-th-serv">@FmtMes(m)</th>
+                            <th class="rfs-th-serv">@ColHeader(c)</th>
                         }
                         <th class="rfs-th-total">TOTAL</th>
-                        <th class="rfs-th-tend" title="@($"Δ del último mes ({FmtMes(UltimoMes)}) vs {BaseLbl} + evolución")">TENDENCIA</th>
+                        <th class="rfs-th-tend" title="@ColCompTitulo">@ColCompHeader</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -245,98 +330,27 @@ else
                                 style="max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
                                 title="Clic para enfocar el tablero en @NombreDe(cli)"
                                 @onclick="() => ToggleFocoCliente(cli)">@NombreDe(cli)</td>
-                            @foreach (var m in _pivMeses)
+                            @foreach (var c in _pivCols)
                             {
-                                var mes = m;
-                                var v = PivVal(cli, mes);
-                                if (!_verVariacion)
-                                {
-                                    @* Modo cantidad (default) *@
-                                    if (v > 0)
-                                    {
-                                        <td class="rfs-num rfs-click @atenua" title="Ver viajes de @NombreDe(cli) en @FmtMes(mes)"
-                                            @onclick="() => AbrirDetalleCelda(cli, mes)">@Fmt(v)</td>
-                                    }
-                                    else
-                                    {
-                                        <td class="rfs-num rfs-cero @atenua">·</td>
-                                    }
-                                }
-                                else
-                                {
-                                    @* Modo variación: Δ vs mes base, con color. Sin base → "·" *@
-                                    var d = PivVar(cli, mes);
-                                    if (d is null)
-                                    {
-                                        <td class="rfs-num rfs-cero @atenua">·</td>
-                                    }
-                                    else if (v > 0 || d.Value != 0)
-                                    {
-                                        <td class="rfs-num rfs-var rfs-click @ClaseVar(d) @atenua"
-                                            title="@($"{NombreDe(cli)} · {FmtMes(mes)}: {Fmt(v)} (vs {BaseLbl})")"
-                                            @onclick="() => AbrirDetalleCelda(cli, mes)">@FmtVar(d)</td>
-                                    }
-                                    else
-                                    {
-                                        <td class="rfs-num rfs-cero @atenua">·</td>
-                                    }
-                                }
+                                var col = c;
+                                @CeldaPivote(cli, col, atenua)
                             }
                             <td class="rfs-num rfs-tot rfs-click @atenua" title="Ver todos los viajes de @NombreDe(cli)"
                                 @onclick="() => AbrirDetalleCliente(cli)">@Fmt(PivTotFila(cli))</td>
-                            @{ var (td, tp) = TendenciaCliente(cli); }
-                            <td class="rfs-tend @atenua">
-                                <div class="rfs-tend-wrap">
-                                    <span class="rfs-tend-delta @ClaseVar(td)" title="@($"{FmtMes(UltimoMes)} vs {BaseLbl}")">
-                                        @if (td is not null && td.Value != 0)
-                                        {
-                                            <span class="rfs-tend-arrow">@(td.Value > 0 ? "▲" : "▼")</span>
-                                        }
-                                        <span>@FmtVar(td)</span>
-                                        @if (tp is not null)
-                                        {
-                                            <span class="rfs-tend-pct">@FmtPct(tp)</span>
-                                        }
-                                    </span>
-                                    @Sparkline(mes => PivVal(cli, mes))
-                                </div>
-                            </td>
+                            <td class="rfs-tend @atenua">@CeldaComparacion(cli)</td>
                         </tr>
                     </Virtualize>
                 </tbody>
                 <tfoot>
                     <tr>
                         <td class="rfs-col-fecha rfs-tot">TOTAL</td>
-                        @foreach (var m in _pivMeses)
+                        @foreach (var c in _pivCols)
                         {
-                            var mes = m;
-                            if (!_verVariacion)
-                            {
-                                <td class="rfs-num rfs-tot rfs-click" title="Ver todos los viajes de @FmtMes(mes)"
-                                    @onclick="() => AbrirDetalleMes(mes)">@Fmt(PivTotCol(mes))</td>
-                            }
-                            else
-                            {
-                                var d = PivVarTotCol(mes);
-                                <td class="rfs-num rfs-tot rfs-var rfs-click @ClaseVar(d)"
-                                    title="@($"Total {FmtMes(mes)}: {Fmt(PivTotCol(mes))} (vs {BaseLbl})")"
-                                    @onclick="() => AbrirDetalleMes(mes)">@FmtVar(d)</td>
-                            }
+                            var col = c;
+                            @CeldaPivoteTotal(col)
                         }
                         <td class="rfs-num rfs-tot rfs-grantot">@Fmt(_granTotal)</td>
-                        @{ var dTot = PivVarTotCol(UltimoMes); }
-                        <td class="rfs-tend rfs-tot">
-                            <div class="rfs-tend-wrap">
-                                <span class="rfs-tend-delta @ClaseVar(dTot)" title="@($"Total {FmtMes(UltimoMes)} vs {BaseLbl}")">
-                                    @if (dTot is not null && dTot.Value != 0)
-                                    {
-                                        <span class="rfs-tend-arrow">@(dTot.Value > 0 ? "▲" : "▼")</span>
-                                    }
-                                    <span>@FmtVar(dTot)</span>
-                                </span>
-                                @Sparkline(mes => PivTotCol(mes))
-                            </div>
-                        </td>
+                        <td class="rfs-tend rfs-tot">@CeldaComparacion(null)</td>
                     </tr>
                 </tfoot>
             </table>
@@ -348,6 +362,16 @@ else
     private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
     private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
 
+    // Modos de comparación (definen el PERÍODO BASE, que se trae con una 2ª consulta).
+    private const string CompNo = "NO";
+    private const string CompMesAnterior = "M1";
+    private const string CompAnioAnterior = "YOY";
+
+    // Modos de celda del pivote (reemplazan al viejo switch "Variación").
+    private const string CeldaCantidad = "CANT";
+    private const string CeldaVariacion = "VAR";
+    private const string CeldaAmbos = "AMBOS";
+
     // ── Filtros en edición ──
     // Default: los últimos 6 meses calendario (el pivote tiene columnas mensuales).
     private DateTime? _desde = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-5);
@@ -355,32 +379,37 @@ else
     private string _verSel = "Activas";                 // "Activas" | "Canceladas"
     private List<MotivoCancelaDto> _motivos = new();
     private IReadOnlyCollection<int> _motivosSel = new HashSet<int>();
-    private bool _internos;                             // default: cliente interno NORTUR excluido
+    private static readonly IReadOnlyList<string> _categorias = ReportService.CategoriasServicio;
+    // Solo Turismo por defecto = el alcance histórico del informe (origen='T' sin el cliente
+    // interno). Tildando Empresa se ve la operación completa, que era ~93% del volumen invisible.
+    private IReadOnlyCollection<string> _categoriasSel = new HashSet<string> { "Turismo" };
     private string _metrica = "Reservas";               // "Reservas" (viajes) | "Pax"
+    private string _comparar = CompNo;
 
-    // ── Comparación mes contra mes (en memoria, sin re-query) ──
-    // El usuario elige contra qué mes comparar cada mes: el anterior, N meses atrás, o el
-    // mismo mes del año pasado. Con "Variación" tildado la tabla muestra el Δ en cada celda
-    // en vez de la cantidad; la columna "Tendencia" (siempre visible) resume el último mes.
-    private string _comparar = "M1";     // "M1" (mes anterior) | "N" (N meses atrás) | "YoY" (interanual)
-    private int _saltoN = 2;             // salto en meses cuando _comparar == "N"
-    private bool _verVariacion;          // false = cantidades (default), true = Δ en cada celda
+    // ── Controles que recalculan en memoria (no son filtros de consulta) ──
+    private string _criterio = ReportService.CriterioUso;   // qué cuenta como unidad CONTRATADA
+    private string _modoCelda = CeldaAmbos;                 // cómo se pinta cada celda del pivote
+    private bool _ejeMotivo;                                // columnas del pivote: mes (false) | motivo (true)
 
     // ── Foco / cross-filter (estilo Power BI) — DOS dimensiones combinables ──
-    // Cliente AND tipo de unidad, como banda × vehículo en el informe de banda horaria.
-    // El foco de una dimensión RESALTA en sus propios visuales y FILTRA los de la otra,
-    // los KPIs y la tabla. Todo en memoria, sin re-query. null = sin foco.
+    // Cliente AND "dimensión 2", que es el TIPO DE UNIDAD en reservas activas y el MOTIVO en
+    // canceladas (en canceladas el tipo de unidad no dice nada: el 100% está SIN REALIZAR).
     private string? _clienteFocus;   // IdCliente (clave estable; el nombre puede repetirse)
-    private string? _tipoFocus;
+    private string? _dim2Focus;
     private bool EnFocoCliente(string idCli) => _clienteFocus is null || _clienteFocus == idCli;
 
     // ── Filtros APLICADOS (snapshot al tocar "Aplicar") ──
     private DateOnly _fDesdeAp, _fHastaAp;
-    private bool _internosAp;
+    private DateOnly _bDesdeAp, _bHastaAp;              // período base de la comparación
+    private List<string> _catAp = new();
     private bool _canceladasAp;
     private List<int> _motAp = new();
+    private string _compararAp = CompNo;
 
     private List<ReservaClienteRow> _filas = new();
+    private List<ReservaClienteRow> _filasBase = new();      // período de comparación
+    private List<ReservaClienteRow> _filasOtroEstado = new(); // activas cuando se ven canceladas (tasa)
+    private List<ReservaClienteRow> _filasOtroEstadoBase = new();
     private List<ReservaClienteDetalleRow>? _detalle;   // lazy: se trae al primer drill-down/Excel
     private bool _cargando;
     private bool _cargandoDet;
@@ -389,27 +418,38 @@ else
     private static readonly IReadOnlyList<string> _tipos = ReportService.TiposReservaCliente;
 
     // KPIs
-    private int _totalMetrica;
+    private int _totalMetrica, _totalBase;
     private int _promedioMensual;
-    private int _clientesActivos;
+    private int _clientesActivos, _clientesActivosBase;
     private string _clienteLider = "—";
     private int _maxCliente;
-    private int _totalContratado;
+    private int _totalContratado, _totalContratadoBase;
     private int _pctContratado;
+    private int _totalPeriodo;                          // canceladas + activas (para la tasa)
+    private double _tasaCancel, _tasaCancelBase;
+    private string _motivoLider = "—";
+    private int _maxMotivo;
+
     private string UnidadMetrica => _metrica == "Pax" ? "pax" : "viajes";
+    private string UnidadMetricaTit => _metrica == "Pax" ? "Pax" : "Viajes";
+
+    private bool ModoCancel => _canceladasAp;
+    private bool HayComparacion => _compararAp != CompNo;
+    private bool EjeMotivo => ModoCancel && _ejeMotivo;
+    private string Dim2Label => ModoCancel ? "Motivo" : "Tipo de unidad";
 
     // ── Gráficos ApexCharts ──
-    private record ChartItem(string Mes, string Tipo, decimal Valor);
+    private record ChartItem(string Mes, string Serie, decimal Valor);
     private record BarItem(string IdCliente, string Cliente, decimal Valor);
     private record DonutItem(string Label, decimal Valor);
     private List<ChartItem> _chartData = new();
-    private List<string> _tiposPresentes = new();
+    private List<string> _seriesMes = new();
     private List<BarItem> _barItems = new();
-    private List<DonutItem> _donutTipo = new();
+    private List<DonutItem> _donutDim2 = new();
 
     private ApexChart<ChartItem>? _barMesChart;
     private ApexChart<BarItem>? _barCliChart;
-    private ApexChart<DonutItem>? _pieTipoChart;
+    private ApexChart<DonutItem>? _pieDim2Chart;
 
     // Color fijo por tipo de unidad (3 categorías, semántica estable en todo el informe):
     // PROPIO azul, CONTRATADO naranja, SIN REALIZAR gris (todavía sin unidad asignada).
@@ -419,10 +459,9 @@ else
         ["CONTRATADO"] = "#F99410",
         ["SIN REALIZAR"] = "#94A3B8",
     };
-    private static string ColorTipo(string tipo) => _colorTipo.TryGetValue(tipo, out var c) ? c : "#94A3B8";
 
-    // Paleta categórica de 15 hues para el ranking de clientes (la misma del informe de
-    // fecha/servicio, validada con dataviz) + gris para los que caen fuera del top 15.
+    // Paleta categórica de 15 hues (la misma del informe de fecha/servicio, validada con
+    // dataviz) + gris para lo que cae fuera.
     private static readonly List<string> _paletteCli = new()
     {
         "#2058D0", "#F99410", "#16A34A", "#DC2626", "#0EA5E9",
@@ -430,22 +469,28 @@ else
         "#4F46E5", "#EA580C", "#059669", "#9333EA", "#0891B2"
     };
     private const string _colorOtros = "#94A3B8";
+    private const string _colorBase = "#C7D5E8";     // barras del período de comparación
 
     // Mapa cliente → color por ranking del dataset COMPLETO (color y orden estables: no
     // cambian al enfocar). Color por entidad, no por posición (regla dataviz).
     private Dictionary<string, string> _colorPorCliente = new();
     private Dictionary<string, string> _nombrePorCliente = new();
+    private Dictionary<string, string> _colorPorMotivo = new();
     private string ColorCli(string idCli) => _colorPorCliente.TryGetValue(idCli, out var c) ? c : _colorOtros;
     private string NombreDe(string idCli) => _nombrePorCliente.TryGetValue(idCli, out var n) ? n : idCli;
+
+    // Color de una categoría de la 2ª dimensión (tipo de unidad o motivo).
+    private string ColorDim2(string cat) => ModoCancel
+        ? (_colorPorMotivo.TryGetValue(cat, out var c) ? c : _colorOtros)
+        : (_colorTipo.TryGetValue(cat, out var t) ? t : _colorOtros);
 
     // Color ATENUADO (gris claro) si hay foco en esa dimensión y no es la categoría enfocada.
     private string ColorFocoCli(string idCli) =>
         (_clienteFocus is null || idCli == _clienteFocus) ? ColorCli(idCli) : "#D9E1EC";
-    private string ColorFocoTipo(string tipo) =>
-        (_tipoFocus is null || tipo == _tipoFocus) ? ColorTipo(tipo) : "#D9E1EC";
+    private string ColorFocoDim2(string cat) =>
+        (_dim2Focus is null || cat == _dim2Focus) ? ColorDim2(cat) : "#D9E1EC";
 
-    // Cuántos clientes muestra el gráfico de barras (selector "Mostrar"). Default Top 10
-    // (pedido por el usuario, 13/07/2026); el usuario puede subir a 15/20/Todos.
+    // Cuántos clientes muestra el gráfico de barras (selector "Mostrar"). Default Top 10.
     private int _topN = 10;
     private List<(string Id, string Nombre, int Total)> _rankingClientes = new();
     private string TituloTopN => _topN >= 999
@@ -453,11 +498,19 @@ else
         : $"top {Math.Min(_topN, _barItems.Count)}";
     private int _altoBarras = 360;
 
-    // Chips de foco (o hint) — a la derecha del título de cada panel de gráfico. La ✕ de
-    // cualquier chip limpia ESE foco en todo el tablero.
+    // La 2ª dimensión de una fila, según el modo (tipo de unidad o motivo de cancelación).
+    private string Dim2De(ReservaClienteRow f) => ModoCancel ? MotivoNombre(f.IdMotivo) : f.TipoSegun(_criterio);
+    private string Dim2De(ReservaClienteDetalleRow d) => ModoCancel ? MotivoNombre(d.IdMotivo) : d.TipoSegun(_criterio);
+    private string MotivoNombre(int id) =>
+        _motivos.FirstOrDefault(m => m.Id == id)?.Motivo is { Length: > 0 } n ? n : "(sin motivo)";
+
+    // Categorías de la 2ª dimensión presentes, en orden estable.
+    private List<string> _dim2Cats = new();
+
+    // ── Chips de foco (o hint) — a la derecha del título de cada panel de gráfico ──
     private RenderFragment ChipsFoco => __builder =>
     {
-        @if (_clienteFocus is not null || _tipoFocus is not null)
+        @if (_clienteFocus is not null || _dim2Focus is not null)
         {
             <div style="display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap;">
                 @if (_clienteFocus is not null)
@@ -466,17 +519,17 @@ else
                         <span class="rfs-focus__lbl">Cliente:</span>
                         <span class="rfs-focus__val" style="@($"background:{ColorCli(_clienteFocus)};")">@NombreDe(_clienteFocus)</span>
                         <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
-                                       OnClick="LimpiarFocoCliente" Title="Quitar filtro de cliente"
+                                       OnClick="LimpiarFocoCliente" title="Quitar filtro de cliente"
                                        Style="color:#64748B; padding:2px;" />
                     </div>
                 }
-                @if (_tipoFocus is not null)
+                @if (_dim2Focus is not null)
                 {
                     <div class="rfs-focus">
-                        <span class="rfs-focus__lbl">Tipo:</span>
-                        <span class="rfs-focus__val" style="@($"background:{ColorTipo(_tipoFocus)};")">@_tipoFocus</span>
+                        <span class="rfs-focus__lbl">@(Dim2Label):</span>
+                        <span class="rfs-focus__val" style="@($"background:{ColorDim2(_dim2Focus)};")">@_dim2Focus</span>
                         <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
-                                       OnClick="LimpiarFocoTipo" Title="Quitar filtro de tipo"
+                                       OnClick="LimpiarFocoDim2" title="Quitar filtro"
                                        Style="color:#64748B; padding:2px;" />
                     </div>
                 }
@@ -484,7 +537,7 @@ else
         }
         else
         {
-            <span class="rfs-focus-hint">💡 Clic en un cliente o un tipo de unidad para enfocar el tablero</span>
+            <span class="rfs-focus-hint">💡 Clic en un cliente o en @(ModoCancel ? "un motivo" : "un tipo de unidad") para enfocar el tablero</span>
         }
     };
 
@@ -496,6 +549,99 @@ else
         </div>
     };
 
+    // ── Celdas del pivote (extraídas para no repetir el markup en 3 modos) ──
+
+    private RenderFragment CeldaPivote(string cli, string col, string atenua) => __builder =>
+    {
+        var v = PivVal(cli, col);
+        var d = MostrarVariacion ? PivVar(cli, col) : null;
+
+        @if (_modoCelda == CeldaVariacion && MostrarVariacion)
+        {
+            @if (d is null || (v == 0 && d.Value == 0))
+            {
+                <td class="rfs-num rfs-cero @atenua">·</td>
+            }
+            else
+            {
+                <td class="rfs-num rfs-var rfs-click @ClaseVar(d) @atenua"
+                    title="@($"{NombreDe(cli)} · {ColHeader(col)}: {Fmt(v)} · {BaseLbl}: {Fmt(PivValBase(cli, col))}")"
+                    @onclick="() => AbrirDetalleCelda(cli, col)">@FmtVar(d)</td>
+            }
+        }
+        else if (v > 0)
+        {
+            <td class="rfs-num rfs-click @atenua" title="@TituloCelda(cli, col, v)"
+                @onclick="() => AbrirDetalleCelda(cli, col)">
+                @Fmt(v)
+                @if (_modoCelda == CeldaAmbos && MostrarVariacion && d is not null && d.Value != 0)
+                {
+                    <span class="rfs-celda-delta @ClaseVar(d)">@FmtVar(d)</span>
+                }
+            </td>
+        }
+        else
+        {
+            <td class="rfs-num rfs-cero @atenua">·</td>
+        }
+    };
+
+    private RenderFragment CeldaPivoteTotal(string col) => __builder =>
+    {
+        var v = PivTotCol(col);
+        var d = MostrarVariacion ? PivVarTotCol(col) : null;
+
+        @if (_modoCelda == CeldaVariacion && MostrarVariacion)
+        {
+            <td class="rfs-num rfs-tot rfs-var rfs-click @ClaseVar(d)"
+                title="@($"Total {ColHeader(col)}: {Fmt(v)} · {BaseLbl}: {Fmt(PivTotColBase(col))}")"
+                @onclick="() => AbrirDetalleColumna(col)">@FmtVar(d)</td>
+        }
+        else
+        {
+            <td class="rfs-num rfs-tot rfs-click" title="@($"Ver todos los viajes de {ColHeader(col)}")"
+                @onclick="() => AbrirDetalleColumna(col)">
+                @Fmt(v)
+                @if (_modoCelda == CeldaAmbos && MostrarVariacion && d is not null && d.Value != 0)
+                {
+                    <span class="rfs-celda-delta @ClaseVar(d)">@FmtVar(d)</span>
+                }
+            </td>
+        }
+    };
+
+    // Última columna: sin comparación = solo la evolución (sparkline); con comparación = el
+    // valor del período base + Δ + % + sparkline. cli == null → fila TOTAL.
+    private RenderFragment CeldaComparacion(string? cli) => __builder =>
+    {
+        var actual = cli is null ? _granTotal : PivTotFila(cli);
+        var previo = cli is null ? _totalBase : PivTotFilaBase(cli);
+        Func<string, int> serie = cli is null ? PivTotColMes : mes => PivValMes(cli, mes);
+
+        <div class="rfs-tend-wrap">
+            @if (HayComparacion)
+            {
+                var delta = actual - previo;
+                double? pct = previo > 0 ? 100.0 * delta / previo : null;
+                <span class="rfs-tend-delta @ClaseVar(delta)"
+                      title="@($"{(cli is null ? "Total" : NombreDe(cli))} · período: {Fmt(actual)} · {BaseLbl}: {Fmt(previo)}")">
+                    <span class="rfs-tend-base">@Fmt(previo)</span>
+                    @if (delta != 0)
+                    {
+                        <span class="rfs-tend-arrow">@(delta > 0 ? "▲" : "▼")</span>
+                    }
+                    <span>@FmtVar(delta)</span>
+                    @if (pct is not null)
+                    {
+                        <span class="rfs-tend-pct">@FmtPct(pct)</span>
+                    }
+                </span>
+            }
+            @Sparkline(serie)
+        </div>
+    };
+
+    // ── Opciones de los gráficos ──
     private readonly ApexChartOptions<ChartItem> _optsBarMes = new()
     {
         Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Stacked = true, Animations = new() { Enabled = false } },
@@ -537,11 +683,12 @@ else
         },
     };
 
-    private readonly ApexChartOptions<DonutItem> _optsPieTipo = new()
+    private readonly ApexChartOptions<DonutItem> _optsPieDim2 = new()
     {
         Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
         Colors = new List<string> { "#2058D0", "#F99410", "#94A3B8" },
         Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px", OnItemClick = new() { ToggleDataSeries = false } },
+        DataLabels = new() { Enabled = false },   // torta limpia: los números van en la leyenda
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
         States = new()
         {
@@ -551,16 +698,22 @@ else
     };
 
     // ── Pivote ──
-    private List<string> _pivMeses = new();
-    private List<string> _pivClientes = new();          // IdCliente, orden por total desc
+    private List<string> _pivCols = new();               // meses "yyyy-MM" o nombres de motivo
+    private List<string> _pivMeses = new();              // SIEMPRE los meses (sparkline/comparación)
+    private List<string> _pivClientes = new();           // IdCliente, orden por total desc
     private Dictionary<(string, string), int> _pivMap = new();
-    private Dictionary<string, int> _pivTotFila = new();
-    private Dictionary<string, int> _pivTotCol = new();
+    private Dictionary<(string, string), int> _pivMapBase = new();
+    // Serie por MES, independiente del eje elegido para las columnas (alimenta el sparkline).
+    private Dictionary<(string, string), int> _pivMapMes = new();
+    private Dictionary<string, int> _pivTotColPorMes = new();
+    private Dictionary<string, int> _pivTotFila = new(), _pivTotFilaBase = new();
+    private Dictionary<string, int> _pivTotCol = new(), _pivTotColBase = new();
     private int _granTotal;
 
     // "2026-02" → "02/2026"
     private static string FmtMes(string mes) =>
-        mes.Length == 7 ? $"{mes[5..]}/{mes[..4]}" : mes;
+        mes.Length == 7 && mes[4] == '-' ? $"{mes[5..]}/{mes[..4]}" : mes;
+    private string ColHeader(string col) => EjeMotivo ? col : FmtMes(col);
 
     protected override async Task OnInitializedAsync()
     {
@@ -575,37 +728,91 @@ else
             return;
         }
         _motivos = await Reports.GetMotivosCancelacionAsync();
-        // Default del modo canceladas: solo "CANCELADO POR CLIENTE" (motivo 2, el del FoxPro).
-        _motivosSel = new HashSet<int>(_motivos.Where(m => m.Id == 2).Select(m => m.Id));
-        if (_motivosSel.Count == 0)
-            _motivosSel = new HashSet<int>(_motivos.Select(m => m.Id));
+        // Default: TODOS los motivos. El FoxPro traía hardcodeado solo el 2 ("CANCELADO POR
+        // CLIENTE"), que escondía las 371 cancelaciones "POR ERROR EN CARGA" de 2025-26.
+        _motivosSel = new HashSet<int>(_motivos.Select(m => m.Id));
         await Cargar();
     }
+
+    // El período Desde–Hasta no puede superar este ancho: rangos más largos pegan contra
+    // millones de filas de viaje y afectan la performance del servidor (pedido del usuario, 30/07/2026).
+    // Ojo: este informe además dispara la 2ª consulta del período base (mismo ancho), así que el
+    // costo real del tope se duplica cuando hay comparación activa.
+    private const int RangoMaximoDias = 400;
 
     private async Task Cargar()
     {
         if (_desde is null || _hasta is null) return;
+
+        var dias = (_hasta.Value.Date - _desde.Value.Date).TotalDays;
+        if (dias > RangoMaximoDias)
+        {
+            // Cartel "Contorno" — estándar del proyecto para validaciones bloqueantes (ver app.css § nt-toast-contorno).
+            Snackbar.Add(
+                $"El rango Desde–Hasta no puede superar los {RangoMaximoDias} días (elegiste {(int)dias}). Achicá el período e intentá de nuevo.",
+                Severity.Error,
+                config =>
+                {
+                    config.SnackbarVariant = Variant.Outlined;
+                    config.SnackbarTypeClass = "nt-toast-contorno";
+                });
+            return;
+        }
+
         _cargando = true;
         StateHasChanged();
 
         // Snapshot de filtros aplicados (convención del service: lista de motivos vacía = todos)
         _fDesdeAp = DateOnly.FromDateTime(_desde.Value);
         _fHastaAp = DateOnly.FromDateTime(_hasta.Value);
-        _internosAp = _internos;
+        _catAp = _categoriasSel.ToList();
         _canceladasAp = _verSel == "Canceladas";
         _motAp = !_canceladasAp || _motivosSel.Count == _motivos.Count
             ? new List<int>()
             : _motivosSel.ToList();
+        _compararAp = _comparar;
         _detalle = null;
         // Un nuevo conjunto de filtros descarta los focos anteriores.
         _clienteFocus = null;
-        _tipoFocus = null;
+        _dim2Focus = null;
+        if (!_canceladasAp) _ejeMotivo = false;
 
-        _filas = await Reports.GetReservasPorClienteAsync(_fDesdeAp, _fHastaAp, _internosAp, _canceladasAp, _motAp);
+        _filas = await Reports.GetReservasPorClienteAsync(_fDesdeAp, _fHastaAp, _catAp, _canceladasAp, _motAp);
+
+        // Período base: desplazamiento DÍA A DÍA del rango elegido (no meses calendario
+        // completos), así la cobertura del mes base espeja la del mes actual y un mes en curso
+        // no se compara contra uno completo.
+        _filasBase = new();
+        if (HayComparacion)
+        {
+            (_bDesdeAp, _bHastaAp) = RangoBase(_fDesdeAp, _fHastaAp, _compararAp);
+            _filasBase = await Reports.GetReservasPorClienteAsync(_bDesdeAp, _bHastaAp, _catAp, _canceladasAp, _motAp);
+        }
+
+        // Tasa de cancelación: hace falta el OTRO estado del mismo período para el denominador.
+        _filasOtroEstado = new();
+        _filasOtroEstadoBase = new();
+        if (_canceladasAp)
+        {
+            _filasOtroEstado = await Reports.GetReservasPorClienteAsync(_fDesdeAp, _fHastaAp, _catAp, false, new List<int>());
+            if (HayComparacion)
+                _filasOtroEstadoBase = await Reports.GetReservasPorClienteAsync(_bDesdeAp, _bHastaAp, _catAp, false, new List<int>());
+        }
+
         Recalcular();
         _chartsKey = Guid.NewGuid();   // datos nuevos → remontar los charts
 
         _cargando = false;
+    }
+
+    // Rango del período de comparación: el mismo rango corrido un mes o un año atrás.
+    private (DateOnly, DateOnly) RangoBase(DateOnly desde, DateOnly hasta, string modo)
+    {
+        var d = modo == CompAnioAnterior ? desde.AddYears(-1) : desde.AddMonths(-1);
+        var h = modo == CompAnioAnterior ? hasta.AddYears(-1) : hasta.AddMonths(-1);
+        if (d < ReportService.FechaMinValida) d = ReportService.FechaMinValida;
+        if (h < ReportService.FechaMinValida) h = ReportService.FechaMinValida;
+        return (d, h);
     }
 
     // Cambio de métrica: recálculo en memoria, sin nueva query. Cambia la forma de los
@@ -613,17 +820,34 @@ else
     private void CambiarMetrica(string metrica)
     {
         _metrica = metrica;
-        if (_filas.Count > 0)
-        {
-            Recalcular();
-            _chartsKey = Guid.NewGuid();
-        }
+        RecalcularYRemontar();
     }
 
-    // Cambio de "Mostrar Top N": cambia la cantidad de barras (la FORMA) → remontar.
     private void CambiarTopN(int topN)
     {
         _topN = topN;
+        RecalcularYRemontar();
+    }
+
+    // Criterio de "contratado": cambia la clasificación de CADA viaje, pero los dos valores ya
+    // vienen en el dataset → recálculo en memoria, sin volver a SQL.
+    private void CambiarCriterio(string criterio)
+    {
+        _criterio = criterio;
+        _dim2Focus = null;
+        RecalcularYRemontar();
+    }
+
+    private void CambiarEje(bool ejeMotivo)
+    {
+        _ejeMotivo = ejeMotivo;
+        Recalcular();
+    }
+
+    private void CambiarModoCelda(string modo) { _modoCelda = modo; }
+
+    private void RecalcularYRemontar()
+    {
         if (_filas.Count > 0)
         {
             Recalcular();
@@ -636,23 +860,46 @@ else
         Func<ReservaClienteRow, int> val = _metrica == "Pax" ? f => f.Pax : f => f.Viajes;
 
         // Subconjuntos según el foco (modelo Power BI): los visuales de CLIENTE (barras, tabla)
-        // usan los datos filtrados por TIPO (el foco de cliente en ellos es resaltado por
-        // color/CSS), los visuales de TIPO (apilado mensual, donut) usan los filtrados por
-        // CLIENTE, y los KPIs / totales llevan AMBOS focos combinados.
-        var datosTipo = _tipoFocus is null ? _filas : _filas.Where(f => f.Tipo == _tipoFocus).ToList();
+        // usan los datos filtrados por la 2ª dimensión (el foco de cliente en ellos es resaltado
+        // por color/CSS), los visuales de la 2ª dimensión usan los filtrados por CLIENTE, y los
+        // KPIs / totales llevan AMBOS focos.
+        var datosDim2 = _dim2Focus is null ? _filas : _filas.Where(f => Dim2De(f) == _dim2Focus).ToList();
         var datosCliente = _clienteFocus is null ? _filas : _filas.Where(f => f.IdCliente == _clienteFocus).ToList();
-        var datos = _clienteFocus is null ? datosTipo : datosTipo.Where(f => f.IdCliente == _clienteFocus).ToList();
+        var datos = _clienteFocus is null ? datosDim2 : datosDim2.Where(f => f.IdCliente == _clienteFocus).ToList();
 
-        // Nombre visible por cliente (canónico, del dataset completo).
-        _nombrePorCliente = _filas
+        // El período base lleva los MISMOS focos, para que el Δ compare lo mismo contra lo mismo.
+        var datosBaseDim2 = _dim2Focus is null ? _filasBase : _filasBase.Where(f => Dim2De(f) == _dim2Focus).ToList();
+        var datosBase = _clienteFocus is null ? datosBaseDim2 : datosBaseDim2.Where(f => f.IdCliente == _clienteFocus).ToList();
+
+        // Nombre visible por cliente (canónico, del dataset completo; el base también aporta
+        // nombres para los clientes que existían antes y hoy no tienen actividad).
+        _nombrePorCliente = _filas.Concat(_filasBase)
             .GroupBy(f => f.IdCliente)
             .ToDictionary(g => g.Key, g => g.First().Cliente);
 
+        // ── Categorías de la 2ª dimensión (orden estable, del dataset COMPLETO) ──
+        if (ModoCancel)
+        {
+            _dim2Cats = _filas.GroupBy(Dim2De)
+                .Select(g => (Cat: g.Key, Total: g.Sum(val)))
+                .OrderByDescending(x => x.Total).ThenBy(x => x.Cat)
+                .Select(x => x.Cat).ToList();
+            _colorPorMotivo = _dim2Cats
+                .Select((c, i) => (c, i))
+                .ToDictionary(t => t.c, t => t.i < _paletteCli.Count ? _paletteCli[t.i] : _colorOtros);
+        }
+        else
+        {
+            _dim2Cats = _tipos.Where(t => _filas.Any(f => Dim2De(f) == t)).ToList();
+        }
+
         // ── KPIs: sobre el dataset con ambos focos ──
         _totalMetrica = datos.Sum(val);
+        _totalBase = datosBase.Sum(val);
         var meses = datos.Select(f => f.Mes).Distinct().Count();
         _promedioMensual = meses > 0 ? (int)Math.Round((double)_totalMetrica / meses) : 0;
         _clientesActivos = datos.Select(f => f.IdCliente).Distinct().Count();
+        _clientesActivosBase = datosBase.Select(f => f.IdCliente).Distinct().Count();
 
         var porCliente = datos.GroupBy(f => f.IdCliente)
             .Select(g => (Id: g.Key, Total: g.Sum(val)))
@@ -660,37 +907,102 @@ else
         _clienteLider = porCliente.Count > 0 ? NombreDe(porCliente[0].Id) : "—";
         _maxCliente = porCliente.Count > 0 ? porCliente[0].Total : 0;
 
-        _totalContratado = datos.Where(f => f.Tipo == "CONTRATADO").Sum(val);
+        // Contratados (solo modo activas): con el criterio elegido.
+        _totalContratado = datos.Where(f => f.TipoSegun(_criterio) == "CONTRATADO").Sum(val);
+        _totalContratadoBase = datosBase.Where(f => f.TipoSegun(_criterio) == "CONTRATADO").Sum(val);
         _pctContratado = _totalMetrica > 0 ? (int)Math.Round(100.0 * _totalContratado / _totalMetrica) : 0;
 
-        // ── Pivote: filas = clientes (foco de cliente = resaltado por CSS, la lista completa
-        //    queda visible), celdas y totales de fila con foco de TIPO; los totales de columna
-        //    y el gran total llevan AMBOS focos ──
+        // Motivo principal + tasa de cancelación (solo modo canceladas).
+        if (ModoCancel)
+        {
+            var porMotivo = datos.GroupBy(Dim2De)
+                .Select(g => (Cat: g.Key, Total: g.Sum(val)))
+                .OrderByDescending(x => x.Total).ToList();
+            _motivoLider = porMotivo.Count > 0 ? porMotivo[0].Cat : "—";
+            _maxMotivo = porMotivo.Count > 0 ? porMotivo[0].Total : 0;
+
+            var activas = _clienteFocus is null
+                ? _filasOtroEstado
+                : _filasOtroEstado.Where(f => f.IdCliente == _clienteFocus).ToList();
+            _totalPeriodo = _totalMetrica + activas.Sum(val);
+            _tasaCancel = _totalPeriodo > 0 ? 100.0 * _totalMetrica / _totalPeriodo : 0;
+
+            var activasBase = _clienteFocus is null
+                ? _filasOtroEstadoBase
+                : _filasOtroEstadoBase.Where(f => f.IdCliente == _clienteFocus).ToList();
+            var totalBasePeriodo = _totalBase + activasBase.Sum(val);
+            _tasaCancelBase = totalBasePeriodo > 0 ? 100.0 * _totalBase / totalBasePeriodo : 0;
+        }
+
+        // ── Pivote ──
+        // Filas = clientes (el foco de cliente es resaltado por CSS, la lista completa queda
+        // visible); celdas y totales de fila con foco de la 2ª dimensión; los totales de
+        // columna y el gran total llevan AMBOS focos.
         _pivMeses = _filas.Select(f => f.Mes).Distinct().OrderBy(m => m).ToList();
-        _pivMap = datosTipo
-            .GroupBy(f => (f.IdCliente, f.Mes))
-            .ToDictionary(g => ((string, string))g.Key, g => g.Sum(val));
-        _pivTotFila = datosTipo.GroupBy(f => f.IdCliente).ToDictionary(g => g.Key, g => g.Sum(val));
-        _pivClientes = datosTipo.GroupBy(f => f.IdCliente)
+        _pivCols = EjeMotivo ? _dim2Cats : _pivMeses;
+
+        Func<ReservaClienteRow, string> claveCol = EjeMotivo ? Dim2De : f => f.Mes;
+
+        _pivMap = datosDim2.GroupBy(f => (f.IdCliente, claveCol(f)))
+            .ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivMapBase = datosBaseDim2.GroupBy(f => (f.IdCliente, claveCol(f)))
+            .ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivTotFila = datosDim2.GroupBy(f => f.IdCliente).ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivTotFilaBase = datosBaseDim2.GroupBy(f => f.IdCliente).ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivClientes = datosDim2.GroupBy(f => f.IdCliente)
             .Select(g => (Id: g.Key, Total: g.Sum(val)))
             .OrderByDescending(x => x.Total).ThenBy(x => NombreDe(x.Id))
             .Select(x => x.Id).ToList();
-        _pivTotCol = datos.GroupBy(f => f.Mes).ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivTotCol = datos.GroupBy(claveCol).ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivTotColBase = datosBase.GroupBy(claveCol).ToDictionary(g => g.Key, g => g.Sum(val));
         _granTotal = _totalMetrica;
 
-        // ── Apilado mensual: series = tipos del dataset COMPLETO (cantidad estable para el
-        //    update en el lugar), valores con foco de CLIENTE, todos los meses con 0-fill ──
-        _tiposPresentes = _tipos.Where(t => _filas.Any(f => f.Tipo == t)).ToList();
-        var mapaMesTipo = datosCliente
-            .GroupBy(f => (f.Mes, f.Tipo))
+        // Serie mensual SIEMPRE, aparte del eje del pivote: con columnas por motivo el
+        // sparkline igual tiene que mostrar la evolución en el tiempo (si leyera las columnas
+        // saldría una línea plana que no significa nada).
+        _pivMapMes = EjeMotivo
+            ? datosDim2.GroupBy(f => (f.IdCliente, f.Mes)).ToDictionary(g => g.Key, g => g.Sum(val))
+            : _pivMap;
+        _pivTotColPorMes = EjeMotivo
+            ? datos.GroupBy(f => f.Mes).ToDictionary(g => g.Key, g => g.Sum(val))
+            : _pivTotCol;
+
+        // ── Evolución mensual ──
+        // Con comparación: 2 series agrupadas (período vs base) — la lectura X vs X-1.
+        // Sin comparación: apilado por la 2ª dimensión (composición del mes).
+        var mapaMes = datosCliente.GroupBy(f => (f.Mes, Cat: Dim2De(f)))
             .ToDictionary(g => g.Key, g => g.Sum(val));
-        _chartData = _pivMeses
-            .SelectMany(mes => _tiposPresentes.Select(tipo =>
-                new ChartItem(FmtMes(mes), tipo, mapaMesTipo.TryGetValue((mes, tipo), out var v) ? v : 0)))
-            .ToList();
+        if (HayComparacion)
+        {
+            _seriesMes = new List<string> { "Período", BaseLbl };
+            var totMes = datosCliente.GroupBy(f => f.Mes).ToDictionary(g => g.Key, g => g.Sum(val));
+            var datosBaseCliente = _clienteFocus is null
+                ? _filasBase : _filasBase.Where(f => f.IdCliente == _clienteFocus).ToList();
+            // Cada mes base se alinea con el mes del período que le corresponde (M-1 o M-12),
+            // así las dos barras de una misma columna X son comparables.
+            var totMesBase = datosBaseCliente.GroupBy(f => f.Mes).ToDictionary(g => g.Key, g => g.Sum(val));
+            _chartData = _pivMeses.SelectMany(mes => new[]
+            {
+                new ChartItem(FmtMes(mes), "Período", totMes.TryGetValue(mes, out var a) ? a : 0),
+                new ChartItem(FmtMes(mes), BaseLbl,
+                    totMesBase.TryGetValue(MesBaseDe(mes), out var b) ? b : 0),
+            }).ToList();
+            _optsBarMes.Chart.Stacked = false;
+            _optsBarMes.Colors = new List<string> { "#2058D0", _colorBase };
+        }
+        else
+        {
+            _seriesMes = new List<string>(_dim2Cats);
+            _chartData = _pivMeses
+                .SelectMany(mes => _dim2Cats.Select(cat =>
+                    new ChartItem(FmtMes(mes), cat, mapaMes.TryGetValue((mes, cat), out var v) ? v : 0)))
+                .ToList();
+            _optsBarMes.Chart.Stacked = true;
+            _optsBarMes.Colors = _dim2Cats.Select(ColorFocoDim2).ToList();
+        }
 
         // ── Barras de clientes: ranking y colores del dataset COMPLETO (orden estable),
-        //    valores con foco de TIPO ──
+        //    valores con foco de la 2ª dimensión ──
         _rankingClientes = _filas.GroupBy(f => f.IdCliente)
             .Select(g => (Id: g.Key, Nombre: g.First().Cliente, Total: g.Sum(val)))
             .OrderByDescending(x => x.Total).ThenBy(x => x.Nombre).ToList();
@@ -702,7 +1014,7 @@ else
         // ApexCharts no funda dos barras en una misma etiqueta X.
         var nombresRepetidos = _rankingClientes.GroupBy(x => x.Nombre)
             .Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
-        var valoresCli = datosTipo.GroupBy(f => f.IdCliente).ToDictionary(g => g.Key, g => g.Sum(val));
+        var valoresCli = datosDim2.GroupBy(f => f.IdCliente).ToDictionary(g => g.Key, g => g.Sum(val));
         _barItems = _rankingClientes.Take(_topN)
             .Select(x => new BarItem(
                 x.Id,
@@ -710,108 +1022,135 @@ else
                 valoresCli.TryGetValue(x.Id, out var v) ? v : 0))
             .ToList();
         _altoBarras = Math.Max(360, _barItems.Count * 30);
-
-        // ── Donut por tipo: categorías completas en orden fijo (0-fill si el foco de cliente
-        //    las vacía), valores con foco de CLIENTE ──
-        var tipoValores = datosCliente.GroupBy(f => f.Tipo).ToDictionary(g => g.Key, g => g.Sum(val));
-        _donutTipo = _tiposPresentes
-            .Select(t => new DonutItem(t, tipoValores.TryGetValue(t, out var v) ? v : 0))
-            .ToList();
-
-        // Colores de cada gráfico, atenuando lo no enfocado (efecto highlight de Power BI).
-        _optsBarMes.Colors = _tiposPresentes.Select(ColorFocoTipo).ToList();
         _optsBarCli.Colors = _barItems.Select(b => ColorFocoCli(b.IdCliente)).ToList();
-        _optsPieTipo.Colors = _donutTipo.Select(d => ColorFocoTipo(d.Label)).ToList();
+
+        // ── Donut de la 2ª dimensión: categorías completas en orden fijo (0-fill si el foco de
+        //    cliente las vacía), valores con foco de CLIENTE ──
+        var dim2Valores = datosCliente.GroupBy(Dim2De).ToDictionary(g => g.Key, g => g.Sum(val));
+        _donutDim2 = _dim2Cats
+            .Select(c => new DonutItem(c, dim2Valores.TryGetValue(c, out var v) ? v : 0))
+            .ToList();
+        _optsPieDim2.Colors = _donutDim2.Select(d => ColorFocoDim2(d.Label)).ToList();
+        AplicarTotalEnLeyenda(_donutDim2.Sum(d => (int)d.Valor));
     }
 
-    private int PivVal(string cli, string mes) => _pivMap.TryGetValue((cli, mes), out var v) ? v : 0;
-    private int PivTotFila(string cli) => _pivTotFila.TryGetValue(cli, out var v) ? v : 0;
-    private int PivTotCol(string mes) => _pivTotCol.TryGetValue(mes, out var v) ? v : 0;
-
-    // ── Comparación mes contra mes ──────────────────────────────────────────────────────
-    // El "mes base" de un mes dado es contra quién se compara, según el modo elegido:
-    //  · M1  → el mes inmediatamente anterior en la grilla (M-1)
-    //  · N   → N meses calendario atrás (busca ese mes en la grilla)
-    //  · YoY → el mismo mes del año anterior
-    // Devuelve null si no hay mes base (primer mes / fuera del rango cargado).
-
-    private string? MesBaseDe(string mes)
+    // Números en la leyenda del donut ("CANCELADO POR CLIENTE: 572 (74%)") — patrón validado:
+    // la torta queda limpia y no hay etiquetas encimadas.
+    private void AplicarTotalEnLeyenda(int total)
     {
-        if (_comparar == "M1")
-        {
-            var i = _pivMeses.IndexOf(mes);
-            return i > 0 ? _pivMeses[i - 1] : null;
-        }
-        if (_comparar == "N")
-        {
-            var objetivo = SumarMeses(mes, -_saltoN);
-            return _pivMeses.Contains(objetivo) ? objetivo : null;
-        }
-        // YoY: mismo mes del año anterior — solo si ese mes está en el rango cargado.
-        var yoy = SumarMeses(mes, -12);
-        return _pivMeses.Contains(yoy) ? yoy : null;
+        _optsPieDim2.Legend!.Formatter =
+            "function(name, opts){ var v = opts.w.globals.series[opts.seriesIndex]; " +
+            $"var t = {total}; var p = t>0?Math.round(v*100/t):0; " +
+            "return name + ': ' + v.toLocaleString('es-AR') + ' (' + p + '%)'; }";
     }
+
+    // ── Accesores del pivote ──
+    private int PivVal(string cli, string col) => _pivMap.TryGetValue((cli, col), out var v) ? v : 0;
+    private int PivValBase(string cli, string col) => _pivMapBase.TryGetValue((cli, MesBaseDe(col)), out var v) ? v : 0;
+    private int PivTotFila(string cli) => _pivTotFila.TryGetValue(cli, out var v) ? v : 0;
+    private int PivTotFilaBase(string cli) => _pivTotFilaBase.TryGetValue(cli, out var v) ? v : 0;
+    private int PivTotCol(string col) => _pivTotCol.TryGetValue(col, out var v) ? v : 0;
+    private int PivTotColBase(string col) => _pivTotColBase.TryGetValue(MesBaseDe(col), out var v) ? v : 0;
+    // Serie mensual para el sparkline (siempre por mes, aunque las columnas sean motivos).
+    private int PivValMes(string cli, string mes) => _pivMapMes.TryGetValue((cli, mes), out var v) ? v : 0;
+    private int PivTotColMes(string mes) => _pivTotColPorMes.TryGetValue(mes, out var v) ? v : 0;
+
+    // ── Comparación ────────────────────────────────────────────────────────────────────
+    // El mes base de un mes dado según el modo: el mes anterior (M-1) o el mismo mes del año
+    // anterior (M-12). Como el período base se trae con su propia consulta, SIEMPRE hay
+    // números — antes se buscaba dentro de los meses ya cargados y el interanual quedaba vacío
+    // salvo que el usuario ampliara el "Desde" un año entero.
+    private string MesBaseDe(string mes) =>
+        _compararAp == CompAnioAnterior ? SumarMeses(mes, -12) : SumarMeses(mes, -1);
 
     // "2026-03" + (-2) → "2026-01"; "2026-01" + (-2) → "2025-11"
     private static string SumarMeses(string mes, int delta)
     {
+        if (mes.Length != 7 || mes[4] != '-') return mes;
         var y = int.Parse(mes[..4]);
         var m = int.Parse(mes[5..7]);
         var idx = y * 12 + (m - 1) + delta;
         return $"{idx / 12:0000}-{idx % 12 + 1:00}";
     }
 
-    // Δ de una celda (valor del mes menos valor del mes base). null si no hay base.
-    private int? PivVar(string cli, string mes)
-    {
-        var baseMes = MesBaseDe(mes);
-        return baseMes is null ? null : PivVal(cli, mes) - PivVal(cli, baseMes);
-    }
+    // Con columnas de motivo no hay eje temporal → no hay variación por celda.
+    private bool MostrarVariacion => HayComparacion && !EjeMotivo;
 
-    // Δ del total de columna (todos los clientes) del mes vs su base. null si no hay base.
-    private int? PivVarTotCol(string mes)
-    {
-        var baseMes = MesBaseDe(mes);
-        return baseMes is null ? null : PivTotCol(mes) - PivTotCol(baseMes);
-    }
+    private int? PivVar(string cli, string col) =>
+        MostrarVariacion ? PivVal(cli, col) - PivValBase(cli, col) : null;
+    private int? PivVarTotCol(string col) =>
+        MostrarVariacion ? PivTotCol(col) - PivTotColBase(col) : null;
 
-    // ── Columna "Tendencia": Δ del ÚLTIMO mes de la grilla vs su base, por cliente ──
-    private string UltimoMes => _pivMeses.Count > 0 ? _pivMeses[^1] : "";
-
-    // (delta, porcentaje o null si la base es 0/no existe) del último mes para un cliente.
-    private (int? Delta, double? Pct) TendenciaCliente(string cli)
+    // Etiqueta legible del período base.
+    private string BaseLbl => _compararAp switch
     {
-        var baseMes = MesBaseDe(UltimoMes);
-        if (baseMes is null) return (null, null);
-        var actual = PivVal(cli, UltimoMes);
-        var previo = PivVal(cli, baseMes);
-        var delta = actual - previo;
-        double? pct = previo > 0 ? 100.0 * delta / previo : null;
-        return (delta, pct);
-    }
-
-    // Etiqueta legible de la base ("mes anterior", "2 meses atrás", "año pasado") para tooltips/subtítulos.
-    private string BaseLbl => _comparar switch
-    {
-        "M1" => "mes anterior",
-        "N" => $"{_saltoN} meses atrás",
-        _ => "año pasado",
+        CompAnioAnterior => "año anterior",
+        CompMesAnterior => "mes anterior",
+        _ => "",
     };
 
-    // Clase CSS del signo de una variación (verde sube / rojo baja / neutro cero).
+    // Con comparación el Sub queda corto (el detalle con fechas va al tooltip de la tarjeta):
+    // con el badge de variación no entra más texto sin recortar la etiqueta.
+    private string SubTotal => HayComparacion
+        ? $"vs {Fmt(_totalBase)}"
+        : $"prom. {Fmt(_promedioMensual)} {UnidadMetrica}/mes";
+
+    // "CANCELADO POR CLIENTE" → "CLIENTE" (el prefijo se repite en los 6 motivos).
+    private static string MotivoCorto(string motivo) =>
+        motivo.StartsWith("CANCELADO POR ", StringComparison.OrdinalIgnoreCase)
+            ? motivo["CANCELADO POR ".Length..]
+            : motivo;
+
+    private string ColCompHeader => HayComparacion ? $"VS {BaseLbl.ToUpperInvariant()}" : "EVOLUCIÓN";
+    private string ColCompTitulo => HayComparacion
+        ? $"Total del período base ({_bDesdeAp:dd/MM/yyyy}–{_bHastaAp:dd/MM/yyyy}) + variación"
+        : "Evolución mensual del cliente";
+
+    private string TituloCelda(string cli, string col, int v) => MostrarVariacion
+        ? $"{NombreDe(cli)} · {ColHeader(col)}: {Fmt(v)} · {BaseLbl}: {Fmt(PivValBase(cli, col))}"
+        : $"Ver viajes de {NombreDe(cli)} en {ColHeader(col)}";
+
+    // ── Formato de variaciones ──
     private static string ClaseVar(int? d) =>
         d is null ? "rfs-var-na" : d.Value > 0 ? "rfs-var-up" : d.Value < 0 ? "rfs-var-down" : "rfs-var-flat";
 
-    // "+19" / "−53" / "0" / "—" (base inexistente). Usa el guión largo real para negativos.
+    // "+19" / "−53" / "0" / "—". Usa el guión largo real para negativos.
     private static string FmtVar(int? d) =>
         d is null ? "—" : d.Value > 0 ? $"+{Fmt(d.Value)}" : d.Value < 0 ? $"−{Fmt(-d.Value)}" : "0";
 
-    // "+18%" / "−35%" (o "" si no hay base con volumen).
     private static string FmtPct(double? p) =>
         p is null ? "" : (p.Value >= 0 ? "+" : "−") + $"{Math.Abs(p.Value):0}%";
 
-    // ── Sparkline SVG inline de la serie mensual de un cliente (o del total) ──
-    // 5-6 puntos, ancho fijo; sin librerías. Color según la tendencia del último tramo.
+    // Badge de los KPIs: "▲ +12,1%" (o "▲ +128" si la base es 0 y no hay porcentaje posible).
+    private string DeltaTxt(int actual, int previo)
+    {
+        if (!HayComparacion) return "";
+        var d = actual - previo;
+        var flecha = d > 0 ? "▲ " : d < 0 ? "▼ " : "";
+        if (previo <= 0) return d == 0 ? "" : $"{flecha}{FmtVar(d)}";
+        return $"{flecha}{FmtPct(100.0 * d / previo)}";
+    }
+
+    private string DeltaPctTxt(double actual, double previo)
+    {
+        if (!HayComparacion) return "";
+        var d = actual - previo;
+        if (Math.Abs(d) < 0.05) return "";
+        return $"{(d > 0 ? "▲ " : "▼ ")}{Math.Abs(d):0.0} pts";
+    }
+
+    private string DeltaCls(double actual, double previo) =>
+        !HayComparacion ? "" : actual > previo ? "kpi-delta--up" : actual < previo ? "kpi-delta--down" : "kpi-delta--flat";
+
+    // Para cancelaciones, subir es MALO → los colores se invierten.
+    private string DeltaClsInverso(double actual, double previo) =>
+        !HayComparacion ? "" : actual > previo ? "kpi-delta--down" : actual < previo ? "kpi-delta--up" : "kpi-delta--flat";
+
+    private string TituloComparacion(int actual, int previo) => HayComparacion
+        ? $"Período {_fDesdeAp:dd/MM/yyyy}–{_fHastaAp:dd/MM/yyyy}: {Fmt(actual)} · {BaseLbl} {_bDesdeAp:dd/MM/yyyy}–{_bHastaAp:dd/MM/yyyy}: {Fmt(previo)}"
+        : "";
+
+    // ── Sparkline SVG inline de la serie mensual (sin librerías) ──
     private MarkupString Sparkline(Func<string, int> serie)
     {
         var vals = _pivMeses.Select(serie).ToList();
@@ -822,7 +1161,7 @@ else
         double dx = (w - 2.0 * pad) / (vals.Count - 1);
         double Y(int v) => span <= 0 ? h / 2.0 : h - pad - (v - min) / span * (h - 2.0 * pad);
         var pts = string.Join(" ", vals.Select((v, i) => $"{pad + i * dx:0.#},{Y(v):0.#}"));
-        var (delta, _) = (vals[^1] - vals[^2], 0);
+        var delta = vals[^1] - vals[^2];
         var color = delta > 0 ? "#16A34A" : delta < 0 ? "#DC2626" : "#94A3B8";
         var cx = pad + (vals.Count - 1) * dx;
         var cy = Y(vals[^1]);
@@ -842,15 +1181,15 @@ else
         await ActualizarGraficos();   // repinta EN SU LUGAR (sin remontar → sin parpadeo)
     }
 
-    private async Task ToggleFocoTipo(string tipo)
+    private async Task ToggleFocoDim2(string cat)
     {
-        _tipoFocus = _tipoFocus == tipo ? null : tipo;
+        _dim2Focus = _dim2Focus == cat ? null : cat;
         Recalcular();
         await ActualizarGraficos();
     }
 
     private Task LimpiarFocoCliente() => ToggleFocoCliente(_clienteFocus ?? "");
-    private Task LimpiarFocoTipo() => ToggleFocoTipo(_tipoFocus ?? "");
+    private Task LimpiarFocoDim2() => ToggleFocoDim2(_dim2Focus ?? "");
 
     // El foco de una dimensión cambia los VALORES de los gráficos de la otra →
     // UpdateOptions (colores) + UpdateSeries (valores) en los tres.
@@ -866,25 +1205,27 @@ else
             await _barCliChart.UpdateOptionsAsync(true, true, false);
             await _barCliChart.UpdateSeriesAsync(true);
         }
-        if (_pieTipoChart is not null)
+        if (_pieDim2Chart is not null)
         {
-            await _pieTipoChart.UpdateOptionsAsync(true, true, false);
-            await _pieTipoChart.UpdateSeriesAsync(true);
+            await _pieDim2Chart.UpdateOptionsAsync(true, true, false);
+            await _pieDim2Chart.UpdateSeriesAsync(true);
         }
     }
 
-    // En el apilado cada serie ya viene filtrada por tipo → el primer item trae el tipo
-    // de la serie clickeada.
+    // En el apilado cada serie ya viene filtrada por categoría → el primer item trae la
+    // categoría de la serie clickeada. Con comparación las series son período/base: no enfocan.
     private async Task OnBarMesSelection(SelectedData<ChartItem> e)
     {
-        var tipo = e.DataPoint?.Items?.FirstOrDefault()?.Tipo;
-        if (tipo is not null) await ToggleFocoTipo(tipo);
+        if (HayComparacion) return;
+        var cat = e.DataPoint?.Items?.FirstOrDefault()?.Serie;
+        if (cat is not null) await ToggleFocoDim2(cat);
     }
 
     private async Task OnBarMesLegendClicked(LegendClicked<ChartItem> e)
     {
-        var tipo = e.Series?.Name;
-        if (!string.IsNullOrEmpty(tipo)) await ToggleFocoTipo(tipo);
+        if (HayComparacion) return;
+        var cat = e.Series?.Name;
+        if (!string.IsNullOrEmpty(cat)) await ToggleFocoDim2(cat);
     }
 
     private async Task OnBarCliSelection(SelectedData<BarItem> e)
@@ -893,16 +1234,16 @@ else
         if (idCli is not null) await ToggleFocoCliente(idCli);
     }
 
-    private async Task OnPieTipoSelection(SelectedData<DonutItem> e)
+    private async Task OnPieDim2Selection(SelectedData<DonutItem> e)
     {
-        var tipo = e.DataPoint?.Items?.FirstOrDefault()?.Label;
-        if (tipo is not null) await ToggleFocoTipo(tipo);
+        var cat = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (cat is not null) await ToggleFocoDim2(cat);
     }
 
-    private async Task OnPieTipoLegendClicked(LegendClicked<DonutItem> e)
+    private async Task OnPieDim2LegendClicked(LegendClicked<DonutItem> e)
     {
-        var tipo = e.DataPoint?.Items?.FirstOrDefault()?.Label;
-        if (tipo is not null) await ToggleFocoTipo(tipo);
+        var cat = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (cat is not null) await ToggleFocoDim2(cat);
     }
 
     // ── Drill-down: los viajes uno por uno detrás del número ──
@@ -913,7 +1254,7 @@ else
         {
             _cargandoDet = true;
             StateHasChanged();
-            _detalle = await Reports.GetReservasPorClienteDetalleAsync(_fDesdeAp, _fHastaAp, _internosAp, _canceladasAp, _motAp);
+            _detalle = await Reports.GetReservasPorClienteDetalleAsync(_fDesdeAp, _fHastaAp, _catAp, _canceladasAp, _motAp);
             _cargandoDet = false;
         }
         return _detalle;
@@ -921,21 +1262,27 @@ else
 
     // Los drills respetan el foco activo: el número visible corresponde al subconjunto
     // enfocado y el detalle tiene que mostrar EXACTAMENTE esos viajes.
-    private bool PasaFocoTipo(ReservaClienteDetalleRow d) => _tipoFocus is null || d.Tipo == _tipoFocus;
+    private bool PasaFocoDim2(ReservaClienteDetalleRow d) => _dim2Focus is null || Dim2De(d) == _dim2Focus;
     private bool PasaFocoCliente(ReservaClienteDetalleRow d) => _clienteFocus is null || d.IdCliente == _clienteFocus;
-    private string SufijoFocoTipo => _tipoFocus is null ? "" : $" · {_tipoFocus}";
+    private string SufijoFocoDim2 => _dim2Focus is null ? "" : $" · {_dim2Focus}";
 
-    private Task AbrirDetalleCelda(string idCli, string mes) =>
-        AbrirDetalle(d => d.IdCliente == idCli && d.Mes == mes && PasaFocoTipo(d),
-                     $"{NombreDe(idCli)} — {FmtMes(mes)}{SufijoFocoTipo}");
+    private bool EnColumna(ReservaClienteDetalleRow d, string col) =>
+        EjeMotivo ? Dim2De(d) == col : d.Mes == col;
+
+    private Task AbrirDetalleCelda(string idCli, string col) =>
+        AbrirDetalle(d => d.IdCliente == idCli && EnColumna(d, col) && PasaFocoDim2(d),
+                     $"{NombreDe(idCli)} — {ColHeader(col)}{SufijoFocoDim2}");
 
     private Task AbrirDetalleCliente(string idCli) =>
-        AbrirDetalle(d => d.IdCliente == idCli && PasaFocoTipo(d),
-                     $"{NombreDe(idCli)} — todo el período{SufijoFocoTipo}");
+        AbrirDetalle(d => d.IdCliente == idCli && PasaFocoDim2(d),
+                     $"{NombreDe(idCli)} — todo el período{SufijoFocoDim2}");
 
-    private Task AbrirDetalleMes(string mes) =>
-        AbrirDetalle(d => d.Mes == mes && PasaFocoCliente(d) && PasaFocoTipo(d),
-                     $"{(_clienteFocus is null ? "Todos los clientes" : NombreDe(_clienteFocus))} — {FmtMes(mes)}{SufijoFocoTipo}");
+    private Task AbrirDetalleColumna(string col) =>
+        AbrirDetalle(d => EnColumna(d, col) && PasaFocoCliente(d) && PasaFocoDim2(d),
+                     $"{(_clienteFocus is null ? "Todos los clientes" : NombreDe(_clienteFocus))} — {ColHeader(col)}{SufijoFocoDim2}");
+
+    private Task AbrirDetalleDim2(string cat) =>
+        AbrirDetalle(d => Dim2De(d) == cat && PasaFocoCliente(d), $"{Dim2Label}: {cat}");
 
     private async Task AbrirDetalle(Func<ReservaClienteDetalleRow, bool> filtro, string subtitulo)
     {
@@ -948,21 +1295,45 @@ else
             { x => x.Items, items },
             { x => x.Subtitulo, subtitulo }
         };
-        var opciones = new DialogOptions
-        {
-            MaxWidth = MaxWidth.ExtraLarge,
-            FullWidth = true,
-            CloseButton = false,
-            CloseOnEscapeKey = true,
-            BackdropClick = true
-        };
-        await DialogService.ShowAsync<ReservasFsDetalleDialog>("Detalle de viajes", parametros, opciones);
+        await DialogService.ShowAsync<ReservasFsDetalleDialog>("Detalle de viajes", parametros, OpcionesDialog);
     }
+
+    // ── Composición del KPI (pedido de la clienta: "¿de qué está hecho el número?") ──
+    // Abre el desglose por UNIDAD (interno · dominio · fletero) y por CLIENTE del tipo elegido.
+    private async Task AbrirComposicionTipo(string tipo)
+    {
+        var todas = await GetDetalleAsync();
+        var items = todas
+            .Where(d => d.TipoSegun(_criterio) == tipo && PasaFocoCliente(d))
+            .ToList();
+        if (items.Count == 0) return;
+
+        var parametros = new DialogParameters<ComposicionTipoDialog>
+        {
+            { x => x.Items, items },
+            { x => x.Tipo, tipo },
+            { x => x.Criterio, _criterio },
+            { x => x.Metrica, _metrica },
+            { x => x.Subtitulo, $"{_fDesdeAp:dd/MM/yyyy} – {_fHastaAp:dd/MM/yyyy}{(_clienteFocus is null ? "" : $" · {NombreDe(_clienteFocus)}")}" }
+        };
+        await DialogService.ShowAsync<ComposicionTipoDialog>("Composición", parametros, OpcionesDialog);
+    }
+
+    private static DialogOptions OpcionesDialog => new()
+    {
+        MaxWidth = MaxWidth.ExtraLarge,
+        FullWidth = true,
+        CloseButton = false,
+        CloseOnEscapeKey = true,
+        BackdropClick = true
+    };
 
     private async Task DescargarExcel()
     {
         var viajes = await GetDetalleAsync();
-        var bytes = Excel.ReservasPorCliente(_filas, _metrica, viajes);
+        var bytes = Excel.ReservasPorCliente(
+            _filas, _metrica, _criterio, _motivos, viajes,
+            HayComparacion ? _filasBase : null, BaseLbl);
         var nombre = $"reservas_por_cliente_{_fDesdeAp:yyyyMMdd}_{_fHastaAp:yyyyMMdd}.xlsx";
         using var stream = new MemoryStream(bytes);
         using var streamRef = new DotNetStreamReference(stream);

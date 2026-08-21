@@ -58,15 +58,24 @@ escribe datos (salvo el ítem 7, que es código de UI de solo lectura).
    `chofer_franco*`: SQL exacto contra `viaje`/`vehiculo`/`chofer_franco`/`vehiculo_km`,
    motivos de `viaje_log`, validaciones. Era el gap crítico que bloqueaba la Fase 3.
    Matriz consolidada: `.claude/skills/modulo-trafico/references/ESCRITURA_CIRCUITO.md`.
-2. ✅ **Doc de `gps_xlm()`** — HECHO (02/07/2026): `docs/PlanoFoxPro/trafico/GPS_XLM.md`.
-   **Hallazgo: hoy es un NO-OP** — la función tiene 2 vías (XML file-drop a `dir_xml` +
-   INSERT/UPDATE en un SQL Server externo `SISTEMA01\SQLEXPRESS_AXOFT..MetroCarSQL`,
-   tabla `Servicios`) pero AMBOS flags están apagados en producción
-   (`parametro.xml_envia = 0`, `sql_gps = 0`, verificado contra la réplica). Se llama en
-   ASIGNO, RE-ASIGNO, FINALIZO, CANCELO y el armado de plantillas (verificado contra los
-   binarios). **Falta solo la decisión firmada del dueño** (la evidencia apunta a
-   "confirmar muerto"; las 3 preguntas puntuales están en el doc) — el hook queda como
-   `IGpsNotifier` no-op apagable en el motor de Fase 2.
+2. 🔴 **`gps_xlm()` — INTEGRACIÓN VIVA, entrega OBLIGATORIA antes del corte**
+   (corregido 12/08/2026; doc: `docs/PlanoFoxPro/trafico/GPS_XLM.md`).
+   La función tiene 2 vías: XML file-drop a `dir_xml` (**muerta**, `xml_envia = 0`) e
+   **INSERT/UPDATE en un SQL Server externo** (`192.168.0.8` → `MetroCarSQL`, tabla
+   `Servicios`), y **esa segunda está ENCENDIDA en los dos servers productivos**
+   (`sql_gps = 1`). La versión anterior de este punto decía "NO-OP, confirmar muerto":
+   **era un error**, salió de leer la réplica local, que es un snapshot viejo.
+   **Volumen:** 136 clientes con `cliente.envia_gps = 1` (incluida AEROLINEAS) →
+   **3.466 de 3.713 viajes del último mes (93 %)**. Se llama en ASIGNO, RE-ASIGNO,
+   FINALIZO, CANCELO y el armado de plantillas.
+   **Consecuencia:** si Buslink toma el circuito sin replicar la vía SQL, el feed de
+   seguimiento de esos clientes se corta **sin que nadie reciba un error**. El hook
+   `IGpsNotifier` de Fase 2 ya no puede ser un no-op: tiene que implementar el
+   INSERT/UPDATE (~24 campos, con el mapeo de estado a `S`/`N`/`B`).
+   **Pendiente de confirmar:** `192.168.0.8` responde ping pero su puerto SQL no es
+   accesible desde la PC de desarrollo → está verificado que la bandera está en 1 y que
+   el host vive, **no** que los INSERT estén entrando. Confirmarlo desde el servidor de
+   Buslink con el botón **Conexión** de la solapa GPS de `/parametros`, o con el cliente.
 3. **Doc del interruptor de sync** — cómo se apaga la réplica DBF→SQL **tabla por tabla**,
    quién lo opera, tiempo de propagación, y **qué hace la sync con filas que existen en SQL
    pero no en DBF** (¿las borra? ¿las ignora?). Es la palanca del día D y del rollback.
@@ -86,7 +95,18 @@ escribe datos (salvo el ítem 7, que es código de UI de solo lectura).
    independiente — **ideal primera entrega de código**. Matriz de prueba: DAMIAN (`TCVLA`)
    y LUCIO (`TVM`) no deben ver importes.
 
-**Dependencias:** ninguna. **Paralelizable:** los ítems 2-6 son extracción/documentación
+8. **🔴 Pedir al cliente la réplica de las tablas que faltan en SQL.** Se van descubriendo al
+   migrar y son bloqueantes silenciosos: la pantalla Blazor se construye igual, pero al
+   encender su flag escribiría a ciegas o no leería nada. Inventario al 04/08/2026:
+   - **`viaje_log_chofer`** (75.001 filas en el DBF) — bitácora de LOGONEO/DESLOGONEO del panel
+     Buses. Sin ella, encender `LogoneoAbmActivo` graba el `UPDATE vehiculo` **sin auditoría**,
+     y el ítem "Ver Datos Extras → Logoneo/Deslogoneo" no se puede migrar.
+     Estructura y detalle: `docs/PlanoFoxPro/trafico/TRAFICO_BUSES_MENU.md`.
+   - **`cabecera`, `chofer_franco`, `chofer_viatico`, `_motivo`, `_liquida`** — estaban en el
+     server viejo pero no en el nuevo (relevado 05/07/2026): **re-verificar** contra el server
+     activo antes del día D.
+
+**Dependencias:** ninguna. **Paralelizable:** los ítems 2-6 y 8 son extracción/documentación
 mientras se valida el ítem 7 — se pueden intercalar todos.
 
 ---
@@ -388,6 +408,14 @@ GPS. El hook se implementa una vez en el motor (Fase 2) y queda aislado y apagab
    `cliente_grupo`, `vehiculo`, `guia`, `parametro`, `liquidacion`,
    `liquidacion_detalle`, `chofer_franco`, `reserva_plantilla`, `vehiculo_km`.
    Marcar en checklist tabla por tabla, con doble verificación.
+   ⚠️ **`parametro` ya está desconectada desde el 12/08/2026** (se adelantó para habilitar
+   el ABM de Parámetros), así que en su caso el paso no es apagar la sync sino:
+   🔴 **RESINCRONIZAR SUS CONTADORES** — obligatorio, antes de habilitar cualquier escritura
+   del circuito. Desde el 12/08/2026 FoxPro los incrementa en su DBF y esos incrementos **no
+   llegan a SQL**: las dos copias divergen. Copiar del DBF a SQL los valores finales de
+   **`id_viaje_i`, `lote_plant`, `lote_sobre`, `stock_movi`** y verificar que `MAX(id_viaje)`
+   de `viaje` sea coherente con `id_viaje_i`.
+   **Si se saltea, el primer lote/viaje que arme Buslink sale repetido.**
 5. **Bloquear FoxPro**: quitar menús/permisos de Reservas (las 3 puertas), Tráfico
    escritura y Facturación graba según el mecanismo probado en Fase 0.
    **Verificar logueándose con CADA usuario real** que no queda ninguna puerta de
@@ -456,7 +484,7 @@ primera liquidación real de la semana se graba supervisada y se cuadra contra e
 | 1 | **La sync pisa datos escritos por Blazor** (interruptor mal apagado, job residual, tabla olvidada) | Inventario del interruptor por tabla documentado y probado (Fase 0); checklist tabla-por-tabla el día D con doble verificación; fila centinela post-corte que debe sobrevivir los ciclos de sync restantes; ensayo en local del re-encendido (Fase 6); monitoreo de `_updated_at` sospechosos la semana 1. |
 | 2 | **Doble escritura en la transición** (alguien opera en FoxPro por costumbre o el bloqueo falló) | Bloqueo verificado usuario por usuario el día D (paso 5); auditoría diaria de DBF congelados; capacitación previa + cheat-sheet; cartel "SOLO CONSULTA" en FoxPro si el menú lo permite; el freeze nocturno elimina la ventana gris del corte. |
 | 3 | **Contadores de `parametro` concurrentes** (lote duplicado, `id_viaje` repetido — FoxPro era efectivamente mono-usuario, la web no) | Patrón único en `ViajeAbmService`: `UPDATE parametro SET x = x+1 OUTPUT inserted.x` dentro de la transacción (la fila de `parametro` actúa de mutex); prohibido el `SELECT MAX()+1` fuera de transacción; test de concurrencia explícito en el DoD (dos lotes simultáneos). |
-| 4 | **`gps_xlm()` mal replicado** (cambios operativos que no llegan al GPS — se llama en ASIGNO, RE-ASIGNO, FINALIZO y CANCELO) | Extracción en Fase 0 con decisión firmada (replicar si es file-drop XML — trivial desde .NET —, proceso manual temporal, o confirmar muerto); prueba con el proveedor GPS antes del día D; el hook queda aislado en el motor para poder apagarlo sin tocar las transacciones. |
+| 4 | 🔴 **`gps_xlm()` NO replicado** — riesgo **subido de categoría el 12/08/2026**: se creía apagado y está **VIVO** (`sql_gps = 1` en los dos servers productivos → `192.168.0.8`/`MetroCarSQL`/`Servicios`). Afecta al **93 % de los viajes** (136 clientes con `envia_gps`, incluida AEROLINEAS) y se dispara en ASIGNO, RE-ASIGNO, FINALIZO, CANCELO y armado. **Falla en silencio**: nadie recibe un error, simplemente dejan de entrar filas. | Implementar la vía SQL (INSERT/UPDATE de ~24 campos con estado mapeado `S`/`N`/`B`) en el hook `IGpsNotifier` del motor de Fase 2 — **ya no alcanza un no-op**; confirmar con el proveedor/cliente quién consume `MetroCarSQL.Servicios` y que los INSERT de hoy estén entrando (botón **Conexión** de `/parametros` → solapa GPS desde el servidor de Buslink); prueba end-to-end antes del día D; el hook aislado para poder apagarlo sin tocar las transacciones; **verificar el conteo de `Servicios` antes y después del corte** como señal de que el feed sigue vivo. |
 | 5 | **Permiso `F` sin implementar** (operadores sin permiso viendo precios; Valor Especial sin control) | Entrega temprana en Fase 0 (patrón ya definido en `seguridad-nortur`: `Permisos.Tiene('F')`); se aplica retroactivo al Zoom actual (deuda conocida); test de matriz con DAMIAN (`TCVLA`, sin F) y LUCIO (`TVM`) en el DoD. |
 | 6 | **Plantillas/Armar o Importa Excel generan basura masiva** (cientos de viajes mal generados en producción) | Preview dry-run obligatorio antes de insertar (mejora sobre FoxPro); transacción por lote completa; confirmación extra si el lote supera N viajes; el "deshacer lote" (`reserva_plantilla_elimina_viaje`) migrado ANTES del día D como botón de emergencia; los lotes identificables por `viaje.lote` hacen cualquier limpieza quirúrgica. |
 | 7 | **UPDATEs sin índice por `id_viaje`** (cada operación escanea 521K filas: latencia + locks largos que bloquean la planilla de todos) | Re-plantear el índice al cliente con el argumento nuevo de escritura (Fase 0); mientras tanto, firma obligatoria `(idViaje, fReserva)` en todos los métodos del service — el WHERE siempre seekea por `ix_viaje_f_reserva`; revisar también `viaje_adicional`; medir lecturas lógicas de cada UPDATE en el DoD. |

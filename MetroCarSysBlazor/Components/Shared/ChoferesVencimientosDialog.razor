@@ -1,0 +1,242 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   Documentación de choferes en actividad (20/08/2026) — reemplaza el cuadro de
+   texto plano que listaba los choferes en un párrafo corrido (no se podía buscar,
+   ordenar ni exportar, y no distinguía "vencido el 16/07" de "vence el 09/09").
+
+   Formato: franja de KPI + buscador + filtro por gravedad + tabla semáforo
+   (un renglón por chofer, una columna por documento), ordenada por "Vence primero".
+
+   No hace ninguna consulta: las filas llegan ya clasificadas desde la página
+   (ViajesPorChofer) con VencimientosChofer.Clasificar — la misma clasificación que
+   usa el Excel, así lo exportado no puede discrepar de lo que se ve.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+@inject NavigationManager Nav
+@inject ExcelExportService Excel
+@inject IJSRuntime JS
+
+<MudDialog Class="zoom-viaje-dialog cvd-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.Badge" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Documentación de choferes en actividad</span>
+            <span class="zoom-title-bar__nro">@Periodo</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+
+        @* ── KPIs: responden la pregunta antes de leer una sola fila ── *@
+        <div class="rfs-kpis mb-3">
+            <KpiCard Label="VENCIDOS" Value="@_vencidos.ToString()"
+                     Sub="no deberían estar manejando" Color="@NorturColors.Rojo"
+                     OnClick="@(() => Filtrar("vencidos"))" Title="Clic para ver solo los vencidos" />
+            <KpiCard Label="@($"VENCEN EN {DiasAviso} DÍAS")" Value="@_porVencer.ToString()"
+                     Sub="a renovar" Color="@NorturColors.Naranja"
+                     OnClick="@(() => Filtrar("porvencer"))" Title="Clic para ver solo los que están por vencer" />
+            <KpiCard Label="DOCUMENTO MÁS CRÍTICO" Value="@_docCritico"
+                     Sub="@_docCriticoSub" Color="@NorturColors.Azul" />
+            <KpiCard Label="AL DÍA" Value="@_alDia.ToString()"
+                     Sub="@($"de {ConActividad} choferes con actividad")" Color="@NorturColors.Verde" />
+        </div>
+
+        @* ── Buscador + filtro por gravedad + Excel ── *@
+        <div class="vpc-toolbar cvd-tools mb-2">
+            <MudTextField T="string" @bind-Value="_buscar" @bind-Value:after="StateHasChanged"
+                          Immediate="true" Clearable="true" Placeholder="Buscar chofer..."
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                          Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:260px;" />
+
+            <div class="cvd-seg">
+                <button type="button" class="@SegClass("todos")" @onclick="@(() => Filtrar("todos"))">Todos (@Filas.Count)</button>
+                <button type="button" class="@SegClass("vencidos")" @onclick="@(() => Filtrar("vencidos"))">Vencidos (@_vencidos)</button>
+                <button type="button" class="@SegClass("porvencer")" @onclick="@(() => Filtrar("porvencer"))">Por vencer (@_porVencer)</button>
+            </div>
+
+            <span style="flex:1 1 auto;"></span>
+
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Class="vpc-toolbar__excel"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Style="text-transform:none; border-radius:8px;">
+                Excel
+            </MudButton>
+        </div>
+
+        @* ── Tabla semáforo ── *@
+        <MudTable Items="@_visibles" Dense="true" Hover="true" Striped="true"
+                  Virtualize="true" FixedHeader="true" Height="46vh"
+                  Bordered="false" Class="cli-grid grid-compacta" T="ChoferDocVista">
+            <HeaderContent>
+                <MudTh>Chofer</MudTh>
+                <MudTh Style="white-space:nowrap;">Registro</MudTh>
+                <MudTh Style="white-space:nowrap;">CNRT</MudTh>
+                <MudTh Style="white-space:nowrap;">AEP</MudTh>
+                <MudTh Style="white-space:nowrap;">Vence primero</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Chofer">
+                    <span class="cvd-nom">@context.Nombre</span>
+                    <span class="cvd-sub">@Subtitulo(context)</span>
+                </MudTd>
+                <MudTd DataLabel="Registro">@Celda(context.Registro, context.Doc.RegistroVto)</MudTd>
+                <MudTd DataLabel="CNRT">@Celda(context.Cnrt, context.Doc.CnrtVto)</MudTd>
+                <MudTd DataLabel="AEP">@Celda(context.Aep, context.Doc.AepVto)</MudTd>
+                <MudTd DataLabel="Vence primero" Style="white-space:nowrap;">
+                    <span class="cvd-dot @(context.Peor == DocEstado.Vencido ? "cvd-dot--rojo" : "cvd-dot--ambar")"></span>
+                    @context.DocCritico · @Plazo(context)
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">
+                    @(Filas.Count == 0
+                        ? "Ningún chofer con actividad tiene documentación vencida ni por vencer. 👍"
+                        : "Ningún chofer coincide con la búsqueda o el filtro.")
+                </MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        @* Regla heredada del FoxPro + la excepción del AEP. Sin esta línea los números no
+           cierran con lo que el usuario ve (mismo criterio que el modal de Vencimientos). *@
+        <div class="vto-nota mt-2">
+            <MudIcon Icon="@Icons.Material.Outlined.Info" Style="font-size:14px;" />
+            <span>
+                El <b>registro y el CNRT sin fecha cargada</b> cuentan como vencidos, igual que en el Metrocar.
+                El <b>AEP</b> lo tienen solo los choferes que entran al aeropuerto: sin fecha se muestra como
+                <b>—</b> y no alerta. La ventana de aviso (@DiasAviso días) sale de los parámetros del sistema.
+            </span>
+        </div>
+
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.EventNote" OnClick="VerAgenda">
+            Ver agenda de vencimientos
+        </MudButton>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Choferes con actividad en el período que tienen algo para revisar, ya clasificados.</summary>
+    [Parameter, EditorRequired] public List<ChoferDocVista> Filas { get; set; } = new();
+
+    /// <summary>Ventana de aviso en días (parametro.aviso_cho).</summary>
+    [Parameter] public int DiasAviso { get; set; } = 30;
+
+    /// <summary>Choferes que viajaron en el período (para el KPI "al día").</summary>
+    [Parameter] public int ConActividad { get; set; }
+
+    /// <summary>Rango del informe, para el subtítulo de la barra.</summary>
+    [Parameter] public string Periodo { get; set; } = "";
+
+    /// <summary>Con qué filtro abre: "todos" (botón Ver detalle) o el chip que se clickeó.</summary>
+    [Parameter] public string FiltroInicial { get; set; } = "todos";
+
+    private string _filtro = "todos";
+    private string _buscar = "";
+
+    private int _vencidos, _porVencer, _alDia;
+    private string _docCritico = "—", _docCriticoSub = "";
+
+    protected override void OnInitialized()
+    {
+        _filtro = FiltroInicial;
+        _vencidos = Filas.Count(f => f.Peor == DocEstado.Vencido);
+        _porVencer = Filas.Count(f => f.Peor == DocEstado.PorVencer);
+        _alDia = Math.Max(0, ConActividad - Filas.Count);
+
+        // Qué documento explica la mayoría de los vencidos: dice dónde está el problema real.
+        var top = Filas.Where(f => f.Peor == DocEstado.Vencido)
+                       .GroupBy(f => f.DocCritico)
+                       .OrderByDescending(g => g.Count())
+                       .FirstOrDefault();
+        if (top is not null)
+        {
+            _docCritico = top.Key;
+            _docCriticoSub = $"{top.Count()} de los {_vencidos} vencidos";
+        }
+        else
+        {
+            _docCriticoSub = "ninguno vencido";
+        }
+    }
+
+    /// <summary>Filas visibles: filtro por gravedad + búsqueda por nombre, en orden de urgencia.</summary>
+    private List<ChoferDocVista> _visibles => VencimientosChofer.OrdenarPorUrgencia(
+        Filas.Where(f => _filtro switch
+              {
+                  "vencidos" => f.Peor == DocEstado.Vencido,
+                  "porvencer" => f.Peor == DocEstado.PorVencer,
+                  _ => true
+              })
+             .Where(f => _buscar.Trim().Length == 0
+                      || f.Nombre.Contains(_buscar.Trim(), StringComparison.OrdinalIgnoreCase)))
+        .ToList();
+
+    private void Filtrar(string filtro)
+    {
+        // Reclic en el filtro activo vuelve a "todos" — mismo gesto que el cross-filter de los informes.
+        _filtro = _filtro == filtro ? "todos" : filtro;
+        StateHasChanged();
+    }
+
+    private string SegClass(string f) => _filtro == f ? "cvd-seg__b cvd-seg__b--on" : "cvd-seg__b";
+
+    private static string Subtitulo(ChoferDocVista f)
+    {
+        var tipo = f.EsContratado ? $"Contratado · {f.Doc.Fletero}" : "Nortur";
+        return f.Viajes > 0 ? $"{tipo} · {f.Viajes} viaje{(f.Viajes == 1 ? "" : "s")} en el período" : tipo;
+    }
+
+    /// <summary>Plazo en días del documento crítico: "vencido hace 35 días" / "vence en 17 días".</summary>
+    private static string Plazo(ChoferDocVista f)
+    {
+        if (f.FechaCritica is null) return "sin fecha cargada";
+        var d = f.DiasCritico ?? 0;
+        if (d < 0) return $"vencido hace {-d} día{(d == -1 ? "" : "s")}";
+        if (d == 0) return "vence hoy";
+        return $"vence en {d} día{(d == 1 ? "" : "s")}";
+    }
+
+    /// <summary>Celda de un documento: fecha con el semáforo de la Agenda de Vencimientos
+    /// (rojo vencido / ámbar por vencer / neutro al día) y "—" cuando no le corresponde.</summary>
+    private RenderFragment Celda(DocEstado est, DateOnly? f) => builder =>
+    {
+        var texto = VencimientosChofer.Texto(est, f);
+        var clase = est switch
+        {
+            DocEstado.Vencido => "chof-vto--vencido",
+            DocEstado.PorVencer => "chof-vto--proximo",
+            DocEstado.NoAplica => "cvd-na",
+            _ => "cvd-ok"
+        };
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "class", clase);
+        builder.AddAttribute(2, "title", est == DocEstado.NoAplica ? "Sin fecha: no le corresponde" : texto);
+        builder.AddContent(3, texto);
+        builder.CloseElement();
+    };
+
+    private async Task DescargarExcel()
+    {
+        // El Excel sale con lo que se está viendo (filtro + búsqueda aplicados).
+        var bytes = Excel.ChoferesVencimientos(_visibles, DiasAviso, Periodo);
+        await JS.InvokeVoidAsync("downloadFile", "DocumentacionChoferes.xlsx", Convert.ToBase64String(bytes));
+    }
+
+    private void VerAgenda()
+    {
+        MudDialog.Close();
+        Nav.NavigateTo("/agenda-vencimientos");
+    }
+
+    private void Cerrar() => MudDialog.Close();
+}

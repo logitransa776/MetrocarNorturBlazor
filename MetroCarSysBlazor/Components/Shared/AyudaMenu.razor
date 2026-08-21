@@ -1,0 +1,166 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   Botón "Ayuda ▾" del AppBar (07/08/2026) — centro de ayuda de Buslink.
+
+   Un solo punto de entrada para todo lo que el usuario puede necesitar cuando se
+   traba, al estilo del combo de ayuda de los sistemas web actuales:
+
+     · Novedades              → qué cambió en Buslink (dialog, contenido curado)
+     · Ayuda online           → sitio/documentación externa (link, pestaña nueva)
+     · Descarga de manuales   → PDFs publicados en wwwroot/manuales
+     · Atajos de teclado      → la tabla F1–F9 de la Planilla de Tráfico
+     · Acerca de / soporte    → versión, entorno y a quién llamar
+
+   Configuración en appsettings.json → sección "Ayuda" (UrlOnline, SoporteMail,
+   SoporteTelefono). Si UrlOnline está vacía, cae en la ayuda interna /ayuda.
+
+   🔴 NO usa MudMenu (07/08/2026): con MudBlazor 9.5 el MudMenu con ActivatorContent
+   no abre el popover al clickear el activador (verificado con Playwright, sin errores
+   de JS). Desplegable propio en CSS + backdrop, igual que <UsuarioMenu />.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject IConfiguration Config
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+
+<div class="nt-drop">
+    <button type="button" class="appbar-ayuda @(_abierto ? "appbar-ayuda--on" : "")"
+            title="Ayuda de Buslink" @onclick="Alternar">
+        <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Size="Size.Small" />
+        <span>Ayuda</span>
+        <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small"
+                 Class="appbar-ayuda__caret" />
+    </button>
+
+    @if (_abierto)
+    {
+        <div class="nt-drop__backdrop" @onclick="Cerrar"></div>
+        <div class="nt-drop__panel">
+
+        <button type="button" class="nt-drop__item" @onclick="AbrirNovedades">
+            <div class="ayuda-mi">
+                <MudIcon Icon="@Icons.Material.Outlined.StarOutline" Size="Size.Small" Class="ayuda-mi__ico" />
+                <div class="ayuda-mi__txt">
+                    <span class="ayuda-mi__tit">Novedades</span>
+                    <span class="ayuda-mi__sub">Qué cambió en las últimas versiones</span>
+                </div>
+            </div>
+        </button>
+
+        <button type="button" class="nt-drop__item" @onclick="AbrirAyudaOnline">
+            <div class="ayuda-mi">
+                <MudIcon Icon="@Icons.Material.Outlined.Language" Size="Size.Small" Class="ayuda-mi__ico" />
+                <div class="ayuda-mi__txt">
+                    <span class="ayuda-mi__tit">Ayuda online</span>
+                    <span class="ayuda-mi__sub">
+                        Se abre en una pestaña nueva
+                    </span>
+                </div>
+            </div>
+        </button>
+
+        <button type="button" class="nt-drop__item" @onclick="AbrirManuales">
+            <div class="ayuda-mi">
+                <MudIcon Icon="@Icons.Material.Outlined.Download" Size="Size.Small" Class="ayuda-mi__ico" />
+                <div class="ayuda-mi__txt">
+                    <span class="ayuda-mi__tit">Descarga de manuales</span>
+                    <span class="ayuda-mi__sub">Manuales del sistema en PDF</span>
+                </div>
+            </div>
+        </button>
+
+        <button type="button" class="nt-drop__item" @onclick="AbrirAtajos">
+            <div class="ayuda-mi">
+                <MudIcon Icon="@Icons.Material.Outlined.Keyboard" Size="Size.Small" Class="ayuda-mi__ico" />
+                <div class="ayuda-mi__txt">
+                    <span class="ayuda-mi__tit">Atajos de teclado</span>
+                    <span class="ayuda-mi__sub">Las teclas F1 a F9 de la Planilla de Tráfico</span>
+                </div>
+            </div>
+        </button>
+
+        <div class="nt-drop__sep"></div>
+
+        <button type="button" class="nt-drop__item" @onclick="AbrirAcercaDe">
+            <div class="ayuda-mi">
+                <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" Class="ayuda-mi__ico" />
+                <div class="ayuda-mi__txt">
+                    <span class="ayuda-mi__tit">Acerca de Buslink</span>
+                    <span class="ayuda-mi__sub">Versión, entorno y soporte</span>
+                </div>
+            </div>
+        </button>
+
+        </div>
+    }
+</div>
+
+@code {
+    private bool _abierto;
+
+    private void Alternar() => _abierto = !_abierto;
+    private void Cerrar() => _abierto = false;
+
+    /// <summary>Dirección de la ayuda. Vacía en appsettings = la ayuda interna /ayuda,
+    /// que es la decisión vigente (las PCs de la mesa trabajan en la LAN).</summary>
+    private string UrlOnline
+    {
+        get
+        {
+            var u = Config["Ayuda:UrlOnline"]?.Trim();
+            return string.IsNullOrWhiteSpace(u) ? Nav.ToAbsoluteUri("ayuda").ToString() : u;
+        }
+    }
+
+    // Opciones compartidas por los dialogs de ayuda: mismo tamaño que el resto de los
+    // modales del sistema (estándar --nt-dlg-*), cierre por Escape y por backdrop.
+    private static DialogOptions Opciones(MaxWidth ancho = MaxWidth.Small) => new()
+    {
+        MaxWidth = ancho,
+        FullWidth = true,
+        CloseButton = false,
+        CloseOnEscapeKey = true,
+        BackdropClick = true
+    };
+
+    private async Task AbrirAyudaOnline()
+    {
+        _abierto = false;
+        // Misma función que usa "Ubicar en GPS": pestaña nueva con noopener/noreferrer.
+        var ok = await JS.InvokeAsync<bool>("abrirEnNuevaPestana", UrlOnline);
+        if (!ok) Snackbar.Add("El navegador bloqueó la pestaña nueva. Permití los pop-ups de Buslink.", Severity.Warning);
+    }
+
+    private Task AbrirManuales()
+    {
+        _abierto = false;
+        return DialogService.ShowAsync<AyudaManualesDialog>("Manuales", Opciones());
+    }
+
+    private Task AbrirNovedades()
+    {
+        _abierto = false;
+        return DialogService.ShowAsync<AyudaNovedadesDialog>("Novedades", Opciones());
+    }
+
+    private Task AbrirAcercaDe()
+    {
+        _abierto = false;
+        return DialogService.ShowAsync<AyudaAcercaDialog>("Acerca de Buslink", Opciones(MaxWidth.ExtraSmall));
+    }
+
+    /// <summary>Reusa el mismo dialog que F1 dentro de la Planilla de Tráfico: una sola
+    /// fuente de verdad para la tabla de atajos. Los permisos filtran qué teclas se ven.</summary>
+    private Task AbrirAtajos()
+    {
+        _abierto = false;
+        var parametros = new DialogParameters<AyudaTeclasDialog>
+        {
+            { x => x.EsDiagramador, Permisos.Tiene('D') },
+            { x => x.VeAvisos,      Permisos.Tiene('C') }
+        };
+        return DialogService.ShowAsync<AyudaTeclasDialog>("Atajos", parametros, Opciones());
+    }
+}

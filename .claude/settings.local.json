@@ -5,7 +5,22 @@
       "Read(//tmp/**)",
       "Bash(awk '/PROCEDURE Init/,/ENDPROC/' ctacte_comprobante.txt)",
       "Bash(awk '/PROCEDURE Init/,/ENDPROC/' liquidacion_chofer_por_hora.txt)",
-      "Bash(awk '/REC 12 .*resumen/,/REC 14/' liquidacion_chofer_por_hora.txt)"
+      "Bash(awk '/REC 12 .*resumen/,/REC 14/' liquidacion_chofer_por_hora.txt)",
+      "Bash(claude --version)",
+      "Read(//c/Users/HP/.local/bin/**)",
+      "Read(//c/Users/HP/.claude/**)",
+      "Read(//c/Users/HP/**)",
+      "Bash(node -e ' *)"
     ]
+  },
+  "skillOverrides": {
+    "n8n-code-javascript": "off",
+    "n8n-expression-syntax": "off",
+    "n8n-mcp-tools-expert": "off",
+    "n8n-node-configuration": "off",
+    "n8n-validation-expert": "off",
+    "n8n-workflow-patterns": "off",
+    "odoo-integration": "off",
+    "postgresql-fb-repuestos": "off"
   }
 }

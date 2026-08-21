@@ -9,6 +9,8 @@
 --  Tipos de evento (columna `evento`):
 --    LOGIN          — ingreso exitoso
 --    LOGOUT         — el usuario cerró sesión (botón Cerrar sesión)
+--    DESCONECTADO   — cerró el navegador: cayó el circuito y no volvió en 5 min
+--                     (SesionCircuitoTracker); motivo = "Navegador cerrado / conexión perdida"
 --    EXPIRADA       — sesión abierta cerrada al reingresar (cierre "sucio")
 --    VENCIDA        — sesión superó las 8 hs (cerrada por detección/barrido)
 --    LOGIN_FALLIDO  — intento de ingreso rechazado (session_id NULL; motivo en `motivo`)

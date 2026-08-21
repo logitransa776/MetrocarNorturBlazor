@@ -1,0 +1,625 @@
+﻿@page "/panel-tercerizacion"
+@using ApexCharts
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@inject ReportService Reports
+@inject ExcelExportService Excel
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+@* ─────────────────────────────────────────────────────────────────────────────
+   Panel de Tercerización — Nortur vs Fleteros. Informe NUEVO (no existe en el
+   Metrocar/FoxPro). EN DESARROLLO: se ve solo bajo Informes → En desarrollo.
+
+   Cuánto de la operación se presta con flota propia y cuánto se da a terceros,
+   por cliente, servicio, tipo de unidad y mes; más el cruce de oportunidad.
+
+   🔴 Quién prestó el servicio se lee de `viaje.fletero` (titular), NUNCA de
+   `vehiculo.uso`: "PROPIO" ahí significa propio DEL FLETERO, no de NORTUR.
+   🔴 `fletero` vacío = viaje sin unidad (SIN ASIGNAR), no "no tercerizado" →
+   va aparte, nunca al denominador del %.
+   ───────────────────────────────────────────────────────────────────────────── *@
+
+<PageTitle>BusLink</PageTitle>
+
+<div class="page-header mb-3">
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+            Panel de Tercerización
+        </MudText>
+        <span class="nt-badge-dev" title="Informe en evaluación: se publica al módulo Flota cuando el cliente lo apruebe.">
+            <MudIcon Icon="@Icons.Material.Filled.Science" Size="MudSize.Small" />
+            En desarrollo
+        </span>
+        <AyudaReporte Ruta="panel-tercerizacion" />
+    </div>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Cuánto mueve la flota propia y cuánto se da a fleteros · Nortur
+    </MudText>
+</div>
+
+@* ── Barra de filtros ── *@
+<MudPaper Elevation="1" Class="rfs-filtros mb-3">
+    <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudSize.Small" Style="color:#003AA0; flex-shrink:0;" />
+
+    <div class="rfs-fechas">
+        <MudDatePicker Label="Desde" Date="_desde" DateChanged="@(d => { _desde = d; _pendiente = true; })"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+        <MudDatePicker Label="Hasta" Date="_hasta" DateChanged="@(d => { _hasta = d; _pendiente = true; })"
+                       MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Editable="true"
+                       Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+    </div>
+
+    @* Dimensión: se aplica al instante (es un corte del mismo dataset, no cuesta query). *@
+    <MudSelect T="string" Label="Desglosar por" Value="_dimension" ValueChanged="CambiarDimension"
+               Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:175px;"
+               title="Con qué criterio abrir la tercerización: por cliente, por servicio o por tipo de unidad pedido. Se aplica al instante.">
+        @foreach (var d in ReportService.DimensionesTercerizacion)
+        {
+            <MudSelectItem T="string" Value="@d">@d</MudSelectItem>
+        }
+    </MudSelect>
+
+    <span style="flex:1 1 auto;"></span>
+
+    <div style="display:flex; gap:6px; flex-shrink:0;">
+        <MudButton Variant="Variant.Filled" Color="@(_pendiente ? MudColor.Warning : MudColor.Primary)"
+                   OnClick="Cargar" Disabled="_cargando"
+                   StartIcon="@(_pendiente ? Icons.Material.Filled.PriorityHigh : Icons.Material.Filled.Search)"
+                   Style="border-radius:8px; height:40px; text-transform:none;">
+            @(_cargando ? "Cargando..." : "Aplicar filtros")
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                   StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                   Disabled="@(_cargando || _prestadores.Count == 0)"
+                   Style="border-radius:8px; height:40px; text-transform:none;">
+            Excel
+        </MudButton>
+    </div>
+</MudPaper>
+
+@if (_pendiente && !_cargando)
+{
+    <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3" Style="border-radius:12px;"
+              Icon="@Icons.Material.Filled.Update">
+        Lo que se ve abajo <b>todavía no incluye</b> el cambio de fechas — apretá <b>Aplicar filtros</b>.
+    </MudAlert>
+}
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else if (_prestadores.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Style="border-radius:12px;">
+        No hay viajes con unidad asignada entre el @_desdeAp.ToString("dd/MM/yyyy") y el @_hastaAp.ToString("dd/MM/yyyy").
+    </MudAlert>
+}
+else
+{
+    <div class="@(_pendiente ? "rfs-desactualizado" : "")">
+
+    @* ── KPIs ── *@
+    <div class="rfs-kpis mb-3">
+        <KpiCard Label="Viajes prestados" Value="@Fmt(_kAsignados)" Sub="@_kAsignadosSub" Color="@NorturColors.Azul" />
+        <KpiCard Label="Tercerizado" Value="@($"{_kPctTerc:0.0} %")" Sub="@_kPctTercSub" Color="@(_kPctTerc >= 25 ? NorturColors.Rojo : NorturColors.Naranja)" />
+        <KpiCard Label="Fleteros" Value="@Fmt(_kFleteros)" Sub="@_kFleterosSub" Color="@NorturColors.AzulNoche" />
+        <KpiCard Label="Pax de terceros" Value="@Fmt(_kPaxTerc)" Sub="@_kPaxTercSub" Color="@NorturColors.Verde" />
+        <KpiCard Label="Km de terceros" Value="@Fmt(_kKmTerc)" Sub="@_kKmTercSub" Color="@NorturColors.Naranja" />
+        <KpiCard Label="Sin cubrir" Value="@Fmt(_kSinAsignar)" Sub="@_kSinAsignarSub" Color="@(_kSinAsignar > 0 ? NorturColors.Rojo : NorturColors.Azul)" />
+    </div>
+
+    <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Style="border-radius:12px;"
+              Icon="@Icons.Material.Filled.Info">
+        Quién prestó el servicio se lee del <b>titular de la unidad</b> asignada.
+        Los viajes <b>sin cubrir</b> (que nunca tuvieron unidad) se muestran aparte y
+        <b>no entran</b> en el porcentaje de tercerización.
+    </MudAlert>
+
+    <MudGrid Class="mb-3">
+
+        @* ── Ranking de prestadores (cross-filter) ── *@
+        <MudItem xs="12" md="5">
+            <MudPaper Elevation="1" Class="pa-3" Style="border-radius:14px; height:100%;">
+                <div class="rfs-bar-head">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                        Quién presta los viajes
+                        <AyudaReporte Ruta="panel-tercerizacion" Bloque="ranking" Chico="true" />
+                    </MudText>
+                    @if (_focus is not null)
+                    {
+                        <MudButton Size="MudSize.Small" Variant="Variant.Text" Color="MudColor.Primary"
+                                   StartIcon="@Icons.Material.Filled.Close" OnClick="LimpiarFoco"
+                                   Style="text-transform:none;">
+                            Quitar filtro: @NombreDe(_focus)
+                        </MudButton>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">Clic para enfocar</MudText>
+                    }
+                </div>
+
+                <div class="op-rank mt-2">
+                    @foreach (var p in _prestadores)
+                    {
+                        var pct = _kAsignadosTotal > 0 ? p.Viajes * 100.0 / _kAsignadosTotal : 0;
+                        <div class="op-rank__fila @(EnFoco(p.Prestador) ? "" : "op-rank--apagada") @(_focus == p.Prestador ? "op-rank--foco" : "")"
+                             @onclick="() => ToggleFoco(p.Prestador)"
+                             title="@($"{p.Nombre}: {Fmt(p.Viajes)} viajes ({pct:0.0} %) con {Fmt(p.Unidades)} unidad(es). Clic para enfocar.")">
+                            <span class="op-rank__nom">@(p.EsPropio ? "NORTUR (propia)" : p.Prestador)</span>
+                            <span class="op-rank__barra">
+                                <span style="@($"width:{Ancho(_barMax > 0 ? p.Viajes * 100.0 / _barMax : 0)}; background:{ColorDe(p.Prestador)};")"></span>
+                            </span>
+                            <span class="op-rank__val">
+                                @Fmt(p.Viajes)<span class="op-rank__pct">@($"{pct:0.0} %")</span>
+                            </span>
+                        </div>
+                    }
+                </div>
+
+                @if (_focus is not null && _prestadorFoco is not null)
+                {
+                    <div class="terc-ficha mt-3">
+                        <div class="terc-ficha__tit">@_prestadorFoco.Nombre</div>
+                        <div class="terc-ficha__grid">
+                            <div><span>@Fmt(_prestadorFoco.Unidades)</span>unidades</div>
+                            <div><span>@Fmt(_prestadorFoco.Clientes)</span>clientes</div>
+                            <div><span>@Fmt(_prestadorFoco.Servicios)</span>servicios</div>
+                            <div><span>@Fmt(_prestadorFoco.Dias)</span>días</div>
+                            <div><span>@_prestadorFoco.ViajesPorUnidad.ToString("#,0.0", _ar)</span>viajes/unidad</div>
+                            <div><span>@_prestadorFoco.PaxPorViaje.ToString("#,0.0", _ar)</span>pax/viaje</div>
+                        </div>
+                    </div>
+                }
+            </MudPaper>
+        </MudItem>
+
+        @* ── Evolución mensual ── *@
+        <MudItem xs="12" md="7">
+            <MudPaper Elevation="1" Class="pa-3" Style="border-radius:14px; height:100%;">
+                <div class="rfs-bar-head">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                        Propio vs tercerizado, mes a mes
+                        <AyudaReporte Ruta="panel-tercerizacion" Bloque="evolucion" Chico="true" />
+                    </MudText>
+                    <MudText Typo="Typo.caption" Style="color:#94A3B8;">
+                        viajes por mes · abajo, el % tercerizado
+                    </MudText>
+                </div>
+
+                <div @key="_keyEvol">
+                    <ApexChart TItem="TercerizacionMesRow" Options="_optsEvol" Height="300">
+                        <ApexPointSeries TItem="TercerizacionMesRow" Items="_meses" Name="Propios"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="@(x => x.Etiqueta)" YValue="@(x => x.Propios)" />
+                        <ApexPointSeries TItem="TercerizacionMesRow" Items="_meses" Name="Tercerizados"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="@(x => x.Etiqueta)" YValue="@(x => x.Tercerizados)" />
+                    </ApexChart>
+                </div>
+
+                <div class="op-dows">
+                    @foreach (var m in _mesesResumen)
+                    {
+                        <div class="op-dow" title="@($"{m.Etiqueta}: {Fmt(m.Tercerizados)} de {Fmt(m.Asignados)} viajes tercerizados")">
+                            <span class="op-dow__n">@($"{m.PctTercerizado:0.0}%")</span>
+                            <span class="op-dow__d">@m.Etiqueta</span>
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @* ── Desglose por la dimensión elegida ── *@
+    <MudPaper Elevation="1" Class="pa-0 mb-3" Style="border-radius:14px; overflow:hidden;">
+        <div class="pa-3 pb-1">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                Tercerización por @_dimension.ToLower()
+                @if (_focus is not null)
+                {
+                    <span style="color:#7A90AD; font-weight:600;"> · enfocado en @NombreDe(_focus)</span>
+                }
+                <AyudaReporte Ruta="panel-tercerizacion" Bloque="desglose" Chico="true" />
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#7A90AD;">
+                Dónde se apoya la operación en terceros. Ordenado por viajes tercerizados.
+                @if (_catResto is not null)
+                {
+                    <text>Se listan las @TopCategorias principales de @_catTotales; el resto va agrupado al pie.</text>
+                }
+            </MudText>
+        </div>
+
+        <div style="overflow-x:auto;">
+            <table class="op-tabla">
+                <thead>
+                    <tr>
+                        <th class="op-th-oper">@_dimension</th>
+                        <th>Propios</th>
+                        <th>Tercerizados</th>
+                        <th>Total</th>
+                        <th>% terceriz.</th>
+                        <th style="min-width:150px;">Reparto</th>
+                        <th>Pax terceros</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var c in _categorias)
+                    {
+                        <tr>
+                            <td class="op-th-oper" title="@c.Categoria">@c.Categoria</td>
+                            <td class="op-num">@Cero(c.Propios)</td>
+                            <td class="op-num @(c.Tercerizados > 0 ? "op-num--cruz" : "")">@Cero(c.Tercerizados)</td>
+                            <td class="op-num op-num--fuerte">@Fmt(c.Total)</td>
+                            <td class="op-num">@(c.Total > 0 ? $"{c.Pct:0.0} %" : "·")</td>
+                            <td>
+                                <span class="terc-mix" title="@($"{c.Propios:#,0} propios · {c.Tercerizados:#,0} tercerizados")">
+                                    <span class="terc-mix__p" style="@($"width:{Ancho(c.Total > 0 ? 100.0 - c.Pct : 0)};")"></span>
+                                    <span class="terc-mix__t" style="@($"width:{Ancho(c.Total > 0 ? c.Pct : 0)};")"></span>
+                                </span>
+                            </td>
+                            <td class="op-num">@Cero(c.PaxTerc)</td>
+                        </tr>
+                    }
+                    @if (_catResto is not null)
+                    {
+                        <tr class="terc-fila--resto">
+                            <td class="op-th-oper" title="La cola de categorías con poco volumen, agrupada para que el TOTAL cierre con los KPIs.">
+                                @_catResto.Categoria
+                            </td>
+                            <td class="op-num">@Cero(_catResto.Propios)</td>
+                            <td class="op-num @(_catResto.Tercerizados > 0 ? "op-num--cruz" : "")">@Cero(_catResto.Tercerizados)</td>
+                            <td class="op-num op-num--fuerte">@Fmt(_catResto.Total)</td>
+                            <td class="op-num">@(_catResto.Total > 0 ? $"{_catResto.Pct:0.0} %" : "·")</td>
+                            <td>
+                                <span class="terc-mix">
+                                    <span class="terc-mix__p" style="@($"width:{Ancho(_catResto.Total > 0 ? 100.0 - _catResto.Pct : 0)};")"></span>
+                                    <span class="terc-mix__t" style="@($"width:{Ancho(_catResto.Total > 0 ? _catResto.Pct : 0)};")"></span>
+                                </span>
+                            </td>
+                            <td class="op-num">@Cero(_catResto.PaxTerc)</td>
+                        </tr>
+                    }
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td class="op-th-oper">TOTAL</td>
+                        <td class="op-num">@Fmt(_totFilas.Propios)</td>
+                        <td class="op-num">@Fmt(_totFilas.Tercerizados)</td>
+                        <td class="op-num">@Fmt(_totFilas.Total)</td>
+                        <td class="op-num">@(_totFilas.Total > 0 ? $"{_totFilas.Pct:0.0} %" : "·")</td>
+                        <td></td>
+                        <td class="op-num">@Fmt(_totFilas.PaxTerc)</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </MudPaper>
+
+    @* ── Cruce de oportunidad ── *@
+    <MudPaper Elevation="1" Class="pa-0" Style="border-radius:14px; overflow:hidden;">
+        <div class="pa-3 pb-1">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                ¿Se contrató afuera teniendo unidades propias sin salir?
+                <AyudaReporte Ruta="panel-tercerizacion" Bloque="oportunidad" Chico="true" />
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#7A90AD;">
+                Por <b>tipo de unidad</b>, porque tercerizar una VAN no se cubre con un BUS parado.
+            </MudText>
+        </div>
+
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="ma-3 mt-1" Style="border-radius:10px;"
+                  Icon="@Icons.Material.Filled.PriorityHigh">
+            <b>Esta tabla sirve para preguntar, no para concluir.</b> Un "día-unidad sin salir"
+            no es capacidad disponible: la unidad pudo estar en taller, sin chofer o de franco, y
+            en un feriado figura parada toda la flota.
+        </MudAlert>
+
+        <div style="overflow-x:auto;">
+            <table class="op-tabla">
+                <thead>
+                    <tr>
+                        <th class="op-th-oper">Tipo pedido</th>
+                        <th>Propios</th>
+                        <th>Tercerizados</th>
+                        <th>% terceriz.</th>
+                        <th>Sin cubrir</th>
+                        <th>Unid. propias</th>
+                        <th>Días-unidad sin salir</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var o in _oportunidad)
+                    {
+                        <tr class="@(o.HayPregunta ? "terc-fila--pregunta" : "")">
+                            <td class="op-th-oper">
+                                @o.Tipo
+                                @if (o.HayPregunta)
+                                {
+                                    <span class="op-chip op-chip--alerta" title="Se tercerizaron viajes de este tipo y además hubo unidades propias del mismo tipo sin salir. Vale la pena mirarlo.">revisar</span>
+                                }
+                            </td>
+                            <td class="op-num">@Cero(o.Propios)</td>
+                            <td class="op-num @(o.Tercerizados > 0 ? "op-num--cruz" : "")">@Cero(o.Tercerizados)</td>
+                            <td class="op-num">@(o.Asignados > 0 ? $"{o.PctTercerizado:0.0} %" : "·")</td>
+                            <td class="op-num @(o.SinAsignar > 0 ? "op-num--alerta" : "")">@Cero(o.SinAsignar)</td>
+                            <td class="op-num">@Cero(o.UnidadesPropias)</td>
+                            <td class="op-num">@Cero(o.DiasUnidadOciosos)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </MudPaper>
+
+    </div>
+}
+
+@code {
+    private static readonly System.Globalization.CultureInfo _ar = new("es-AR");
+
+    private DateTime? _desde = DateTime.Today.AddMonths(-6);
+    private DateTime? _hasta = DateTime.Today;
+    private DateOnly _desdeAp, _hastaAp;
+    private bool _pendiente;
+    private bool _cargando = true;
+    private string _dimension = ReportService.DimTercCliente;
+
+    private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
+    private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+
+    private List<TercerizacionPrestadorRow> _prestadores = new();
+    private List<TercerizacionMesRow> _meses = new();
+    private List<TercerizacionMesRow> _mesesResumen = new();
+    private List<TercerizacionDetalleRow> _detalle = new();
+    private List<TercerizacionOportunidadRow> _oportunidad = new();
+
+    /// <summary>Cuántas categorías se listan una por una; el resto se pliega en "Otras".</summary>
+    private const int TopCategorias = 40;
+
+    private string? _focus;
+    private TercerizacionPrestadorRow? _prestadorFoco;
+    private List<CatRow> _categorias = new();
+    private CatRow? _catResto;
+    private CatRow _totFilas = new("TOTAL", 0, 0, 0);
+    private int _catTotales;
+    private int _barMax;
+    private Guid _keyEvol = Guid.NewGuid();
+
+    private int _kAsignados, _kAsignadosTotal, _kFleteros, _kPaxTerc, _kSinAsignar;
+    private long _kKmTerc;
+    private double _kPctTerc;
+    private string _kAsignadosSub = "", _kPctTercSub = "", _kFleterosSub = "";
+    private string _kPaxTercSub = "", _kKmTercSub = "", _kSinAsignarSub = "";
+
+    private ApexChartOptions<TercerizacionMesRow> _optsEvol = new();
+
+    // La flota propia SIEMPRE azul de marca; los fleteros toman la paleta categórica.
+    private static readonly List<string> _palette = new()
+    { "#F99410", "#16A34A", "#DC2626", "#0EA5E9", "#7C3AED",
+      "#B45309", "#DB2777", "#0D9488", "#65A30D", "#DB2777" };
+    private const string _colorResto = "#94A3B8";
+    private Dictionary<string, string> _colorPorPrestador = new();
+
+    private string ColorDe(string p) => _colorPorPrestador.TryGetValue(p, out var c) ? c : _colorResto;
+    private bool EnFoco(string p) => _focus is null || _focus == p;
+    private string NombreDe(string p) =>
+        _prestadores.FirstOrDefault(x => x.Prestador == p)?.Nombre ?? p;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        // La letra la decide el catálogo: hoy 'S' (en desarrollo), 'V' al graduarse.
+        if (!InformesCatalogo.PuedeVerRuta(Permisos, "panel-tercerizacion"))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await Cargar();
+    }
+
+    private async Task Cargar()
+    {
+        if (_desde is null || _hasta is null) return;
+
+        _cargando = true;
+        StateHasChanged();
+
+        _desdeAp = DateOnly.FromDateTime(_desde.Value);
+        _hastaAp = DateOnly.FromDateTime(_hasta.Value);
+        _focus = null;
+
+        var tP = Reports.GetTercerizacionPrestadoresAsync(_desdeAp, _hastaAp);
+        var tM = Reports.GetTercerizacionEvolucionAsync(_desdeAp, _hastaAp);
+        var tD = Reports.GetTercerizacionDetalleAsync(_desdeAp, _hastaAp);
+        var tO = Reports.GetTercerizacionOportunidadAsync(_desdeAp, _hastaAp);
+        await Task.WhenAll(tP, tM, tD, tO);
+
+        _prestadores = tP.Result;
+        _meses = tM.Result;
+        _detalle = tD.Result;
+        _oportunidad = tO.Result;
+
+        // Los últimos 6 meses del período, para la tira de porcentajes.
+        _mesesResumen = _meses.TakeLast(7).ToList();
+
+        _barMax = _prestadores.Count > 0 ? _prestadores.Max(p => p.Viajes) : 0;
+        _kAsignadosTotal = _prestadores.Sum(p => p.Viajes);
+
+        // Color por prestador: NORTUR fijo en azul de marca, los fleteros por ranking.
+        _colorPorPrestador = new Dictionary<string, string> { [ReportService.TitularPropio] = NorturColors.Azul };
+        var i = 0;
+        foreach (var p in _prestadores.Where(x => !x.EsPropio).OrderByDescending(x => x.Viajes))
+            _colorPorPrestador[p.Prestador] = i < _palette.Count ? _palette[i++] : _colorResto;
+
+        _pendiente = false;
+        _cargando = false;
+        _keyEvol = Guid.NewGuid();
+        Recalcular();
+    }
+
+    private void CambiarDimension(string d)
+    {
+        _dimension = d;
+        Recalcular();
+    }
+
+    private void ToggleFoco(string p)
+    {
+        _focus = _focus == p ? null : p;
+        Recalcular();
+        _keyEvol = Guid.NewGuid();
+    }
+
+    private void LimpiarFoco()
+    {
+        _focus = null;
+        Recalcular();
+        _keyEvol = Guid.NewGuid();
+    }
+
+    /// <summary>
+    /// Todo el tablero en memoria. El ranking se arma SIEMPRE con el dataset completo (el foco
+    /// solo lo atenúa); KPIs, desglose y evolución se recalculan sobre el prestador enfocado.
+    /// </summary>
+    private void Recalcular()
+    {
+        _prestadorFoco = _focus is null ? null : _prestadores.FirstOrDefault(p => p.Prestador == _focus);
+
+        // ── Desglose por la dimensión elegida ──
+        var det = _detalle.Where(d => d.Dimension == _dimension).ToList();
+        var todas = det
+            .GroupBy(d => d.Categoria)
+            .Select(g => new CatRow(
+                Categoria: g.Key,
+                Propios: g.Where(x => x.EsPropio).Sum(x => x.Viajes),
+                // Con foco, "tercerizados" pasa a ser solo lo del fletero enfocado.
+                Tercerizados: g.Where(x => !x.EsPropio && EnFoco(x.Prestador)).Sum(x => x.Viajes),
+                PaxTerc: g.Where(x => !x.EsPropio && EnFoco(x.Prestador)).Sum(x => x.Pax)))
+            .Where(c => c.Total > 0)
+            .OrderByDescending(c => c.Tercerizados)
+            .ThenByDescending(c => c.Total)
+            .ToList();
+
+        _catTotales = todas.Count;
+        _categorias = todas.Take(TopCategorias).ToList();
+
+        // La cola SIEMPRE se muestra como una fila "Otras": si no, la fila TOTAL sumaría solo
+        // lo visible y no cerraría con el KPI de arriba — un total que no cierra es un total
+        // que miente. (Mismo criterio que el "Otros" de los gráficos del proyecto.)
+        _catResto = todas.Count > TopCategorias
+            ? new CatRow(
+                Categoria: $"Otras {todas.Count - TopCategorias} {_dimension.ToLower()}(s)",
+                Propios: todas.Skip(TopCategorias).Sum(c => c.Propios),
+                Tercerizados: todas.Skip(TopCategorias).Sum(c => c.Tercerizados),
+                PaxTerc: todas.Skip(TopCategorias).Sum(c => c.PaxTerc))
+            : null;
+
+        // El pie suma TODAS las categorías (visibles + la cola), así cierra con los KPIs.
+        _totFilas = new CatRow("TOTAL",
+            todas.Sum(c => c.Propios), todas.Sum(c => c.Tercerizados), todas.Sum(c => c.PaxTerc));
+
+        // ── Evolución: con foco, la serie de terceros es solo la del enfocado ──
+        if (_focus is not null && !(_prestadorFoco?.EsPropio ?? false))
+        {
+            // No hay detalle mensual por fletero en el dataset, así que con foco se muestra el
+            // total del período en la ficha y la evolución queda con las series completas.
+            // (Evita inventar una serie que la consulta no trae.)
+        }
+
+        var maxMes = _meses.Count > 0 ? _meses.Max(m => Math.Max(m.Propios, m.Tercerizados)) : 0;
+        _optsEvol = new ApexChartOptions<TercerizacionMesRow>
+        {
+            Chart = new()
+            {
+                Toolbar = new() { Show = false },
+                Animations = new() { Enabled = false },
+                Stacked = true,
+            },
+            Colors = new List<string> { NorturColors.Azul, NorturColors.Naranja },
+            PlotOptions = new() { Bar = new() { Horizontal = false, BorderRadius = 3, ColumnWidth = "62%" } },
+            DataLabels = new() { Enabled = false },
+            Legend = new() { Show = true, Position = LegendPosition.Top, HorizontalAlign = ApexCharts.Align.Right },
+            Xaxis = new() { Labels = new() { Rotate = -45, HideOverlappingLabels = true } },
+            Grid = new() { BorderColor = "#EEF2F9" },
+            Tooltip = new() { Y = new() { Formatter = "function(val){ return val === null ? '' : val.toLocaleString('es-AR') + ' viajes'; }" } },
+        };
+
+        // ── KPIs ──
+        var propios = _prestadores.Where(p => p.EsPropio).Sum(p => p.Viajes);
+        var terceros = _prestadores.Where(p => !p.EsPropio).Sum(p => p.Viajes);
+        var tercFoco = _prestadores.Where(p => !p.EsPropio && EnFoco(p.Prestador)).ToList();
+
+        _kAsignados = _kAsignadosTotal;
+        _kAsignadosSub = $"{Fmt(propios)} propios · {Fmt(terceros)} de terceros";
+
+        _kPctTerc = _kAsignadosTotal > 0 ? terceros * 100.0 / _kAsignadosTotal : 0;
+        _kPctTercSub = _focus is null
+            ? $"{Fmt(terceros)} de {Fmt(_kAsignadosTotal)} viajes prestados"
+            : $"{NombreDe(_focus)}: {(_kAsignadosTotal > 0 ? tercFoco.Sum(p => p.Viajes) * 100.0 / _kAsignadosTotal : 0):0.0} % del total";
+
+        _kFleteros = _prestadores.Count(p => !p.EsPropio);
+        var topFlet = _prestadores.Where(p => !p.EsPropio).OrderByDescending(p => p.Viajes).FirstOrDefault();
+        _kFleterosSub = topFlet is not null
+            ? $"el mayor es {topFlet.Prestador} ({(terceros > 0 ? topFlet.Viajes * 100.0 / terceros : 0):0} % de lo tercerizado)"
+            : "sin terceros en el período";
+
+        _kPaxTerc = tercFoco.Sum(p => p.Pax);
+        var paxTot = _prestadores.Sum(p => p.Pax);
+        _kPaxTercSub = paxTot > 0 ? $"{(_kPaxTerc * 100.0 / paxTot):0.0} % de los pax del período" : "sin pax cargados";
+
+        _kKmTerc = tercFoco.Sum(p => p.Km);
+        var kmTot = _prestadores.Sum(p => p.Km);
+        _kKmTercSub = kmTot > 0 ? $"{(_kKmTerc * 100.0 / kmTot):0.0} % de los km del período" : "sin km cargados";
+
+        _kSinAsignar = _meses.Sum(m => m.SinAsignar);
+        _kSinAsignarSub = _kSinAsignar > 0
+            ? "viajes que nunca tuvieron unidad"
+            : "todos los viajes tuvieron unidad";
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = Excel.PanelTercerizacion(_prestadores, _meses, _detalle, _oportunidad, _desdeAp, _hastaAp);
+        var nombre = $"panel_tercerizacion_{_desdeAp:yyyyMMdd}_{_hastaAp:yyyyMMdd}.xlsx";
+        using var stream = new MemoryStream(bytes);
+        using var streamRef = new DotNetStreamReference(stream);
+        await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
+    }
+
+    /// <summary>
+    /// Ancho de barra en CSS. **InvariantCulture obligatorio**: en es-AR el separador decimal
+    /// es la coma y `width:81,7%` es CSS inválido — el navegador descarta la regla y la barra
+    /// se va al 100%. Ver la memoria del Panel del Operador (mismo bug, 11/08/2026).
+    /// </summary>
+    private static string Ancho(double pct)
+    {
+        var v = Math.Clamp(pct, 0, 100);
+        if (v > 0 && v < 0.8) v = 0.8;
+        return v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + "%";
+    }
+
+    private static string Fmt(int n) => n.ToString("#,0", _ar);
+    private static string Fmt(long n) => n.ToString("#,0", _ar);
+    private static string Cero(int n) => n > 0 ? Fmt(n) : "·";
+
+    /// <summary>Una categoría de la dimensión abierta, ya resuelta propio vs tercerizado.</summary>
+    public record CatRow(string Categoria, int Propios, int Tercerizados, int PaxTerc)
+    {
+        public int Total => Propios + Tercerizados;
+        public double Pct => Total > 0 ? Tercerizados * 100.0 / Total : 0;
+    }
+}

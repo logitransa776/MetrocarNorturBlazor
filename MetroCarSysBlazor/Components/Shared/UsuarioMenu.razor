@@ -1,0 +1,148 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   Menú de usuario del AppBar (07/08/2026) — reemplaza el texto "Usuario: X" y el
+   botón naranja "Cerrar sesión" que estaban sueltos en la barra.
+
+   Es el hermano de <AyudaMenu />: mismo activador (chip discreto sobre la barra
+   azul) y mismo desplegable de dos renglones por ítem. Estructura, como en los
+   sistemas web actuales:
+
+     · Ficha del usuario (nombre + rol + módulos)  → cabecera, NO clickeable
+     · Mis accesos      → auditoría filtrada por el usuario (solo con permiso S)
+     · Tema             → NORTUR clásico ↔ Compacto gris (lo maneja el layout)
+     · [pie] Cerrar sesión
+
+   🔴 El logout NO puede ser un ítem de menú común: la cookie se borra en un request
+   HTTP real (endpoint /auth/logout), no por SignalR — por eso el pie es un <form
+   method="post"> con AntiforgeryToken, igual que el botón que reemplaza.
+
+   🔴 NO usa MudMenu (07/08/2026): con MudBlazor 9.5, el MudMenu con ActivatorContent
+   NO abre el popover al clickear el activador — verificado con Playwright, tanto acá
+   como en <AyudaMenu /> (el activador se monta, el clic no dispara nada, sin errores
+   de JS). Como consecuencia el usuario quedaba SIN forma de cerrar sesión. El
+   desplegable es CSS propio con un backdrop para cerrar al clickear afuera, el mismo
+   camino que ya se había tomado con el drawer lateral.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+
+<div class="nt-drop">
+    <button type="button" class="appbar-usuario @(_abierto ? "appbar-usuario--on" : "")"
+            title="@($"Sesión de {Usuario}")" @onclick="Alternar">
+        <MudIcon Icon="@Icons.Material.Outlined.PersonOutline" Size="Size.Small" />
+        <span class="appbar-usuario__nombre">@Usuario</span>
+        <MudIcon Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small"
+                 Class="appbar-usuario__caret" />
+    </button>
+
+    @if (_abierto)
+    {
+        <div class="nt-drop__backdrop" @onclick="Cerrar"></div>
+        <div class="nt-drop__panel nt-drop__panel--usuario">
+
+        @* ── Ficha: quién está usando el sistema. Informativa, sin acción. ── *@
+        <div class="usermenu-ficha">
+            <div class="usermenu-ficha__avatar">@Iniciales</div>
+            <div class="usermenu-ficha__txt">
+                <span class="usermenu-ficha__nombre">@Usuario</span>
+                <span class="usermenu-ficha__rol">@Rol</span>
+                <span class="usermenu-ficha__mods">@ModulosTexto</span>
+            </div>
+        </div>
+
+        <div class="nt-drop__sep"></div>
+
+        @if (Permisos.Tiene('S'))
+        {
+            <button type="button" class="nt-drop__item" @onclick="VerMisAccesos">
+                <div class="ayuda-mi">
+                    <MudIcon Icon="@Icons.Material.Outlined.History" Size="Size.Small" Class="ayuda-mi__ico" />
+                    <div class="ayuda-mi__txt">
+                        <span class="ayuda-mi__tit">Mis accesos</span>
+                        <span class="ayuda-mi__sub">Ingresos y egresos de los últimos días</span>
+                    </div>
+                </div>
+            </button>
+        }
+
+        <button type="button" class="nt-drop__item" @onclick="CambiarTheme">
+            <div class="ayuda-mi">
+                <MudIcon Icon="@Icons.Material.Outlined.Palette" Size="Size.Small" Class="ayuda-mi__ico" />
+                <div class="ayuda-mi__txt">
+                    <span class="ayuda-mi__tit">Tema: @(ThemeGris ? "Compacto gris" : "NORTUR clásico")</span>
+                    <span class="ayuda-mi__sub">
+                        Cambiar a @(ThemeGris ? "NORTUR clásico" : "Compacto gris")
+                    </span>
+                </div>
+            </div>
+        </button>
+
+        @* ── Pie: la salida, separada del resto para no clickearla sin querer. ── *@
+        <div class="usermenu-pie">
+            <form method="post" action="/auth/logout" style="margin:0;">
+                <AntiforgeryToken />
+                <button type="submit" class="usermenu-salir">
+                    <MudIcon Icon="@Icons.Material.Outlined.Logout" Size="Size.Small" />
+                    <span>Cerrar sesión</span>
+                </button>
+            </form>
+        </div>
+
+        </div>
+    }
+</div>
+
+@code {
+    private bool _abierto;
+
+    private void Alternar() => _abierto = !_abierto;
+    private void Cerrar() => _abierto = false;
+
+    /// <summary>Theme vigente — lo administra MainLayout (localStorage + theme.js).</summary>
+    [Parameter] public bool ThemeGris { get; set; }
+
+    /// <summary>Lo dispara el ítem "Tema"; el layout hace el cambio y persiste.</summary>
+    [Parameter] public EventCallback OnCambiarTheme { get; set; }
+
+    private string Usuario => AuthState.UsuarioActual ?? "—";
+
+    /// <summary>Dos letras para el avatar: iniciales si el nombre tiene partes, si no
+    /// las dos primeras (SUPERVISOR → SU, "JUAN PEREZ" → JP).</summary>
+    private string Iniciales
+    {
+        get
+        {
+            var partes = Usuario.Split(new[] { ' ', '.', '_' }, StringSplitOptions.RemoveEmptyEntries);
+            if (partes.Length >= 2) return $"{partes[0][0]}{partes[1][0]}".ToUpperInvariant();
+            var u = partes.Length == 1 ? partes[0] : "?";
+            return (u.Length >= 2 ? u[..2] : u).ToUpperInvariant();
+        }
+    }
+
+    /// <summary>Rol legible. No hay campo "rol" en la tabla `usuario`: se deduce del
+    /// permiso de Sistema (S = supervisor) y del flag `operador` de la mesa de tráfico.</summary>
+    private string Rol =>
+        Permisos.Tiene('S') ? "Supervisor del sistema"
+        : Permisos.EsOperador ? "Operador de tráfico"
+        : "Usuario";
+
+    private int CantidadModulos =>
+        AuthState.Principal.FindAll(NorturClaims.Modulo).Count();
+
+    private string ModulosTexto =>
+        CantidadModulos == 1 ? "1 módulo habilitado" : $"{CantidadModulos} módulos habilitados";
+
+    private Task CambiarTheme()
+    {
+        _abierto = false;
+        return OnCambiarTheme.InvokeAsync();
+    }
+
+    /// <summary>Auditoría de accesos ya filtrada por el usuario logueado (parámetro ?u=).</summary>
+    private void VerMisAccesos()
+    {
+        _abierto = false;
+        Nav.NavigateTo($"/auditoria-accesos?u={Uri.EscapeDataString(Usuario)}");
+    }
+}

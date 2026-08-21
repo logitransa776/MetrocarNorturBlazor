@@ -38,6 +38,153 @@ NorturColors.Rojo      = "#DC2626"   // error/canceladas
 El tema ya está registrado en `MainLayout.razor` vía `<MudThemeProvider Theme="NorturTheme.Theme" />`.
 Para usar colores en inline style: `Style="@($"color:{NorturColors.Azul};")"`.
 
+> ⚠ Esa paleta es la de la **marca**. El color que identifica a cada **módulo** es otro y
+> vive en otro lado — ver la sección siguiente. No mezclar: `NorturColors.Naranja` es el
+> acento del sistema, el naranja de Tráfico es el código de color de un módulo.
+
+**Fondo de página (`PaletteLight.Background`):** `#D5D9E2` — gris "Piedra", elegido por el
+usuario el 16/08/2026 entre 4 variantes de gris (mockup comparativo en un Artifact) para
+reemplazar un celeste (`#C8D4E3`) que competía en saturación con los campos blancos. Es un
+gris NEUTRO con un dejo frío hacia `NorturColors.Azul` a propósito (un gris puro se sentiría
+fuera de lugar) — no reintroducir un tono celeste/pastel acá. Se fija en dos lugares que
+tienen que ir sincronizados: `NorturTheme.cs` (`PaletteLight.Background`, pinta
+`.mud-main-content` → todas las pantallas) y `html, body` en `app.css` (fallback fuera del
+layout).
+
+### Campos de formulario — estándar de TODA la app (16/08/2026)
+
+Vive en el bloque **"CAMPOS DE FORMULARIO"** arriba de todo en `app.css`, con las 3 variables
+en `:root` para tocar una sola perilla. **No es por pantalla: aplica a todo input outlined.**
+
+| Rol | Variable | Valor | Regla |
+| --- | --- | --- | --- |
+| Campo editable | `--nt-campo` | `#EDEFF4` | **aclara** sobre la página, pero NUNCA blanco puro — sobre gris el blanco salta demasiado (probado y rechazado por el usuario) |
+| Campo bloqueado | `--nt-campo-ro` | `#C6CBD8` | **oscurece**: se apaga en vez de destacar. Dice "no tocar" sin cartel |
+| Borde | `--nt-campo-borde` | `#112F5B` | azul nocturno de la marca. Con poca diferencia campo/página, el borde es lo que hace que se lea como caja |
+| Ancho del borde | `--nt-campo-borde-ancho` | `2px` | el default de MudBlazor es 1px. El **foco va a +1px** (3px) para que se distinga del reposo por ancho Y por color |
+
+**Contraseñas: nunca se muestran.** Los campos de password de Parámetros (SMTP y GPS) van con
+`InputType="InputType.Password"` fijo, **sin el ojo de "mostrar"**: se pueden reescribir pero no
+leer. Son credenciales de la empresa y la pantalla se abre con gente alrededor (además la base
+las guarda en texto plano). ⚠ `UsuarioEditorDialog.razor` **todavía tiene el ojo** — es decisión
+abierta, porque ahí el admin quizá necesite leer la clave para dictársela al usuario.
+
+Esa regla es la de **menor especificidad** de la app a propósito: es la base, y los campos con
+estilo propio (`.busc-wrap` de Tráfico, `.rfs-topn-select`) la pisan sin pelear. **No ponerle
+`!important`** — rompería esos.
+
+### 🔴 Campos sobre tarjeta BLANCA: la regla se INVIERTE (19/08/2026)
+
+La tabla de arriba está calibrada contra el **fondo gris "Piedra" `#D5D9E2` de la página**: ahí
+`--nt-campo` (`#EDEFF4`) **aclara** y por eso el campo se lee. Pero muchos controles no viven
+sobre la página: viven **adentro de una `MudPaper` blanca** (barras de herramientas de grillas,
+cabeceras de panel, filtros dentro de una tarjeta). Sobre blanco, `#EDEFF4` queda a un paso del
+blanco → el campo pierde el borde de lectura y la barra entera se ve "lavada". El usuario lo
+reportó exactamente así: *"el fondo en blanco no se ve bien"*.
+
+**Sobre blanco hay que invertir el gesto: teñir el campo y definir el borde.**
+
+| Rol | Sobre la página (gris) | Sobre tarjeta blanca |
+| --- | --- | --- |
+| Fondo del campo | `#EDEFF4` (aclara) | **`#F2F6FC`** (tiñe apenas) |
+| Borde en reposo | `#112F5B` 2px | **`#C3D3E8` 1.5px** (el azul noche a 2px grita sobre blanco) |
+| Foco | +1px | **`#F99410` 2px + halo** `0 0 0 3px rgba(249,148,16,.16)` y fondo a blanco puro |
+
+Referencia viva: `.vpc-toolbar` en `app.css` (barra de la grilla de `ViajesPorChofer.razor`).
+Ojo con la **especificidad al encadenar estados**: la regla de foco tiene que quedar con MÁS
+peso que la de reposo y que la de "filtro activo", o el campo enfocado se queda con el borde
+que no va. Y **no se valida con una captura**: hay que leer
+`getComputedStyle(...).borderTopColor` en reposo / foco / activo (ver skill `testing-nortur`).
+
+**🔴 Las 3 trampas de MudBlazor 9.5 acá (verificadas midiendo el DOM y el CSSOM, no de memoria):**
+
+1. **`.mud-focused` y `.mud-error` NO EXISTEN.** MudBlazor marca el foco con `:focus-within` y
+   el error con `.mud-input-error`. Excluir clases inexistentes no excluye nada: sólo infla la
+   especificidad, y entonces tu regla **le gana a la del foco** y el campo enfocado se queda con
+   el borde de reposo. Es un bug de accesibilidad **invisible en una captura** (azul nocturno y
+   azul de foco se parecen a simple vista) — sólo aparece midiendo el color computado. El
+   selector correcto es `:not(:focus-within):not(.mud-disabled)`. El error se defiende solo
+   (lleva `!important`).
+2. **Un `MudSelect` y un `MudDatePicker` ponen `readonly` en su input POR DISEÑO** (se cargan
+   eligiendo, no tipeando). Cualquier regla de "campo bloqueado" basada en `:has(input[readonly])`
+   **tiñe todos los desplegables y fechas de la app** si no se los excluye explícitamente.
+3. **El hover lo maneja MudBlazor** con `--mud-palette-action-default` (`rgba(0,0,0,.537)`) y no
+   se le puede ganar sin `!important` — que rompería el borde naranja de `.rfs-topn-select`. Se
+   dejó como está: el hover es transitorio y termina en el foco, que sí se distingue.
+
+Para verificar un cambio de estilo de campos **no alcanza una captura**: hay que leer
+`getComputedStyle(...).borderTopColor` en los 3 estados (reposo / hover / foco). Ver el
+protocolo en la skill `testing-nortur`.
+
+---
+
+## CÓDIGO DE COLOR POR MÓDULO (11/08/2026) — regla vigente
+
+Cada módulo del sistema tiene **un color y es siempre el mismo**, en los tres lugares donde
+el usuario lo ve: las tarjetas del hub `/informes`, el menú lateral y el filete de la barra
+de título. El objetivo es que el cliente final reconozca el módulo por el color **antes** de
+leer — con 7 módulos y ~105 ítems de menú, el texto solo no alcanza.
+
+| Módulo | Hex | Letra `acceso` | Nombre en el drawer |
+|---|---|---|---|
+| Reservas | `#2563EB` | R | Reservas |
+| Tráfico | `#F99410` | T | Tráfico |
+| Flota | `#16A34A` | V | Vehículos y Choferes |
+| Facturación | `#0891B2` | F | Facturación |
+| Combustible | `#C2410C` | M | Combustible |
+| Sistema | `#7C3AED` | S | Sistema |
+| *(sin módulo)* | `#64748B` | — | Informes, el hub, la ayuda |
+
+**Fuente única: `InformesCatalogo.Modulos`** (`Services/InformesCatalogo.cs`). El hex se escribe
+**una sola vez ahí**. Cambiarlo repinta el hub, el menú y la barra a la vez. Nunca hardcodear
+un color de módulo en un `.razor` ni en `app.css`.
+
+### Cómo funciona (el mecanismo, en una línea)
+
+El color entra como la **variable CSS `--nt-mod`** en el `<div class="nav-section">` (o en el
+`Style` del AppBar) y **todo lo demás lo hereda**: ícono, filete, hover y el ítem activo.
+No hay clases por módulo. Un módulo nuevo no necesita CSS nuevo — le alcanza con su hex.
+
+```razor
+@* Sección del drawer — el color entra UNA vez, acá *@
+<div class="nav-section" style="--nt-mod:@InformesCatalogo.Color(ModuloInforme.Trafico)">
+```
+
+```css
+/* app.css § CÓDIGO DE COLOR POR MÓDULO — todo deriva de la variable */
+.nav-section__icon              { color: var(--nt-mod, #003AA0); }
+.nav-section__title:not(.nav-section__title--sub)::before { background: var(--nt-mod, transparent); }
+.nav-item--active               { border-left-color: var(--nt-mod, #F99410); }
+```
+
+**El fallback de cada `var()` es el color anterior al cambio**: si una sección se olvida de
+declarar `--nt-mod`, el menú se ve como antes, no roto.
+
+### Reglas al tocar esto
+
+1. **Sección nueva en el drawer → declarar `--nt-mod`.** Sin eso, la sección queda gris/azul
+   y rompe el código de color que el usuario ya aprendió.
+2. **El ítem activo NO es naranja fijo.** Toma el color del módulo (antes era `#F99410` en
+   todas las secciones: dentro de Facturación aparecía un naranja que no significaba nada).
+3. **`color-mix()` siempre con fallback.** Se declara primero el color plano y después el
+   `color-mix` — Chrome < 111 ignora la segunda línea y no queda un fondo transparente.
+4. **El filete de la barra va como `::after`, NUNCA `border-bottom`.** Un borde le suma 3px
+   a la altura del AppBar y MudBlazor calcula con esa altura el `padding-top` del contenido:
+   todas las pantallas quedarían corridas. El pseudo-elemento se pinta adentro de la caja.
+5. **Lo que no es módulo va neutro** (`InformesCatalogo.ColorNeutro`): la sección Informes,
+   el hub y las pantallas sueltas. No inventarles un color de módulo: le enseñaría al
+   usuario algo falso.
+6. **Pantalla operativa nueva → agregarla a `_pantallasPorRuta`** en `MainLayout.razor` con
+   su título **y su módulo**. Los informes NO se repiten ahí: los resuelve
+   `InformesCatalogo.ModuloDeRuta()`, que ya sabe título y módulo de cada uno.
+
+### Dos hex con historia (no revertir sin leer esto)
+
+- **Reservas era `#003AA0`** = el azul institucional exacto del header, el logo y el footer.
+  En el menú no se leía como "módulo Reservas" sino como "el color del sistema".
+- **Combustible era `#B45309`**, demasiado cerca del `#F99410` de Tráfico de reojo y en
+  monitores viejos. Corrido a terracota para que los dos naranjas no se confundan.
+
 ---
 
 ## Layout (MainLayout.razor)
@@ -67,8 +214,8 @@ Cada sección del menú sigue este patrón en `MainLayout.razor`:
 @* Estado en @code: *@
 private bool _miSeccionExpanded = false;
 
-@* En nav-drawer__nav: *@
-<div class="nav-section">
+@* En nav-drawer__nav — OJO: --nt-mod es obligatorio (§ CÓDIGO DE COLOR POR MÓDULO) *@
+<div class="nav-section" style="--nt-mod:@InformesCatalogo.Color(ModuloInforme.MiModulo)">
     <button class="nav-section__title @(_miSeccionExpanded ? "nav-section__title--open" : "")"
             @onclick="() => _miSeccionExpanded = !_miSeccionExpanded">
         <MudIcon Icon="@Icons.Material.Filled.IconName" Size="Size.Small" Class="nav-section__icon" />
@@ -718,6 +865,63 @@ confirmar el contenido. Diagnóstico en runtime: `window.Apex._chartInstances[i]
 
 ---
 
+## Estándar de CARTEL BLOQUEANTE — "Contorno" (30/07/2026)
+
+**Regla del proyecto (elegida por el usuario entre 5 variantes en rojo):** cuando una
+validación **corta** una acción del usuario (no se ejecuta la consulta / no se graba), el aviso
+va con el cartel **Contorno**: fondo blanco, filo e ícono en rojo de marca, texto en la tinta
+azul noche de la app. Es deliberadamente la variante más liviana — un límite operativo no es una
+falla del sistema, no hace falta gritar. **No usar `Severity.Warning`** (el naranja del default
+se confunde con el acento de marca y no lee como bloqueo).
+
+```csharp
+@inject ISnackbar Snackbar   // MudSnackbarProvider ya está en MainLayout/EmptyLayout
+
+Snackbar.Add(
+    "El rango Desde–Hasta no puede superar los 60 días (elegiste 210). Achicá el período e intentá de nuevo.",
+    Severity.Error,
+    config =>
+    {
+        config.SnackbarVariant  = Variant.Outlined;
+        config.SnackbarTypeClass = "nt-toast-contorno";   // definida en app.css
+    });
+return;   // 🔴 cortar ANTES de la query / del INSERT
+```
+
+**Trampas verificadas (por reflexión sobre MudBlazor 9.5, no por documentación):**
+- La propiedad es **`SnackbarTypeClass`** — `SnackbarOptions` **no** tiene una propiedad `Class`
+  genérica (falla con CS1061). Las opciones útiles del tipo: `SnackbarVariant`, `Icon`,
+  `IconColor`, `ShowCloseIcon`, `VisibleStateDuration`, `RequireInteraction`, `HideIcon`.
+- El `Variant.Outlined` nativo pinta **todo el texto de rojo** (`mud-alert-outlined-error` fija
+  `color`) y deja el ✕ gris. Por eso `.nt-toast-contorno` en `app.css` pisa `background`, `color`
+  y `border`, y pinta de rojo el ícono **y** el `.mud-snackbar-close-button` (si no, el ✕ queda
+  desalineado del resto en color).
+
+**Copy del mensaje:** decir el límite, el valor que eligió el usuario, y qué hacer
+("Achicá el período e intentá de nuevo"). Nunca solo "valor inválido".
+
+### Tope de rango Desde–Hasta en informes (convención)
+
+Todo informe que pega contra `viaje` lleva un tope de ancho de período, declarado como constante
+al lado de `Cargar()`. **El tope se avisa DOS veces:**
+
+1. **En vivo, en la barra de filtros** — un chip rojo `máx. N días` (clase `.rfs-rango-alerta`
+   en `app.css`) que aparece apenas el rango elegido supera el tope, **antes** de apretar
+   "Aplicar filtros". Sin esto el usuario cree que la pantalla se rompió.
+2. **Al aplicar** — el cartel Contorno de arriba, y `return` antes de la query.
+
+```csharp
+private const int RangoMaximoDias = 95;   // 3 meses
+private int RangoDiasElegidos =>
+    _desde is null || _hasta is null ? 0 : (int)(_hasta.Value.Date - _desde.Value.Date).TotalDays;
+```
+
+Topes vigentes: `ViajesPorChofer` 95 · `ReservasBandaHoraria` 60 · `ReservasFechaServicio` 400 ·
+`ReservasPorCliente` 400. Referencia viva del patrón completo (chip + cartel):
+`ViajesPorChofer.razor`.
+
+---
+
 ## Estructura de archivos del proyecto
 
 ```
@@ -817,6 +1021,45 @@ tarjeta).
   ficha Vehículo (la más densa) y editor ABM Usuario entran completos y legibles; 26/26 smoke
   tests OK. Ver [[testing-nortur]] §D para capturar a una resolución fija.
 
+## Patrón MAESTRO / DETALLE — grilla + ficha de lectura al costado (19/08/2026)
+
+Cuando la fila tiene un **texto largo** que no entra en una columna (el mensaje de una novedad, un
+comentario, una descripción), el patrón es grilla a la izquierda + ficha de lectura a la derecha,
+en vez de abrir un modal por cada fila. Referencia viva: **`LibroNovedades.razor`**.
+
+Las 5 reglas que costó afinar (todas medidas en el navegador, no a ojo):
+
+1. **El bloque lleva alto propio, no los hijos.** `.split { height: calc(100vh - 430px);
+   min-height: 320px; align-items: stretch; }`. Si el alto se lo ponés a la tabla
+   (`MudTable Height="..."`), la tarjeta de la grilla termina después que la tabla y queda una
+   **franja blanca** abajo, y el panel —que mide por contenido— queda mucho más corto que la
+   grilla, con medio metro de gris al costado. Con el alto en el contenedor los dos miden igual.
+2. **La tabla se estira con flex.** La tarjeta es `display:flex; flex-direction:column`, y
+   `.mud-table` + `.mud-table-container` van con `flex:1; min-height:0`. Sin el `min-height:0`
+   el flex no deja encoger y vuelve la franja.
+3. **Al achicar la pantalla se achica el PANEL, no la grilla** (420 → 360 → 300 px), y el
+   apilado se retrasa hasta **980 px**: el peor caso real del cliente es 1088×614 y ahí el
+   maestro/detalle tiene que seguir en dos columnas — si se apila, el operador pierde de vista
+   la lista justo cuando está leyendo.
+4. **`table-layout: fixed` en la grilla.** Las columnas angostas conservan su ancho y cede la
+   columna de texto (con `text-overflow: ellipsis` + `title`). Sin esto, un asunto largo empuja
+   y la última columna se corta. Medí el ancho con la fuente real: `"19/08/2026 04:44"` en IBM
+   Plex 11,8/500 **necesita 150 px** con el padding de la celda, no 130.
+5. **El clic tiene que notarse de los dos lados.** En la grilla: fondo azul
+   (`cli-grid__row--sel`) **+ barra naranja** `box-shadow: inset 3px 0 0 0 #F99410` en la primera
+   celda — en una grilla densa el cambio de fondo solo no se ve si mirás la otra punta. En el
+   panel: `@key="_sel?.Id"` para que se remonte y vuelva a correr una animación de entrada de
+   ~180 ms (con `@media (prefers-reduced-motion: reduce)` que la apaga).
+
+Extras que valieron la pena: filete del color del módulo arriba del panel, metadatos en grilla
+de 2 columnas con rótulo chico en mayúsculas (no chips: ocupan más y dicen menos), y el número
+de reserva como **link al Zoom dentro del panel** — el botón de la barra de abajo queda lejos de
+donde el ojo está leyendo.
+
+⚠️ No pintes filas por un estado que es mayoría transitoria. La grilla del libro teñía de
+amarillo las novedades "sin enviar": durante todo el turno **todas** lo están, así que la grilla
+quedaba entera amarilla hasta la corrida de correos. La columna ya lo dice.
+
 ## Zoom del Viaje — layout de la ficha (ZoomViajeDialog.razor)
 
 Ficha modal de solo lectura de una reserva/viaje — **una de las pantallas más usadas**
@@ -896,8 +1139,9 @@ Las clases del drawer son CSS puro (no MudBlazor). Las principales:
 | `.nav-drawer` | Panel lateral, `position:fixed`, `top:0`, `width:270px` |
 | `.nav-drawer--open` | Activa `transform:translateX(0)` |
 | `.nav-backdrop` | Overlay oscuro detrás del drawer |
-| `.nav-section__title` | Botón de grupo colapsable |
+| `.nav-section__title` | Botón de grupo colapsable (+ filete de módulo en `::before`) |
+| `.nav-section__icon` | Ícono del grupo — color = `var(--nt-mod)` |
 | `.nav-item` | Enlace de navegación |
-| `.nav-item--active` | Ítem activo (borde naranja izquierdo) |
+| `.nav-item--active` | Ítem activo — borde y fondo derivados de `var(--nt-mod)` |
 | `.nav-item--disabled` | Ítem sin ruta aún (gris, no clickeable) |
 | `.nav-divider` | Línea separadora entre secciones |

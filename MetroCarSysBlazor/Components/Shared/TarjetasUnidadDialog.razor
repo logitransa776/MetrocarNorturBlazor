@@ -1,0 +1,139 @@
+@inject ReportService Reports
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   "Ver Datos Extras → Tarjetas" del menú contextual del panel BUSES.
+   Réplica del form FoxPro `vehiculo_tarjeta.scx` — que es 100% CONSULTA: todos sus
+   campos tienen Enabled = .f. (método desactiva_campo) y el botón dice "Consulta".
+   Por eso esta migración no lleva andamiaje de escritura: no hay nada que escribir.
+
+   Son las tarjetas de combustible de la UNIDAD (YPF / ESSO, con vencimiento y PIN)
+   más los PIN personales del CONDUCTOR logoneado, que viven en `chofer`.
+   Plano: docs/PlanoFoxPro/trafico/TRAFICO_BUSES_MENU.md
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.CreditCard" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Tarjetas de la unidad</span>
+            <span class="zoom-title-bar__chip" style="margin-left:10px;">Solo lectura</span>
+            @if (_d is not null)
+            {
+                <span class="zoom-title-bar__nro">Interno&nbsp;@_d.Interno · @_d.Dominio</span>
+            }
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_cargando)
+        {
+            <div class="d-flex justify-center align-center" style="min-height:200px;">
+                <MudProgressCircular Indeterminate="true" Style="color:#003AA0;" />
+            </div>
+        }
+        else if (_d is null)
+        {
+            <MudAlert Severity="Severity.Warning">No se encontró la unidad @IdVehiculo.</MudAlert>
+        }
+        else
+        {
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Unidad</span>
+                <div class="zoom-row">
+                    @F("Interno", _d.Interno > 0 ? _d.Interno.ToString() : "—", acento: true)
+                    @F("Dominio", Str(_d.Dominio), acento: true)
+                    @F("Conductor", Str(_d.NombreChofer), ancho: 2)
+                    @F("Nextel", Str(_d.Nextel))
+                    @F("Telepase AU Oeste", Str(_d.TelepaseOeste))
+                </div>
+            </div>
+
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Tarjetas de combustible de la unidad</span>
+                <div class="zoom-row">
+                    @F("Tarjeta YPF", Str(_d.YpfTarjeta), acento: true)
+                    @F("Vence YPF", Fecha(_d.YpfVence), cssValor: VencidaCss(_d.YpfVence))
+                    @F("PIN YPF", Str(_d.YpfPin))
+                    @F("Tarjeta ESSO", Str(_d.EssoTarjeta), acento: true)
+                    @F("Vence ESSO", Fecha(_d.EssoVence), cssValor: VencidaCss(_d.EssoVence))
+                    @F("PIN ESSO", Str(_d.EssoPin))
+                </div>
+            </div>
+
+            @* El FoxPro trae estos dos de `chofer` por el id_chofer de la fila. Si el chofer no
+               se encuentra (o la unidad no está logoneada) los deja vacíos — mismo criterio acá. *@
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">
+                    PIN personales del conductor@(string.IsNullOrWhiteSpace(_d.ConductorNombre) ? "" : $" · {_d.ConductorNombre}")
+                </span>
+                @if (string.IsNullOrWhiteSpace(_d.ConductorNombre))
+                {
+                    <div class="hist-empty" style="min-height:0; padding:10px 0;">
+                        La unidad no tiene conductor logoneado — sin PIN personales que mostrar.
+                    </div>
+                }
+                else
+                {
+                    <div class="zoom-row">
+                        @F("PIN YPF del conductor", Str(_d.YpfPinConductor))
+                        @F("PIN ESSO del conductor", Str(_d.EssoPinConductor))
+                    </div>
+                }
+            </div>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Código de la unidad (<c>vehiculo.id_vehicul</c>, que en la flota activa coincide
+    /// con el dominio).</summary>
+    [Parameter] public string IdVehiculo { get; set; } = "";
+    /// <summary>Chofer logoneado — de él salen los dos PIN personales. Vacío = sin conductor.</summary>
+    [Parameter] public string IdChofer { get; set; } = "";
+
+    private TarjetasUnidadDto? _d;
+    private bool _cargando = true;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override async Task OnInitializedAsync()
+    {
+        _d = await Reports.GetTarjetasUnidadAsync(IdVehiculo, IdChofer);
+        _cargando = false;
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private static string Str(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s.Trim();
+    private string Fecha(DateOnly? d) => d is null ? "—" : d.Value.ToString("dd/MM/yyyy", _ar);
+
+    // Resalta en rojo una tarjeta vencida. Es información, no una validación del FoxPro:
+    // vehiculo_tarjeta.scx solo muestra el dato crudo.
+    private static string? VencidaCss(DateOnly? vto) =>
+        vto is not null && vto.Value < DateOnly.FromDateTime(DateTime.Today) ? "zoom-field__value--alerta" : null;
+
+    private RenderFragment F(string label, string valor, string? cssValor = null, bool acento = false, int ancho = 1) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", $"zoom-field zoom-field--{ancho}");
+        b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label");
+        b.AddContent(4, label); b.CloseElement();
+        var cls = acento ? "zoom-field__value zoom-field__value--acento" : "zoom-field__value";
+        if (!string.IsNullOrEmpty(cssValor)) cls += " " + cssValor;
+        b.OpenElement(5, "div");
+        b.AddAttribute(6, "class", cls);
+        b.AddContent(7, valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+}

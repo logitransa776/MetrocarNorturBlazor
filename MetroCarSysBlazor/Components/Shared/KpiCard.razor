@@ -1,14 +1,38 @@
-@* Prioridad de recorte cuando la tarjeta queda angosta: el VALOR nunca se corta (flex-shrink:0),
-   el Sub cede primero (shrink alto) y el Label después — ambos con elipsis, nunca corte seco. *@
-<MudPaper Class="pa-0" Elevation="2" Style="@($"height:100%; border-radius:8px; overflow:hidden; border-left:4px solid {Color}; background: linear-gradient(135deg, #ffffff 60%, {Color}18 100%);")">
-    <div style="padding:8px 14px; display:flex; align-items:baseline; gap:10px; min-width:0;">
-        <span style="font-size:0.78rem; font-weight:800; color:#4A5568; letter-spacing:0.06em; text-transform:uppercase; white-space:nowrap; flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;">@Label</span>
-        <span style="@($"font-size:1.25rem; font-weight:900; color:{Color}; white-space:nowrap; letter-spacing:-0.01em; flex:0 0 auto;")">@Value</span>
-        @if (!string.IsNullOrEmpty(Sub))
+@* Tarjeta KPI — layout APILADO (etiqueta / valor / sub), rediseñada el 11/08/2026.
+
+   POR QUÉ APILADA (no en una línea como antes):
+   con etiqueta·valor·sub en la MISMA fila, el ancho que la tarjeta necesita es la SUMA de
+   los tres textos (~370px en "VIAJES SIN ASIGNAR 3.370 5,8 % de 58.552 pedidos"). Apilada,
+   necesita el MÁXIMO de los tres (~165px). A 1360×768 (resolución mínima de NORTUR) el área
+   útil es 1312px: 6 tarjetas horizontales pedían 2.220px y el navegador las recortaba
+   ("3.3…", "5…"). Apiladas piden ~1.000px y entran con aire. Además AHORRA alto: antes la
+   fila se partía en dos (106px), ahora es una sola (~70px).
+
+   JERARQUÍA DE CESIÓN (la regla que evita la recaída):
+   · VALOR    → nunca se recorta ni se parte. Es el dato; sin él la tarjeta no sirve.
+   · ETIQUETA → nunca se recorta: si es larga baja a 2 renglones (wrap), jamás "…".
+   · SUB      → es lo único descartable. Hasta 2 renglones; lo que exceda se corta pero el
+                texto completo queda SIEMPRE en el tooltip (title), nunca se pierde.
+
+   Extras opcionales (30/07/2026, informe Reservas por cliente):
+   · Delta  → badge de variación vs el período de comparación ("▲ +12,1%"), al lado del valor.
+   · OnClick→ hace la tarjeta clickeable (cursor + hover) para abrir el detalle de su composición.
+     Sin ícono de affordance a propósito: comía ~24px; el hover y el texto del Sub lo señalan. *@
+<MudPaper Class="@($"nt-kpi {(OnClick.HasDelegate ? "kpi-click" : "")}")" Elevation="2"
+          Style="@($"--nt-kpi-color:{Color};")"
+          @onclick="OnClick" title="@Title">
+    <span class="nt-kpi__label" title="@Label">@Label</span>
+    <span class="nt-kpi__valrow">
+        <span class="nt-kpi__value">@Value</span>
+        @if (!string.IsNullOrEmpty(Delta))
         {
-            <span style="font-size:0.74rem; font-weight:600; color:#718096; white-space:nowrap; flex:0 999 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;">@Sub</span>
+            <span class="@($"kpi-delta {DeltaClase}")">@Delta</span>
         }
-    </div>
+    </span>
+    @if (!string.IsNullOrEmpty(Sub))
+    {
+        <span class="nt-kpi__sub" title="@Sub">@Sub</span>
+    }
 </MudPaper>
 
 @code {
@@ -16,4 +40,13 @@
     [Parameter, EditorRequired] public string Value { get; set; } = "";
     [Parameter] public string? Sub { get; set; }
     [Parameter] public string Color { get; set; } = NorturColors.Azul;
+
+    /// <summary>Badge de variación, ya formateado (ej. "▲ +12,1%"). Vacío = no se muestra.</summary>
+    [Parameter] public string? Delta { get; set; }
+    /// <summary>Clase CSS del badge: kpi-delta--up / --down / --flat.</summary>
+    [Parameter] public string? DeltaClase { get; set; }
+    /// <summary>Si tiene handler, la tarjeta se vuelve clickeable (abre el detalle del indicador).</summary>
+    [Parameter] public EventCallback OnClick { get; set; }
+    /// <summary>Tooltip nativo de la tarjeta.</summary>
+    [Parameter] public string? Title { get; set; }
 }

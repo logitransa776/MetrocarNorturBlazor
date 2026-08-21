@@ -1,0 +1,588 @@
+@page "/libro-novedades"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ExcelExportService ExcelSvc
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   "Libro de Novedades" (Tráfico → Libro de Novedades → 1er ítem).
+   Réplica de libro_novedad.scx: la grilla del libro + el panel con el mensaje completo a la
+   derecha + la botonera Agregar / Eliminar / Modificar / Ver datos reserva.
+
+   Diferencias deliberadas con el FoxPro:
+    · Allá la grilla trae TODO (`SELECT * FROM libro_novedad ORDER BY f_carga DESC`, hoy 48.617
+      filas) y se busca scrolleando. Acá hay filtros de fecha (default: últimos 30 días),
+      usuario, origen y un buscador de texto sobre asunto y mensaje.
+    · Se agrega la columna "Enviada" (f_envio): en el FoxPro ese dato existe pero no se ve en
+      ninguna pantalla, y es lo que distingue una novedad que ya salió por correo de una que
+      todavía está en la tanda pendiente.
+    · Export a Excel (no existe en el original).
+
+   ⚠ La botonera de escritura está en ANDAMIAJE (AbmFeatureFlags.NovedadesAbmActivo = false).
+   Plano: docs/PlanoFoxPro/trafico/LIBRO_NOVEDADES.md
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<PageTitle>BusLink</PageTitle>
+
+<div class="page-header mb-4">
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Libro de Novedades</MudText>
+        <AyudaReporte Ruta="libro-novedades" />
+    </div>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Tráfico · El libro de guardia de la mesa — qué anotó cada turno
+    </MudText>
+</div>
+
+@* Barra de filtros: filtros a la izquierda, botones juntos a la derecha (convención del
+   proyecto, ver memoria barra-filtros-layout-estandar). *@
+<MudPaper Class="pa-2 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #F99410;">
+    <div class="d-flex flex-wrap align-center" style="gap:10px 14px;">
+        <MudDatePicker @bind-Date="_desde" Label="Desde" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined"
+                       Margin="Margin.Dense" Style="width:178px;" />
+        <MudDatePicker @bind-Date="_hasta" Label="Hasta" DateFormat="dd/MM/yyyy"
+                       PickerVariant="PickerVariant.Dialog" Variant="Variant.Outlined"
+                       Margin="Margin.Dense" Style="width:178px;" />
+        <MudSelect T="string" @bind-Value="_usuario" Label="Usuario" Dense="true" Clearable="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;">
+            <MudSelectItem T="string" Value="@("")">Todos</MudSelectItem>
+            @foreach (var u in _usuarios)
+            {
+                <MudSelectItem T="string" Value="@u">@u</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSelect T="ReportService.LigaduraNovedad" @bind-Value="_ligadura" Label="Origen" Dense="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;">
+            <MudSelectItem Value="ReportService.LigaduraNovedad.Todas">Todas</MudSelectItem>
+            <MudSelectItem Value="ReportService.LigaduraNovedad.ConReserva">Con reserva</MudSelectItem>
+            <MudSelectItem Value="ReportService.LigaduraNovedad.SinReserva">Sin reserva</MudSelectItem>
+        </MudSelect>
+        @* Label corto: con el texto largo ("Buscar en asunto y mensaje") el placeholder chocaba
+           con la lupa del adorno. Qué campos busca lo explica la ayuda del informe. *@
+        <MudTextField T="string" @bind-Value="_texto" Label="Buscar" Placeholder="asunto o mensaje"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:230px;"
+                      Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Clearable="true" OnKeyUp="OnBuscarKeyUp" />
+
+        <span style="flex:1 1 auto;"></span>
+        <div class="d-flex align-center" style="gap:6px;">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="CargarAsync" Disabled="_cargando">Filtro</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">Actualizar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Download" OnClick="DescargarExcel"
+                       Disabled="_cargando || _items.Count == 0">Excel</MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+<div class="d-flex align-center mb-1" style="gap:6px;">
+    <MudText Typo="Typo.caption" Style="color:#7A90AD; font-weight:700;">RESUMEN DEL PERÍODO</MudText>
+    <AyudaReporte Ruta="libro-novedades" Bloque="kpis" Chico="true" />
+</div>
+<div class="rfs-kpis mb-3">
+    <KpiCard Label="Novedades" Value="@_items.Count.ToString("N0")" />
+    <KpiCard Label="Con reserva" Value="@_items.Count(n => n.IdViaje > 0).ToString("N0")" />
+    <KpiCard Label="De unidad" Value="@_items.Count(n => n.EsDeUnidad).ToString("N0")" Color="@NorturColors.Naranja" />
+    <KpiCard Label="Operadores" Value="@_items.Select(n => n.Usuario).Distinct().Count().ToString("N0")" />
+    <KpiCard Label="Sin enviar" Value="@_items.Count(n => n.FEnvio is null).ToString("N0")"
+             Color="@NorturColors.Violeta" Sub="pendientes de correo" />
+</div>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    @if (_items.Count == 5000)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+            El rango pedido devuelve más de 5.000 novedades y se cortó ahí. Acotá las fechas o
+            usá el buscador.
+        </MudAlert>
+    }
+
+    @* Dos columnas, como el FoxPro: la grilla a la izquierda y el mensaje completo a la derecha.
+       En pantallas angostas el panel cae abajo (contrato de responsividad, skill responsive-nortur). *@
+    <div class="lnov-split">
+        <MudPaper Elevation="1" Class="lnov-gridpaper">
+            @* Sin Height fijo: la tabla se estira con flex hasta el alto del bloque. Con un
+               Height en px la grilla terminaba antes que la tarjeta y quedaba una franja blanca
+               debajo de la última fila. *@
+            <MudTable Items="_items" Dense="true" Hover="true" Striped="true"
+                      FixedHeader="true" Virtualize="true"
+                      Bordered="false" Class="cli-grid grid-compacta lnov-grid"
+                      RowClass="cli-grid__row" RowClassFunc="@RowClass"
+                      OnRowClick="@OnRowClick" T="LibroNovedadRow">
+                <HeaderContent>
+                    @* Anchos medidos con la fuente de la grilla (IBM Plex 11,8/500) + el padding
+                       de la celda: "19/08/2026 04:44" necesita 150 px, no 130 — con 130 se comía
+                       los minutos. El Asunto va SIN width: se queda con el sobrante. *@
+                    <MudTh Style="width:150px;">F. Carga</MudTh>
+                    <MudTh>Asunto</MudTh>
+                    <MudTh Style="width:110px;">U. Creador</MudTh>
+                    <MudTh Style="width:90px;">Nº Viaje</MudTh>
+                    <MudTh Style="width:90px;">Enviada</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="F. Carga">@(context.FCarga?.ToString("dd/MM/yyyy HH:mm") ?? "")</MudTd>
+                    <MudTd DataLabel="Asunto" Style="font-weight:600;" title="@context.Asunto">@context.Asunto</MudTd>
+                    <MudTd DataLabel="U. Creador">@context.Usuario</MudTd>
+                    <MudTd DataLabel="Nº Viaje" Style="text-align:right; color:#003AA0; font-weight:700;">
+                        @(context.IdViaje > 0 ? context.IdViaje.ToString() : "")
+                    </MudTd>
+                    <MudTd DataLabel="Enviada" Style="text-align:center;">
+                        @(context.FEnvio?.ToString("dd/MM/yy") ?? "—")
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Typo="Typo.body2" Class="pa-4">
+                        No hay novedades con esos filtros.
+                    </MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+
+        @* El editbox de la derecha del FoxPro, rehecho como ficha de lectura. Ocupa TODO el alto
+           de la grilla (antes quedaba una tarjeta corta con medio metro de gris abajo).
+           El @key hace que el panel se remonte al cambiar de fila: así vuelve a correr la
+           animación de entrada y el clic "se siente" del lado derecho, no solo en la grilla. *@
+        <MudPaper Elevation="1" Class="lnov-panel" @key="_sel?.Id ?? 0">
+            @if (_sel is null)
+            {
+                <div class="lnov-panel__vacio">
+                    <MudIcon Icon="@Icons.Material.Outlined.Article" Size="Size.Large" />
+                    <span>Elegí una novedad de la lista<br />para leer el mensaje completo.</span>
+                </div>
+            }
+            else
+            {
+                <div class="lnov-panel__head">
+                    <span class="lnov-panel__origen">@_sel.Origen</span>
+                    <span class="lnov-panel__asunto" title="@_sel.Asunto">@_sel.Asunto</span>
+                </div>
+
+                <div class="lnov-panel__meta">
+                    <div class="lnov-meta">
+                        <span class="lnov-meta__k">Cargada</span>
+                        <span class="lnov-meta__v">@(_sel.FCarga?.ToString("dd/MM/yyyy HH:mm") ?? "—")</span>
+                    </div>
+                    <div class="lnov-meta">
+                        <span class="lnov-meta__k">Operador</span>
+                        <span class="lnov-meta__v">@(_sel.Usuario.Length > 0 ? _sel.Usuario : "—")</span>
+                    </div>
+                    <div class="lnov-meta">
+                        <span class="lnov-meta__k">Correo</span>
+                        <span class="lnov-meta__v @(_sel.FEnvio is null ? "lnov-meta__v--pend" : "")">
+                            @(_sel.FEnvio?.ToString("dd/MM/yyyy") ?? "Sin enviar")
+                        </span>
+                    </div>
+                    @if (_sel.IdViaje > 0)
+                    {
+                        <div class="lnov-meta">
+                            <span class="lnov-meta__k">Reserva</span>
+                            @* Atajo al Zoom acá mismo: el botón de la barra de abajo queda lejos
+                               de donde el operador está leyendo. *@
+                            <button type="button" class="lnov-meta__link" @onclick="VerReserva"
+                                    title="Ver los datos de la reserva">#@_sel.IdViaje</button>
+                        </div>
+                    }
+                </div>
+
+                @if (_sel.Cliente.Length > 0)
+                {
+                    <div class="lnov-panel__cli" title="@_sel.Cliente">
+                        <MudIcon Icon="@Icons.Material.Filled.Business" Size="Size.Small" />
+                        <span>@_sel.Cliente</span>
+                    </div>
+                }
+
+                <div class="lnov-msg">@(_sel.Mensaje.Length > 0 ? _sel.Mensaje : "(sin mensaje)")</div>
+            }
+        </MudPaper>
+    </div>
+
+    <MudPaper Elevation="1" Class="mt-3" Style="border-radius:14px; overflow:hidden;">
+        <div class="cli-toolbar usr-toolbar">
+            <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.Add"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Agregar" Disabled="!_abmActivo">Agregar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Eliminar" Disabled="!_abmActivo || _sel is null">Eliminar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Modificar" Disabled="!_abmActivo || _sel is null">Modificar</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Visibility"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="VerReserva"
+                       Disabled="@(_sel is null || _sel.IdViaje == 0)">Ver datos reserva</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                @(_abmActivo
+                    ? "ABM habilitado · doble clic para ver la novedad"
+                    : "Solo lectura · el ABM se activa el día del corte a Buslink · doble clic para ver la novedad")
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private static bool _abmActivo => AbmFeatureFlags.NovedadesAbmActivo;
+
+    private List<LibroNovedadRow> _items = new();
+    private List<string> _usuarios = new();
+    private LibroNovedadRow? _sel;
+    private bool _cargando = true;
+    private string _nombreEmpresa = "NORTUR";
+
+    // Default: últimos 30 días. El FoxPro trae las 48.617 filas de una; acá el rango corto es
+    // lo que la operación mira el 99 % de las veces (el turno de ayer y el de hoy).
+    private DateTime? _desde = DateTime.Today.AddDays(-30);
+    private DateTime? _hasta = DateTime.Today;
+    private string _usuario = "";
+    private ReportService.LigaduraNovedad _ligadura = ReportService.LigaduraNovedad.Todas;
+    private string _texto = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('T'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        _usuarios = await Reports.GetUsuariosLibroNovedadAsync();
+        _nombreEmpresa = await Reports.GetClientePruebaAsync();
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        _items = await Reports.GetLibroNovedadesAsync(
+            DateOnly.FromDateTime(_desde ?? DateTime.Today.AddDays(-30)),
+            DateOnly.FromDateTime(_hasta ?? DateTime.Today),
+            _usuario, _ligadura, _texto);
+        _sel = _sel is null ? _items.FirstOrDefault() : _items.FirstOrDefault(n => n.Id == _sel.Id) ?? _items.FirstOrDefault();
+        _cargando = false;
+    }
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private async Task OnBuscarKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await CargarAsync();
+    }
+
+    // Solo se pinta la fila SELECCIONADA. Antes también se teñían de amarillo las que no
+    // salieron por correo, pero durante el día TODAS las del turno están sin enviar y la grilla
+    // quedaba entera amarilla: la columna "Enviada" ya lo dice sin gritar.
+    private string RowClass(LibroNovedadRow n, int _) =>
+        _sel is not null && _sel.Id == n.Id ? "cli-grid__row--sel lnov-row--sel" : "";
+
+    private void OnRowClick(TableRowClickEventArgs<LibroNovedadRow> args)
+    {
+        _sel = args.Item;
+        if (args.MouseEventArgs.Detail >= 2 && _sel is not null)
+            _ = AbrirDialog("ver", _sel);
+    }
+
+    private Task Agregar() => AbrirDialog("alta", null);
+    private Task Modificar() => _sel is null ? Task.CompletedTask : AbrirDialog("modifica", _sel);
+    private Task Eliminar() => _sel is null ? Task.CompletedTask : AbrirDialog("baja", _sel);
+
+    private async Task AbrirDialog(string modo, LibroNovedadRow? fila)
+    {
+        var parametros = new DialogParameters<NovedadEditorDialog>
+        {
+            { x => x.Modo, modo },
+            { x => x.Fila, fila },
+            { x => x.AsuntoSugerido, _nombreEmpresa },
+            { x => x.Usuario, AuthState.UsuarioActual ?? "" },
+            { x => x.AbmActivo, _abmActivo }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = false,
+            CloseOnEscapeKey = true, BackdropClick = false
+        };
+        var dlg = await DialogService.ShowAsync<NovedadEditorDialog>("Novedad", parametros, opciones);
+        var res = await dlg.Result;
+        if (res is not null && !res.Canceled && res.Data is bool grabo && grabo)
+            await Refrescar();
+    }
+
+    /// <summary>«Ver datos reserva» del FoxPro (form libro_novedad_view_viaje). Acá abre
+    /// directamente el Zoom del Viaje, que muestra muchísimo más que aquella ventanita.</summary>
+    private async Task VerReserva()
+    {
+        if (_sel is null || _sel.IdViaje == 0) return;
+        var parametros = new DialogParameters<ZoomViajeDialog>
+        {
+            { x => x.IdViaje, (int)_sel.IdViaje },
+            // La f_reserva viene del JOIN: permite el SEEK por índice en vez de scanear `viaje`.
+            { x => x.FReserva, _sel.FReserva }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = false,
+            CloseOnEscapeKey = true, BackdropClick = true
+        };
+        await DialogService.ShowAsync<ZoomViajeDialog>("Zoom del Viaje", parametros, opciones);
+    }
+
+    private async Task DescargarExcel()
+    {
+        var bytes = ExcelSvc.LibroNovedades(_items);
+        await JS.InvokeVoidAsync("downloadFile", "LibroNovedades.xlsx", Convert.ToBase64String(bytes));
+    }
+}
+
+<style>
+    /* ── Maestro / detalle: grilla a la izquierda, ficha de lectura a la derecha ──
+       El panel es más ancho que antes (420 px) porque lo que se lee ahí son párrafos, no
+       campos: con 340 px el mensaje se partía en renglones de 4 palabras. Y ocupa TODO el alto
+       de la grilla — antes era una tarjeta corta y quedaba medio panel de gris vacío debajo. */
+    .lnov-split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 420px;
+        gap: 12px;
+        align-items: stretch;   /* ← el panel acompaña el alto de la grilla */
+        /* Alto explícito del bloque: así la grilla Y el panel miden lo mismo y ninguno de los
+           dos deja franja vacía. El min-height cubre las pantallas bajas (1088x614 del cliente),
+           donde 100vh - 430px daría 184 px y no entraría ni la ficha. */
+        height: calc(100vh - 430px);
+        min-height: 320px;
+    }
+
+    /* La tarjeta de la grilla es una columna flex: la tabla se come todo el alto disponible. */
+    .lnov-gridpaper {
+        border-radius: 14px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+
+    .lnov-gridpaper .mud-table {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .lnov-gridpaper .mud-table-container { flex: 1; min-height: 0; }
+
+    /* Al achicarse la pantalla se achica el PANEL, no la grilla: la grilla tiene 5 columnas y
+       comprimirla corta el asunto. El apilado se retrasa hasta 980 px a propósito — el peor caso
+       real del cliente es 1088x614 (skill responsive-nortur) y ahí el maestro/detalle tiene que
+       seguir en dos columnas: si se apila, el operador pierde de vista la lista al leer. */
+    @@media (max-width: 1400px) {
+        .lnov-split { grid-template-columns: minmax(0, 1fr) 360px; }
+    }
+
+    @@media (max-width: 1180px) {
+        .lnov-split { grid-template-columns: minmax(0, 1fr) 300px; }
+    }
+
+    @@media (max-width: 980px) {
+        /* Apilado: cada bloque toma su propio alto y el bloque deja de tener uno fijo. */
+        .lnov-split {
+            grid-template-columns: minmax(0, 1fr);
+            height: auto;
+        }
+        .lnov-gridpaper { height: 340px; }
+        .lnov-panel { min-height: 220px; max-height: 320px; }
+    }
+
+    /* ── La ficha ── */
+    .lnov-panel {
+        border-radius: 14px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        min-height: 0;
+        /* Filete naranja de Tráfico arriba: el mismo código de color por módulo del resto
+           de las pantallas (memoria codigo-color-modulos). */
+        border-top: 4px solid #F99410;
+        animation: lnov-panel-in .18s ease-out;
+    }
+
+    /* La animación corre de nuevo en cada clic porque el @@key remonta el panel: es el "resalte"
+       del lado derecho, para que se note que el detalle cambió aunque el ojo esté en la grilla. */
+    @@keyframes lnov-panel-in {
+        from { opacity: 0; transform: translateY(4px); }
+        to   { opacity: 1; transform: none; }
+    }
+
+    @@media (prefers-reduced-motion: reduce) {
+        .lnov-panel { animation: none; }
+    }
+
+    .lnov-panel__vacio {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 24px;
+        text-align: center;
+        color: #9CB0C7;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    .lnov-panel__head {
+        padding: 10px 14px 8px;
+        border-bottom: 1px solid #E8EFF7;
+        background: linear-gradient(180deg, #F7FAFF 0%, #FFFFFF 100%);
+    }
+
+    .lnov-panel__origen {
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+        color: #B26A00;
+        background: #FFF3E0;
+        border: 1px solid #FFE0B2;
+        border-radius: 999px;
+        padding: 1px 8px;
+        margin-bottom: 4px;
+    }
+
+    .lnov-panel__asunto {
+        display: block;
+        font-size: 14px;
+        font-weight: 800;
+        color: #112F5B;
+        line-height: 1.35;
+        /* El asunto de una novedad de unidad es largo ("int: 56 dom: … chof: …"): se deja
+           envolver en dos renglones y recién ahí se corta (nunca recortar con "…" un dato
+           que el operador necesita — memoria zoom-viaje-layout). */
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .lnov-panel__meta {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px 12px;
+        padding: 10px 14px;
+        border-bottom: 1px solid #E8EFF7;
+    }
+
+    .lnov-meta { display: flex; flex-direction: column; min-width: 0; }
+
+    .lnov-meta__k {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+        color: #9CB0C7;
+    }
+
+    .lnov-meta__v {
+        font-size: 12.5px;
+        font-weight: 600;
+        color: #1F2937;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .lnov-meta__v--pend { color: #B26A00; }
+
+    .lnov-meta__link {
+        align-self: flex-start;
+        border: 0;
+        background: none;
+        padding: 0;
+        font: inherit;
+        font-size: 12.5px;
+        font-weight: 800;
+        color: #003AA0;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+    }
+
+    .lnov-meta__link:hover { color: #F99410; }
+
+    .lnov-panel__cli {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 14px;
+        font-size: 12.5px;
+        font-weight: 700;
+        color: #003AA0;
+        border-bottom: 1px solid #E8EFF7;
+        min-width: 0;
+    }
+
+    .lnov-panel__cli span {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .lnov-panel__cli .mud-icon-root { color: #9CB0C7; }
+
+    /* El mensaje se come todo el alto sobrante y scrollea solo. */
+    .lnov-msg {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        margin: 12px 14px 14px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 13px;
+        line-height: 1.55;
+        color: #1F2937;
+        background: #F7F9FC;
+        border: 1px solid #E1E8F0;
+        border-radius: 8px;
+        padding: 10px 12px;
+    }
+
+    /* ── Anchos de la grilla ──
+       `table-layout: fixed` para que las 4 columnas angostas conserven su ancho y sea el ASUNTO
+       el que ceda: sin esto, a 1088 px el asunto largo de una novedad de unidad empujaba y
+       "Enviada" se cortaba a la mitad. El asunto no lleva width → se queda con el sobrante, y
+       recorta con "…" mostrando el texto completo en el tooltip.
+       (Patrón del proyecto: memoria grilla-anchos-colgroup-fixed.) */
+    .lnov-grid table { table-layout: fixed; width: 100%; }
+
+    .lnov-grid th, .lnov-grid td {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    /* ── La fila seleccionada ──
+       Además del fondo azul que ya trae `cli-grid__row--sel`, una barra naranja pegada al borde
+       izquierdo: en una grilla densa el cambio de fondo solo no se ve si mirás la otra punta. */
+    .lnov-row--sel td:first-child {
+        box-shadow: inset 3px 0 0 0 #F99410;
+    }
+</style>

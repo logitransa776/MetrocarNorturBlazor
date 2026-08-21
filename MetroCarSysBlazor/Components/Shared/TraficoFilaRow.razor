@@ -1,4 +1,4 @@
-@*  Fila de la grilla de Tráfico como COMPONENTE con render gateado.
+﻿@*  Fila de la grilla de Tráfico como COMPONENTE con render gateado.
 
     POR QUÉ EXISTE (18/07/2026 — nivel 2 del plan de performance):
     Cada interacción del padre (click de fila, tecla ↑/↓, abrir el menú contextual,
@@ -20,25 +20,33 @@
     Doc de fondo: docs/performance/PENDIENTE_GRILLA_TRAFICO_BLANQUEO.md
 *@
 
+@* data-nro = número de orden del servicio en el día. Lo usa traficoIrHoraActual
+   (descarga.js) para encontrar la fila de la hora actual en el DOM y centrarla midiendo
+   su geometría REAL, en vez de confiar en aritmética de píxeles. ⚠️ La columna # visible
+   se sacó el 18/08/2026 a pedido del usuario, pero el atributo NO se puede borrar: sin él
+   el botón "ir a la hora actual" deja de encontrar la fila. *@
 <tr class="tg-row @EstadoCss(Fila.EstadoDisplay) @(EsActiva ? "fila-activa" : "") @(EsFlash ? "fila-flash" : "")"
+    data-nro="@Nro"
     style="cursor:pointer;"
     title="Doble click: detalle del viaje · Click derecho: menú de acciones"
     @onclick="() => OnClick.InvokeAsync(Fila)"
     @ondblclick="() => OnDobleClick.InvokeAsync(Fila)"
     @oncontextmenu:preventDefault="true"
     @oncontextmenu="(e) => OnMenuContexto.InvokeAsync((e, Fila))">
-    <td class="r" style="color:#9AA7BC; font-size:0.72rem;">@Nro</td>
     @* title propio en la celda: pisa el title genérico del <tr> para mostrar el nº de reserva.
        EstadoDisplay = estado pintado (CURSO/CHEQUEO derivados en memoria como el FoxPro), no el crudo.
-       El chip es clickeable: filtra la grilla por ese estado (misma acción que el botón del pie).
-       stopPropagation en click Y dblclick para no disparar además la selección de fila ni el Zoom
-       —el resto de la fila (24 columnas) conserva intacto doble clic → Zoom y clic derecho → menú. *@
+       El chip es clickeable y ABRE EL MENÚ CONTEXTUAL de la fila (31/07/2026, pedido del usuario):
+       clic izquierdo sobre el chip = clic derecho sobre la fila, mismo menú en la posición del cursor.
+       ANTES filtraba la grilla por ese estado — se sacó: filtrar por estado queda SOLO en la
+       botonera del pie. stopPropagation en click Y dblclick para no disparar además la selección
+       de fila ni el Zoom —el resto de la fila (24 columnas) conserva intacto doble clic → Zoom
+       y clic derecho → menú. *@
     <td title="Reserva Nº @Fila.IdViaje">
-        <span class="estado-chip estado-chip--@Fila.EstadoDisplay.ToLowerInvariant().Replace(" ", "-") estado-chip--filtra"
-              title="Reserva Nº @Fila.IdViaje · Clic: filtrar la grilla por @EstadoLabel(Fila.EstadoDisplay)"
-              @onclick="() => OnEstadoClick.InvokeAsync(Fila.EstadoDisplay)"
+        <span class="estado-chip estado-chip--@Fila.EstadoDisplay.ToLowerInvariant().Replace(" ", "-") estado-chip--menu"
+              title="Reserva Nº @Fila.IdViaje · @EstadoLabel(Fila.EstadoDisplay) · Clic: abrir el menú de acciones del viaje"
+              @onclick="(e) => OnMenuContexto.InvokeAsync((e, Fila))"
               @onclick:stopPropagation="true"
-              @ondblclick:stopPropagation="true">@EstadoLabel(Fila.EstadoDisplay)</span>
+              @ondblclick:stopPropagation="true">@EstadoLabelChip(Fila.EstadoDisplay)</span>
     </td>
     <td>@Fila.Fecha.ToString("dd/MM/yyyy")</td>
     <td class="td-bold">@Fila.HPre</td>
@@ -50,7 +58,6 @@
     <td>@Fila.UCb</td>
     <td>@Fila.UAs</td>
     <td class="c">@Fila.Chq</td>
-    <td class="c">@Fila.Ag</td>
     @* Recorrido "DESDE ➜ HASTA": la flecha naranja reemplaza el ' a '
        solo en pantalla (el tooltip conserva el texto original). *@
     <td class="td-bold" title="@Fila.Recorrido">
@@ -63,23 +70,44 @@
             @Fila.Recorrido
         }
     </td>
-    <td>@Fila.Fletero</td>
+    <td title="@Fila.Fletero">@Fila.Fletero</td>
+    @* Comentario vive entre Fletero y Chofer (03/08/2026, pedido del usuario). Ancho FIJO
+       de 160px en el colgroup: si el texto no entra, trunca con … y se lee entero en el
+       tooltip. Si se mueve o se cambia el ancho, tocar también el <colgroup> y el <thead>
+       de PlanillaTrafico.razor — son tres listas paralelas que tienen que coincidir. *@
+    <td class="td-bold" title="@Fila.Comentario">@Fila.Comentario</td>
     <td title="@Fila.Chofer">@Fila.Chofer</td>
     <td>@Fila.Veh</td>
     <td class="td-bold">@Fila.Cliente</td>
     <td class="r td-bold">@Fila.Pax</td>
-    <td class="c td-bold">@Fila.Agua</td>
-    <td class="c">@Fila.Adj</td>
-    <td class="td-bold" title="@Fila.Comentario">@Fila.Comentario</td>
-    <td>@(string.IsNullOrWhiteSpace(Fila.Grupo) ? "SIN GRUPO" : Fila.Grupo)</td>
+    @* Agua: el FoxPro muestra la celda VACÍA cuando el valor es 0 o NULL
+       (trafico2.scx col.18 → iif(agua > 0, agua, '')). Solo se ve el número
+       cuando realmente hay agua cargada al servicio. *@
+    <td class="c td-bold">@(Fila.Agua > 0 ? Fila.Agua.ToString() : "")</td>
+    @* Nro. Reserva — ocupa el lugar que tenía Adj (20/08/2026, pedido del usuario). Es el
+       MISMO número que muestra el Zoom del Viaje en NRO. RESERVA (viaje.id_viaje). *@
+    <td class="r td-bold">@Fila.IdViaje</td>
+    @* Grupo y Guia truncan seguido (nombres largos: "TAD 5619 GP 56 2026", "NAYLA GALLO
+       1566589837"). Antes NO tenían tooltip y no se notaba porque el layout automático les
+       daba el ancho que pedía el contenido; con los anchos ya fijos, el title es la única
+       forma de leer el valor completo. *@
+    <td title="@Fila.Grupo">@(string.IsNullOrWhiteSpace(Fila.Grupo) ? "SIN GRUPO" : Fila.Grupo)</td>
     <td>@(string.IsNullOrWhiteSpace(Fila.Vuelo) ? "SIN VUELO" : Fila.Vuelo)</td>
-    <td>@(string.IsNullOrWhiteSpace(Fila.Guia) ? "SIN GUIA" : Fila.Guia)</td>
+    <td title="@Fila.Guia">@(string.IsNullOrWhiteSpace(Fila.Guia) ? "SIN GUIA" : Fila.Guia)</td>
+    @* Ag (agencia) es la última columna de datos desde el 18/08/2026 — ver el colgroup. *@
+    <td class="c">@Fila.Ag</td>
+    @* Adj es la última columna de datos desde el 20/08/2026 (pedido del usuario). *@
+    <td class="c">@Fila.Adj</td>
+    @* Celda de la columna FILLER (la última del colgroup, sin width): absorbe el sobrante
+       en pantallas anchas para que ninguna columna real se estire. No lleva dato nunca. *@
+    <td></td>
 </tr>
 
 @code {
     [Parameter, EditorRequired] public PlanillaTraficoRow Fila { get; set; } = default!;
 
-    /// <summary>Nº de orden 1-based del servicio en el día (columna #).</summary>
+    /// <summary>Nº de orden 1-based del servicio en el día. Ya no se muestra como columna:
+    /// viaja al DOM en data-nro para que el botón "ir a la hora actual" ubique la fila.</summary>
     [Parameter] public int Nro { get; set; }
 
     /// <summary>Fila seleccionada por click o por teclado.</summary>
@@ -90,14 +118,13 @@
 
     [Parameter] public EventCallback<PlanillaTraficoRow> OnClick { get; set; }
     [Parameter] public EventCallback<PlanillaTraficoRow> OnDobleClick { get; set; }
-    [Parameter] public EventCallback<(MouseEventArgs E, PlanillaTraficoRow Fila)> OnMenuContexto { get; set; }
 
     /// <summary>
-    /// Clic en el chip de la columna Estado → suma/quita ese estado del filtro de la grilla
-    /// (mismo handler que la botonera del pie). Va el estado PINTADO (EstadoDisplay), que es
-    /// el que filtra. No entra en el gate de ShouldRender: es un EventCallback (ver nota abajo).
+    /// Menú de acciones del viaje. Lo disparan DOS gestos: el clic derecho en cualquier parte
+    /// de la fila y el clic izquierdo sobre el chip de la columna Estado (31/07/2026). Ambos
+    /// mandan el MouseEventArgs porque el menú se posiciona en el cursor.
     /// </summary>
-    [Parameter] public EventCallback<string> OnEstadoClick { get; set; }
+    [Parameter] public EventCallback<(MouseEventArgs E, PlanillaTraficoRow Fila)> OnMenuContexto { get; set; }
 
     // ── Gate de render ────────────────────────────────────────────────────────
     // Última combinación de parámetros efectivamente PINTADA. Si los parámetros que
@@ -148,6 +175,23 @@
 
     /// <summary>Texto visible del estado (CURSO se muestra como "EN CURSO", igual que el FoxPro).</summary>
     public static string EstadoLabel(string estado) => estado == "CURSO" ? "EN CURSO" : estado;
+
+    /// <summary>
+    /// Etiqueta para el CHIP de la grilla — versión abreviada (18/08/2026, pedido del usuario:
+    /// achicar la columna Estado ~30%). Solo se acortan las dos más largas; el resto va entero.
+    /// El nombre completo queda en el tooltip de la celda y en la botonera del pie, que siguen
+    /// usando EstadoLabel: acá NO se abrevia de más para no volver la grilla ilegible.
+    /// ⚠️ Los anchos del chip (.estado-chip en app.css) y de la columna (colgroup de
+    /// PlanillaTrafico.razor) están calibrados a estos textos: si se cambia una etiqueta por
+    /// otra más larga, hay que volver a medir los dos.
+    /// </summary>
+    public static string EstadoLabelChip(string estado) => estado switch
+    {
+        "FINALIZADO"  => "FINALIZ.",
+        "FACTURADO"   => "FACTUR.",
+        "SIN ASIGNAR" => "SIN ASIG",
+        _             => EstadoLabel(estado)
+    };
 
     // Parte "DESDE a HASTA" en (desde, hasta) para pintar el separador como flecha ➜
     // (solo presentación: el dato, la búsqueda, el tooltip y el Excel siguen con ' a ').

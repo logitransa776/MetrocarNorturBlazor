@@ -1,4 +1,4 @@
-/* IBM Plex Sans, auto-hospedada (18/07/2026) — solo la grilla de Tráfico la usa.
+﻿/* IBM Plex Sans, auto-hospedada (18/07/2026) — solo la grilla de Tráfico la usa.
    Se auto-hospeda a propósito: la fuente NO viene instalada en Windows (ni en esta PC ni,
    con altísima probabilidad, en las de los operadores de tráfico). Si se declarara solo por
    nombre en font-family, el navegador caería en silencio al fallback (Segoe UI) sin avisar —
@@ -16,12 +16,25 @@
     src: url('fonts/IBMPlexSans-Regular.woff2') format('woff2');
     unicode-range: U+0000-00FF, U+2000-206F, U+20AC, U+2122;
 }
-/* Peso 600 (SemiBold), agregado el 20/07/2026 para .td-bold — ver ese selector más abajo:
-   con IBM Plex Sans auto-hospedada de verdad (antes caía en silencio a Segoe UI), el 700
-   se sentía más pesado de lo esperado para resaltar celdas. 600 da la misma jerarquía con
-   menos densidad de tinta; el 700 se dejó solo para los headers de columna, que sí necesitan
-   el contraste más fuerte contra el azul de fondo. Elegido por el usuario comparando las 4
-   intensidades reales en un artefacto. */
+/* Peso 500 (Medium), declarado el 12/08/2026 — es el peso que usa .td-bold desde esa fecha.
+   ⚠ El .woff2 ya estaba en wwwroot/fonts/ desde julio, pero NUNCA se había declarado el
+   @font-face: sin este bloque, un `font-weight: 500` no encuentra cara real y el navegador
+   cae a la de 400 SIN AVISAR — las celdas destacadas quedarían idénticas al texto normal.
+   Es la misma trampa del silent fallback que documenta el bloque de arriba, un nivel más
+   adentro (la familia carga, el PESO no). */
+@font-face {
+    font-family: 'IBM Plex Sans';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('fonts/IBMPlexSans-500.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+2000-206F, U+20AC, U+2122;
+}
+/* Peso 600 (SemiBold), agregado el 20/07/2026 para .td-bold. Desde el 12/08/2026 .td-bold
+   usa 500 y este 600 ya NO lo usa la grilla, pero se deja declarado: cualquier regla que
+   pida 600 con esta familia (dentro o fuera de la grilla) tiene que encontrar cara real,
+   si no cae a otro peso en silencio. Si algún día se confirma que nadie lo usa, se puede
+   borrar junto con su .woff2 (24 KB). */
 @font-face {
     font-family: 'IBM Plex Sans';
     font-style: normal;
@@ -41,7 +54,74 @@
 
 html, body {
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    background: #F2F5F9;
+    background: #D5D9E2;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CAMPOS DE FORMULARIO — ESTÁNDAR DE TODA LA APP (16/08/2026)
+   Antes cada input era transparente con un borde gris pálido (#BDBDBD, el default
+   de MudBlazor): sobre la página Piedra no se distinguía dónde se puede escribir.
+   Ahora, tres tonos y un borde, en una sola perilla:
+
+     · --nt-campo        el campo ACLARA sobre la página, pero NO es blanco puro
+                         (el blanco salta demasiado sobre el gris — probado y descartado).
+     · --nt-campo-ro     campo bloqueado: OSCURECE. Se apaga en vez de destacar,
+                         y dice "no tocar" sin necesidad de un cartel.
+     · --nt-campo-borde  azul nocturno de la marca. Con poca diferencia campo/página,
+                         el borde es lo que hace que se lea como una caja.
+
+   Esta es la regla de MENOR especificidad de la app (0,2,0) a propósito: es la base,
+   y cualquier campo con estilo propio (.busc-wrap de Tráfico, .rfs-topn-select) la
+   pisa sin pelear. NO agregar !important acá.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+    --nt-campo: #EDEFF4;
+    --nt-campo-ro: #C6CBD8;
+    --nt-campo-borde: #112F5B;
+    --nt-campo-borde-ancho: 2px;   /* el default de MudBlazor es 1px */
+}
+
+.mud-input.mud-input-outlined {
+    background: var(--nt-campo);
+    border-radius: var(--mud-default-borderradius, 4px);
+}
+
+/* Borde en reposo.
+   🔴 Los :not() son OBLIGATORIOS y tienen que ser EXACTAMENTE éstos. Verificado leyendo el
+   DOM y el CSSOM de MudBlazor 9.5 (16/08/2026):
+     · el campo enfocado NO lleva una clase `.mud-focused` — MudBlazor usa `:focus-within`.
+     · el campo con error NO lleva `.mud-error` — usa `.mud-input-error` (y con !important,
+       así que ése se defiende solo y no hay que excluirlo).
+   Excluir clases que no existen no excluye nada: sólo infla la especificidad, y entonces
+   esta regla le gana a la del foco y el campo enfocado se queda con el borde de reposo.
+   Es un bug de accesibilidad invisible en una captura (azul nocturno y azul de foco se
+   parecen a simple vista) — sólo se ve midiendo el color computado. */
+.mud-input.mud-input-outlined:not(:focus-within):not(.mud-disabled) .mud-input-outlined-border {
+    border-color: var(--nt-campo-borde);
+    border-width: var(--nt-campo-borde-ancho);
+}
+
+/* El foco, un punto MÁS grueso que el reposo. Sin esto quedaban los dos en 2px y la única
+   diferencia era el color (azul nocturno vs azul de foco): dos azules oscuros parecidos.
+   El borde es un overlay, así que engrosarlo no mueve el layout ni un píxel. */
+.mud-input.mud-input-outlined:focus-within:not(.mud-disabled) .mud-input-outlined-border {
+    border-width: calc(var(--nt-campo-borde-ancho) + 1px);
+}
+
+/* Campo bloqueado. */
+.mud-input.mud-input-outlined:has(input[readonly]),
+.mud-input.mud-input-outlined:has(textarea[readonly]) {
+    background: var(--nt-campo-ro);
+}
+
+/* 🔴 EXCEPCIÓN IMPRESCINDIBLE: un MudSelect y un MudDatePicker ponen readonly en su input
+   POR DISEÑO (se cargan eligiendo de una lista o del calendario, no tipeando). Sin estas
+   dos líneas, la regla de arriba pintaría TODOS los desplegables y fechas de la app como
+   si estuvieran deshabilitados. Verificado midiendo el DOM: en la barra de filtros de
+   Reservas, "Tipo de servicio" y "Desglosar por" tienen readonly=true. */
+.mud-select .mud-input.mud-input-outlined:has(input[readonly]),
+.mud-picker .mud-input.mud-input-outlined:has(input[readonly]) {
+    background: var(--nt-campo);
 }
 
 /* ═══════════════════════════════════════════
@@ -423,6 +503,74 @@ html, body {
     white-space: nowrap;
 }
 
+/* Filete de módulo en la barra superior (11/08/2026) — el color del menú te sigue
+   a la pantalla: viendo naranja ya sabés que estás en Tráfico, sin leer el título.
+   Va como ::after y NO como border-bottom a propósito: un borde le sumaría 3px a
+   la altura del AppBar y MudBlazor calcula con esa altura el padding-top del
+   contenido, así que todas las pantallas quedarían 3px corridas. El pseudo-elemento
+   se pinta adentro de la caja y no mueve nada. El color llega por --nt-mod desde
+   MainLayout; sin módulo (login, ayuda, el hub) cae en el gris pizarra neutro. */
+.nt-appbar::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;          /* 11/08/2026: era 3px — se afinó para que sea más sutil */
+    background: var(--nt-mod, #64748B);
+    pointer-events: none;
+}
+
+/* Reloj del AppBar (03/08/2026) — fecha + hora del servidor, junto a "Usuario:".
+   Estilo "D" elegido entre 5 propuestas: punto en vivo + hora monoespaciada. */
+.appbar-clock {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-right: 14px;
+    padding-right: 14px;
+    border-right: 1px solid rgba(255, 255, 255, 0.18);
+    white-space: nowrap;
+}
+
+.appbar-clock__dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #16A34A;
+    flex: none;
+    align-self: center;
+    animation: appbar-clock-pulse 2.2s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .appbar-clock__dot {
+        animation: none;
+    }
+}
+
+@keyframes appbar-clock-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(22, 163, 74, .55); }
+    70%  { box-shadow: 0 0 0 6px rgba(22, 163, 74, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); }
+}
+
+.appbar-clock__fecha {
+    font-size: 17px;
+    line-height: 7;
+    font-weight: 700;
+    color: #ffffff;
+    font-variant-numeric: tabular-nums;
+}
+
+.appbar-clock__hora {
+    font-size: 1.1rem;
+    line-height: 1;
+    font-weight: 700;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+}
+
 /* Área de navegación */
 .nav-drawer__nav {
     flex: 1;
@@ -448,6 +596,20 @@ html, body {
     color: #003AA0;
 }
 
+/* ═══ CÓDIGO DE COLOR POR MÓDULO (11/08/2026) ═════════════════════════════
+   Cada módulo del sistema tiene un color y es SIEMPRE el mismo: en las tarjetas
+   del hub /informes, en el menú lateral y en el filete de la barra de título.
+   El usuario final aprende a reconocer el módulo por el color antes de leer.
+
+   El hex NO se escribe acá: entra una sola vez, en el <div class="nav-section">,
+   como la variable --nt-mod, y lo sirve InformesCatalogo.Modulos (fuente única).
+   Ícono, filete, hover y estado activo lo DERIVAN por herencia. Un módulo nuevo
+   no necesita CSS nuevo: le alcanza con su hex en el catálogo.
+
+   El fallback de cada var() es el color anterior al cambio: si una sección se
+   olvida de declarar --nt-mod, el menú se ve como antes, no roto.
+   ═══════════════════════════════════════════════════════════════════════ */
+
 /* Sección (grupo colapsable) */
 .nav-section {
     margin: 2px 0;
@@ -468,15 +630,32 @@ html, body {
     letter-spacing: 0.07em;
     color: #1E3A5F;
     transition: background 0.15s;
+    position: relative;   /* ancla del filete de módulo */
+}
+
+/* Filete de módulo — la señal que se ve de reojo y con la sección colapsada.
+   Solo en las secciones de primer nivel: en los submenús (nivel 3) el color ya
+   viene dado por el ícono, y un segundo filete sangrado ensuciaría la lectura. */
+.nav-section__title:not(.nav-section__title--sub)::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--nt-mod, transparent);
 }
 
 .nav-section__title:hover {
-    background: #E3EAF4;
+    background: #E3EAF4;   /* fallback para navegadores sin color-mix */
+    background: color-mix(in srgb, var(--nt-mod, #003AA0) 9%, #E3EAF4);
     border-radius: 6px;
 }
 
 .nav-section__icon {
     color: #003AA0;
+    color: var(--nt-mod, #003AA0);
     flex-shrink: 0;
 }
 
@@ -547,14 +726,22 @@ html, body {
 
 .nav-item:hover {
     background: #DDE8F5;
+    background: color-mix(in srgb, var(--nt-mod, #003AA0) 11%, #DDE8F5);
     color: #003AA0;
+    color: var(--nt-mod, #003AA0);
 }
 
+/* Ítem activo — toma el color del módulo en el que estás.
+   Antes la barra era naranja fija: dentro de Facturación o Combustible aparecía
+   un naranja que no significaba nada y competía con el naranja de Tráfico. */
 .nav-item--active {
     background: #D0E3F7 !important;
+    background: color-mix(in srgb, var(--nt-mod, #003AA0) 15%, #FFFFFF) !important;
     color: #003AA0 !important;
+    color: color-mix(in srgb, var(--nt-mod, #003AA0) 78%, #0B1A2E) !important;
     font-weight: 700;
     border-left: 3px solid #F99410;
+    border-left-color: var(--nt-mod, #F99410);
     padding-left: 33px;
 }
 
@@ -630,88 +817,11 @@ html, body {
     to   { opacity: 1; }
 }
 
-/* ═══════════════════════════════════════════
-   TABLERO DE ALERTAS — franja debajo del AppBar
-   ═══════════════════════════════════════════ */
-
-.tablero-bar {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 4px 10px;
-    padding: 5px 16px;
-    background: #1A2B45;
-    border-bottom: 1px solid #2A3F60;
-    font-size: 0.76rem;
-    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-}
-
-.tablero-bar__sep {
-    width: 1px;
-    height: 22px;
-    background: rgba(255,255,255,0.15);
-    margin: 0 4px;
-    flex-shrink: 0;
-}
-
-.tablero-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 2px 9px;
-    border-radius: 999px;
-    font-weight: 600;
-    white-space: nowrap;
-    cursor: default;
-}
-
-/* Totales — azul neutro */
-.tablero-chip--total {
-    background: rgba(255,255,255,0.08);
-    color: #C7D6EC;
-    border: 1px solid rgba(255,255,255,0.1);
-}
-
-/* Próximos a vencer (≤30d) — amarillo */
-.tablero-chip--warn {
-    background: rgba(249,148,16,0.15);
-    color: #F9B44E;
-    border: 1px solid rgba(249,148,16,0.3);
-}
-
-/* Vencidos — rojo */
-.tablero-chip--danger {
-    background: rgba(220,38,38,0.18);
-    color: #FF7A7A;
-    border: 1px solid rgba(220,38,38,0.35);
-}
-
-/* Todo en orden — verde tenue */
-.tablero-chip--ok {
-    background: rgba(34,197,94,0.12);
-    color: #6EE7A0;
-    border: 1px solid rgba(34,197,94,0.25);
-}
-
-.tablero-chip__num {
-    font-variant-numeric: tabular-nums;
-    font-size: 0.85rem;
-}
-
-.tablero-group {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}
-
-.tablero-group__label {
-    font-size: 0.67rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: #6A85A8;
-    margin-right: 2px;
-}
+/* TABLERO DE ALERTAS — la franja azul oscura que vivía debajo del AppBar se borró
+   el 11/08/2026 (con sus componentes TableroAlertas.razor y ChipAlerta.razor): los
+   7 números pasaron al modal del chip "Vencimientos" de la barra. Los estilos
+   .tablero-* se fueron con ella; lo nuevo vive en § CENTRO DE AYUDA → .appbar-vto
+   y § MODAL DE VENCIMIENTOS (.vto-*). */
 
 /* ═══════════════════════════════════════════
    THEMES — variables de la grilla de Tráfico
@@ -765,7 +875,6 @@ body.theme-gris .mud-appbar {
      body (sin scroll)
        └ .mud-layout (100vh, columna)
            └ .mud-main-content (alto fijo = 100vh − AppBar, columna, sin scroll)
-               ├ .tablero-bar  → fijo arriba  (Vehículos/VTV/Matafuegos siempre visible)
                └ .mud-container → flex:1, sin scroll
                    └ .planilla-page (columna)
                        ├ toolbar  → fijo
@@ -799,11 +908,6 @@ body.planilla-fixed .mud-main-content {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-}
-
-/* La franja Vehículos/VTV/Matafuegos queda SIEMPRE visible (req. 2) */
-body.planilla-fixed .tablero-bar {
-    flex: 0 0 auto;
 }
 
 /* El contenedor de MudBlazor toma el alto restante y no scrollea él mismo;
@@ -946,11 +1050,42 @@ body.planilla-fixed .trafico-panel {
        Antes: Helvetica Neue a 0.66rem (10.6px) → en Windows caía a Arial y a ese tamaño
        cerraba los dígitos (horarios borrosos); después Inter (18/07/2026), que tampoco venía
        instalada y caía a Segoe UI Variable en silencio — el mismo problema que se corrige acá
-       auto-hospedando el archivo real. */
-    font-size: 0.769rem;   /* 12.3px */
+       auto-hospedando el archivo real.
+       Tamaño bajado de 0.769rem (12.3px) a 0.738rem (11.8px) el 12/08/2026, junto con el
+       peso de las destacadas (600 → 500, ver .td-bold más abajo): a 12.3px la grilla se
+       leía cargada. Los anchos de columna NO cambian, así que la letra más chica se traduce
+       en menos truncados. El alto de fila tampoco: line-height y height están fijos en px
+       (16 y 20), no dependen del tamaño de fuente. Elegido por el usuario comparando las 6
+       candidatas sobre la grilla real en un artefacto. */
+    font-size: 0.738rem;   /* 11.8px */
     font-family: 'IBM Plex Sans', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
     white-space: nowrap;
 }
+
+/* ANCHOS DE COLUMNA REALMENTE FIJOS — solo la grilla principal de Tráfico.
+
+   ⚠ TRAMPA (medida el 03/08/2026, no es teoría): `table-layout:fixed` NO SE APLICA si el
+   `width` de la tabla es `auto`. Chrome cae al algoritmo AUTOMÁTICO y dimensiona las
+   columnas por CONTENIDO → el <colgroup> de arriba queda decorativo. Medido en la grilla
+   real (viewport 1920): Comentario se estiraba a 453px (colgroup: 160) en días con
+   comentarios largos, mientras Chofer se aplastaba a 51px (colgroup: 170).
+   `width:max-content` TAMPOCO sirve: para calcular max-content el browser vuelve a medir
+   el contenido (tabla 2302px, Comentario 453 otra vez).
+
+   `width:0` es lo mínimo que activa el algoritmo fijo SIN hardcodear la suma de anchos:
+   con table-layout:fixed el ancho usado es el MAYOR entre el width declarado y la suma de
+   las columnas, así que la tabla mide exactamente lo que suma el <colgroup> (hoy 1846px)
+   y se recalcula sola si mañana se cambia un ancho.
+
+   `min-width:100%` (heredado de .trafico-grid) sigue evitando el hueco a la derecha en
+   pantallas anchas, y el sobrante se lo lleva ENTERO la columna filler del final (el <col>
+   sin width del colgroup) — por eso ninguna columna real se estira.
+   Verificado a 1500 / 1920 / 2560 px: Comentario = 160px en los tres, filler = 0 / 25 / 665. */
+.trafico-grid--filas-fijas { width: 0; }
+
+/* Columna filler (la última, sin título): es relleno estructural, no un dato. Sin el
+   recuadro blanco del resto de los th, para que se lea como continuación de la barra. */
+.trafico-grid thead th.th-filler { outline: none; }
 
 .trafico-grid thead th {
     position: sticky;
@@ -963,7 +1098,10 @@ body.planilla-fixed .trafico-panel {
     padding: 5px 4px;   /* padding horizontal reducido: más aire para que el título entre */
     border: 1px solid var(--nt-grid-header-border);
     white-space: nowrap;
-    font-size: 0.806rem;   /* 12.9px — medio punto por encima de la celda (12.3px) */
+    /* Medio punto por encima de la celda, SIEMPRE: si cambia el cuerpo de la grilla, este
+       tamaño lo acompaña. 12/08/2026: celda 12.3 → 11.8px, así que el header 12.9 → 12.4px
+       (es la proporción con la que se validó el cambio en el artefacto de tipografías). */
+    font-size: 0.775rem;   /* 12.4px — medio punto por encima de la celda (11.8px) */
     letter-spacing: 0.02em;
     color: #FFFFFF;
     outline: 2px solid rgba(255, 255, 255, 0.45);
@@ -1083,12 +1221,17 @@ body.planilla-fixed .trafico-panel {
 /* Valores destacados (NO el encabezado) — réplica de los campos que el MetroCar viejo
    muestra en negrita: H.Pre, H.Ini, H.Fin, Recorrido, Cliente, Pax, Agua, Comentario. Son
    los datos clave que el despachante lee de un vistazo.
-   Peso 600, no 700 (20/07/2026): con IBM Plex Sans auto-hospedada de verdad, el 700 se
-   sentía más pesado de lo esperado en celdas de dato — 600 (SemiBold) da la misma
-   jerarquía con menos densidad de tinta. El 700 se reservó para los headers de columna
-   (.trafico-grid thead th), que sí necesitan el contraste fuerte contra el azul de fondo.
-   Elegido por el usuario comparando las 4 intensidades reales en un artefacto. */
-.trafico-grid tbody td.td-bold { font-weight: 600; }
+
+   Peso 500 (Medium), bajado de 600 el 12/08/2026. Por qué, medido y no a ojo: rasterizando
+   un renglón y contando los píxeles pintados, IBM Plex Sans agrega +48% de tinta al pasar
+   de 400 a 600, y +30% al pasar a 500. Con OCHO columnas destacadas por fila y ~340 filas
+   por día, ese +48% es lo que hacía ver la pantalla cargada ("las negritas muy gordas").
+   500 mantiene la jerarquía con bastante menos densidad.
+   El 700 sigue reservado para los headers de columna (.trafico-grid thead th), que sí
+   necesitan el contraste fuerte contra el azul de fondo.
+   Elegido por el usuario comparando las 6 candidatas sobre la grilla real en un artefacto
+   (IBM Plex Sans / Public Sans / Inter / Source Sans 3 / Roboto / Barlow Semi Condensed). */
+.trafico-grid tbody td.td-bold { font-weight: 500; }
 
 /* Separador origen ➜ destino del Recorrido, en naranja NORTUR: el ojo parte el
    tramo de un vistazo en la grilla densa (elegido por el usuario, 16/07/2026).
@@ -1170,10 +1313,15 @@ body.planilla-fixed .trafico-panel {
    se lea sin esfuerzo. Original FoxPro (por referencia): asignado
    #FFFF80, curso #FF80FF, finalizado #C0C0C0, facturado #98C5BF,
    chequeo #52CEFE.
+   Rosa de EN CURSO subido a #EFC7E9 (nivel "Media", 21/07/2026): el pastel
+   original #F3D9F0 se veía demasiado lavado en pantalla; se subió saturación
+   y se bajó luminosidad manteniendo la misma tinta magenta (~307°), elegido
+   por el usuario comparando niveles en un artefacto. El botón de la leyenda
+   del pie (EstadoLeyendaFondo en PlanillaTrafico.razor) refleja este mismo valor.
    ═══════════════════════════════════════════ */
 
 .trafico-grid tbody tr.fila-estado--asignado   { background: #FBF3C7; }
-.trafico-grid tbody tr.fila-estado--curso       { background: #F3D9F0; }
+.trafico-grid tbody tr.fila-estado--curso       { background: #EFC7E9; }
 .trafico-grid tbody tr.fila-estado--finalizado  { background: #E4E6EA; }
 .trafico-grid tbody tr.fila-estado--facturado   { background: #D4E8E3; }
 .trafico-grid tbody tr.fila-estado--chequeo     { background: #CFE9F7; }
@@ -1208,9 +1356,17 @@ body.planilla-fixed .trafico-panel {
     min-width: 0;   /* permite que la grilla principal se achique con scroll propio */
 }
 
+/* El panel SIEMPRE va al costado y SIEMPRE ocupa ~20% del ancho disponible: nunca
+   se apila abajo a lo ancho completo (regla del usuario, 07/08/2026; bajado de 30% a
+   20% el 18/08/2026, junto con la baja de las columnas 2ª Chofer y Nextel). Es
+   porcentual para que acompañe cualquier tamaño de pantalla; el min-width solo evita
+   que a anchos chicos las columnas queden ilegibles (ahí scrollea la tabla, no crece
+   el panel). */
 .buses-panel {
-    width: 480px;
-    flex-shrink: 0;
+    flex: 0 0 20%;
+    width: 20%;
+    min-width: 280px;
+    max-width: 20%;
 }
 
 .buses-panel__header {
@@ -1224,10 +1380,83 @@ body.planilla-fixed .trafico-panel {
     font-weight: 700;
     letter-spacing: 0.03em;
 }
+/* Con el panel al 20% el header queda justo de ancho: el título cede primero (trunca con
+   "…") y el contador de unidades y la X nunca se comprimen ni se van fuera del panel. */
+.buses-panel__title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.buses-panel__cont {
+    flex: 0 0 auto;
+    margin-left: auto;
+    font-weight: 400;
+    white-space: nowrap;
+    opacity: .85;
+}
 
 .buses-panel__wrap {
     max-height: calc(100vh - 270px);
     overflow: auto;
+}
+
+/* Fila del panel Buses sobre la que se abrió el menú contextual. Marca de la que se está
+   operando: barra a la izquierda, sin pisar el color de estado de la unidad (que es el dato).
+   Espeja el HighlightBackColor del Grid2 del FoxPro (AfterRowColChange). */
+.buses-panel__wrap tr.tg-row--sel > td {
+    box-shadow: inset 0 -1px 0 var(--z-acento, #003AA0);
+    font-weight: 600;
+}
+.buses-panel__wrap tr.tg-row--sel > td:first-child {
+    box-shadow: inset 3px 0 0 var(--z-acento, #003AA0), inset 0 -1px 0 var(--z-acento, #003AA0);
+}
+/* El clic derecho es la interacción principal del panel: que el cursor lo insinúe. */
+.buses-panel__wrap tbody tr { cursor: context-menu; }
+
+/* Chip de la columna Fletero: abre el MISMO menú contextual con clic izquierdo / toque.
+   Existe para tablet e iPad, donde no hay clic derecho (07/08/2026). Es un <button> real
+   —no un <span>— para que llegue por teclado (Tab + Enter) y lo anuncien los lectores.
+   Ocupa toda la celda para dar un blanco de toque cómodo; min-height 26px es el mínimo
+   usable sin engordar la fila (la grilla es densa a propósito). */
+.buses-panel__wrap .bus-menu-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    min-height: 26px;
+    margin: -2px -4px;
+    padding: 2px 4px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+/* Los tres puntitos son la única pista visual de que la celda es accionable: discretos
+   en reposo (no compiten con el dato) y en color de acento al pasar/tocar. */
+.buses-panel__wrap .bus-menu-chip__punt {
+    flex: 0 0 auto;
+    color: #8C9AB1;
+    font-weight: 700;
+    line-height: 1;
+}
+.buses-panel__wrap .bus-menu-chip__txt {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.buses-panel__wrap .bus-menu-chip:hover {
+    border-color: rgba(0,58,160,0.35);
+    background: rgba(0,58,160,0.07);
+}
+.buses-panel__wrap .bus-menu-chip:hover .bus-menu-chip__punt { color: var(--z-acento, #003AA0); }
+.buses-panel__wrap .bus-menu-chip:active { background: rgba(0,58,160,0.14); }
+.buses-panel__wrap .bus-menu-chip:focus-visible {
+    outline: 2px solid var(--z-acento, #003AA0);
+    outline-offset: -1px;
 }
 
 /* En modo viewport-fijo el panel Buses también llega hasta el borde inferior y
@@ -1248,18 +1477,9 @@ body.planilla-fixed .buses-panel__wrap {
     min-height: 0;
 }
 
-/* En pantallas angostas el panel pasa abajo, a lo ancho */
-@media (max-width: 1500px) {
-    .trafico-layout {
-        flex-direction: column;
-    }
-    .buses-panel {
-        width: 100%;
-    }
-    .buses-panel__wrap {
-        max-height: 420px;
-    }
-}
+/* Antes había acá un @media (max-width:1500px) que apilaba el panel abajo a ancho
+   completo. Se quitó a pedido del usuario: el panel debe quedar siempre al costado
+   con su 20%, tanto en el monitor grande como con la ventana achicada. */
 
 /* ═══════════════════════════════════════════
    BOTONES DE FILTRO — Empresa / Turismo / Nortur / combos
@@ -1379,6 +1599,215 @@ body.planilla-fixed .buses-panel__wrap {
     box-shadow: 0 0 0 2px rgba(0, 58, 160, 0.4);
 }
 
+/* ── Combos Empresa / Interno de Tráfico: MudAutocomplete vestido de chip (19/08/2026) ──
+   Reemplazan a los <select> nativos (.filtro-combo sigue vivo para el buscador de la barra).
+   El objetivo es que se vean EXACTAMENTE igual que antes: mismo alto, mismo borde, mismo
+   azul al tener valor. Lo que cambia es lo de adentro: ahora es un input donde se escribe
+   (buscar "21" → NT0021) y la lista es un popover del DOM (scroll suave, ver descarga.js). */
+.filtro-ac {
+    flex: 0 0 auto;
+    /* 168px = el texto más largo ("Todas/Empresas") entero + el chevron y la ✕ del final.
+       Con 152px el placeholder quedaba con "…" (probado en pantalla). */
+    width: 168px;
+}
+
+.filtro-ac .mud-input-control,
+.filtro-ac .mud-input-control-input-container {
+    margin-top: 0;
+}
+
+.filtro-ac .mud-input.mud-input-outlined {
+    height: 30px;
+    min-height: 30px;
+    border-radius: 6px;
+    background: #F8FAFC;
+    transition: background-color 0.15s ease;
+}
+
+.filtro-ac .mud-input.mud-input-outlined > .mud-input-outlined-border {
+    border-width: 1.5px !important;
+    border-color: #CBD5E1 !important;
+    border-radius: 6px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.filtro-ac .mud-input-slot,
+.filtro-ac input.mud-input-root {
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: inherit;
+    color: #64748B;
+    height: 28px;
+    padding-top: 0;
+    padding-bottom: 0;
+    cursor: pointer;   /* se puede escribir, pero el gesto natural sigue siendo "abrir la lista" */
+}
+
+/* El placeholder ES la etiqueta del combo vacío ("Todas/Empresas"), no un texto de ayuda
+   descartable: va con el mismo peso y color que tenía el <select> sin selección. */
+.filtro-ac input.mud-input-root::placeholder {
+    color: #64748B;
+    opacity: 1;
+    font-weight: 600;
+}
+
+.filtro-ac:hover .mud-input.mud-input-outlined { background-color: #EEF3FB; }
+.filtro-ac:hover .mud-input.mud-input-outlined > .mud-input-outlined-border {
+    border-color: #003AA0 !important;
+}
+
+.filtro-ac .mud-input.mud-input-outlined.mud-input-focused > .mud-input-outlined-border {
+    border-color: #003AA0 !important;
+    box-shadow: 0 0 0 2px rgba(0,58,160,0.15);
+}
+.filtro-ac .mud-input.mud-input-outlined.mud-input-focused { background: #FFFFFF; }
+
+/* Con valor elegido: el chip queda azul, igual que .filtro-combo--activo */
+.filtro-ac--activo .mud-input.mud-input-outlined { background-color: #EEF3FB; }
+.filtro-ac--activo .mud-input.mud-input-outlined > .mud-input-outlined-border {
+    border-color: #003AA0 !important;
+}
+.filtro-ac--activo .mud-input-slot,
+.filtro-ac--activo input.mud-input-root {
+    color: #003AA0;
+    font-weight: 700;
+}
+
+/* Chevron y ✕: chicos, para que no le coman ancho al texto del interno */
+.filtro-ac .mud-input-adornment .mud-icon-button {
+    padding: 2px;
+    color: #64748B;
+}
+.filtro-ac .mud-input-adornment .mud-icon-root {
+    font-size: 1.05rem;
+}
+.filtro-ac--activo .mud-input-adornment .mud-icon-button { color: #003AA0; }
+
+.filtro-ac .mud-input.mud-input-disabled { opacity: 0.45; }
+
+/* ── Popover de esos combos ── */
+.filtro-ac-popover .mud-list {
+    /* OJO: NADA de scroll-behavior:smooth acá. Se probó (19/08/2026) y pelea con el easing
+       de descarga.js: cada asignación de scrollTop se vuelve a animar sola y el resultado
+       es un arrastre lentísimo (medido: 71px de 300 en 720ms). El suavizado es del JS. */
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+.filtro-ac-popover .mud-list-item {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #334155;
+    min-height: 26px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+.filtro-ac-popover .mud-list-item:hover { background-color: #EEF3FB; color: #003AA0; }
+.filtro-ac-popover .mud-list-item.mud-selected-item {
+    background-color: #EEF3FB;
+    color: #003AA0;
+}
+.filtro-ac-popover .mud-list::-webkit-scrollbar { width: 8px; }
+.filtro-ac-popover .mud-list::-webkit-scrollbar-thumb {
+    background: #CBD5E1;
+    border-radius: 4px;
+}
+.filtro-ac-popover .mud-list::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+
+/* ── Buscador de la barra de Tráfico: campo (1a) + origen/destino (2a) ──
+   Dos <select> consecutivos ("Buscar en" + "Todo/Desde/Hasta") con el mismo estilo .filtro-combo,
+   seguidos del campo de texto — se lee como una cadena de combos que acota la búsqueda. */
+.busc-wrap {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;   /* salvavidas: si el navegador se queda sin espacio, baja de línea — NUNCA se solapa con Excel */
+    gap: 6px;
+    row-gap: 6px;
+    flex: 1 1 320px;
+    min-width: 200px;
+    /* Recuadro de agrupado (24/07/2026): en reposo sin fondo/borde (barra limpia, igual que
+       siempre); al enfocar CUALQUIERA de los 3 controles (combo campo, combo origen/destino o
+       el texto) aparece el recuadro azul envolviendo el grupo entero — así se ve de un vistazo
+       qué pertenece al buscador. Opción "resalta solo al enfocar", elegida sobre un panel gris
+       fijo/card con sombra (ver captura de opciones validada con el usuario). */
+    border: 1.5px solid transparent;
+    border-radius: 8px;
+    padding: 3px 5px;
+    margin: -3px -5px;   /* compensa el padding para no correr el resto de la barra */
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.busc-wrap:focus-within {
+    background: #EEF3FB;
+    border-color: #003AA0;
+    box-shadow: 0 0 0 3px rgba(0,58,160,0.12);
+}
+/* Con el wrapper ya remarcado, el borde propio del campo de texto es redundante (doble marco) */
+.busc-wrap:focus-within .busc-text.mud-input-control .mud-input-outlined-border {
+    border-color: transparent !important;
+}
+/* El input en sí queda BLANCO al escribir (25/07/2026): el celeste del recuadro es del
+   .busc-wrap (el grupo entero); sin esto el input, transparente, dejaba pasar ese celeste
+   y parecía "teñido". Blanco sólido = high-contrast con el texto que se está tipeando. */
+.busc-wrap:focus-within .busc-text.mud-input-control .mud-input-outlined {
+    background: #FFFFFF;
+}
+/* Override sobre .filtro-combo (pensado para combos más anchos tipo Empresa/Interno):
+   este es un select de 4 opciones cortas, no necesita tanto padding/ancho. */
+.busc-campo {
+    flex: 0 0 auto;
+    min-width: 78px;
+    max-width: 100px;
+    padding: 4px 18px 4px 8px;   /* menos padding izq/der que .filtro-combo (8px/22px) */
+    font-size: 0.74rem;
+    height: 30px;
+}
+/* Todo/Desde/Hasta: combo (no botones, 24/07/2026) — mismo ancho/estilo que "Buscar en".
+   Los 3 botones se solapaban con Excel cuando la barra no tenía ancho de sobra; un solo
+   combo angosto entra siempre, y la barra se lee como una cadena de combos consistente. */
+.busc-recmodo {
+    flex: 0 0 auto;
+    min-width: 68px;
+    max-width: 84px;
+    padding: 4px 18px 4px 8px;
+    font-size: 0.74rem;
+    height: 30px;
+}
+
+/* Ancho del buscador en la barra: va en el .mud-input-control EXTERNO (= .busc-text), NO en el
+   Style del MudTextField (ese llega al .mud-input interno, contenedor columna → inflaría el alto).
+   min-width chico A PROPÓSITO (24/07/2026): con "Recorrido" elegido hay DOS combos antes del
+   campo (Buscar en + Todo/Desde/Hasta) compitiendo por la misma fila. Si el campo de texto pide
+   mucho mínimo, .busc-wrap (flex-wrap) manda TODO el bloque a la línea de abajo en vez de
+   comprimirlo — por eso el mínimo real de "no bajar de línea" tiene que ser bajo; el campo
+   igual CRECE (flex:1 1 auto) hasta llenar el espacio libre cuando hay ancho de sobra. */
+.busc-text.mud-input-control {
+    flex: 1 1 120px;
+    min-width: 120px;
+}
+
+/* Lupa más chica → deja más lugar para escribir en el campo */
+.busc-text .mud-input-adornment-start .mud-icon-root {
+    font-size: 1rem;
+}
+.busc-text .mud-input-adornment-start {
+    margin-right: 0;
+}
+
+/* Excel más compacto para liberar ancho hacia el buscador; mismo verde e ícono.
+   flex:0 0 auto explícito → nunca se achica ni se solapa: si no entra en la fila,
+   el flex-wrap de .busc-wrap manda el segmented Todo/Desde/Hasta a la línea de abajo primero. */
+.mud-button-root.busc-excel {
+    flex: 0 0 auto;
+    padding: 3px 8px;
+    min-width: 0;
+    font-size: 0.72rem;
+}
+.busc-excel .mud-button-icon-start {
+    margin-right: 4px;
+}
+.busc-excel .mud-button-icon-start .mud-icon-root {
+    font-size: 0.95rem;
+}
+
 .filtro-btn {
     display: inline-flex;
     align-items: center;
@@ -1459,6 +1888,817 @@ body.planilla-fixed .buses-panel__wrap {
 .filtro-btn:disabled {
     opacity: 0.45;
     pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════
+   KPIs — franja continua "stat strip" (23/07/2026)
+   Reemplaza las 4 KpiCard sueltas de planilla-page__kpis: mismo dato, mitad de
+   alto, sin huecos entre tarjetas — el ahorro de alto va directo a la grilla
+   (.planilla-page ya reparte el espacio sobrante a .trafico-layout/__grid).
+   Buses vive acá como último segmento (antes era un filtro-btn más arriba).
+   ═══════════════════════════════════════════ */
+.kpi-strip {
+    display: flex;
+    align-items: stretch;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #ffffff;
+    border: 1px solid #E2E8F0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+.kpi-strip__seg {
+    flex: 1 1 0;
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    padding: 6px 14px;
+    min-width: 0;
+    border-right: 1px solid #E2E8F0;
+}
+
+.kpi-strip__seg:last-child {
+    border-right: none;
+}
+
+.kpi-strip__dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+}
+
+.kpi-strip__label {
+    font-size: 0.68rem;
+    font-weight: 800;
+    color: #4A5568;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kpi-strip__value {
+    font-size: 1rem;
+    font-weight: 900;
+    white-space: nowrap;
+    letter-spacing: -0.01em;
+    flex: 0 0 auto;
+}
+
+.kpi-strip__sub {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: #718096;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 0 999 auto;
+    min-width: 0;
+}
+
+/* Segmento Buses: mismo alto que los KPI, pero es un botón (abre el panel de flota).
+   align-items:center PISA el baseline de .kpi-strip__seg (24/07/2026): baseline funciona
+   bien para texto (label+valor+sub) pero con un ícono SVG + el checkbox de al lado,
+   el navegador alineaba por la línea de base del texto y el ícono/checkbox quedaban
+   más altos, empujando "BUSES" a una segunda línea visual. Center = todo en la misma fila. */
+.kpi-strip__seg--buses {
+    flex: 0 0 auto;
+    align-items: center;
+    border: none;
+    border-left: 1px solid #E2E8F0;
+    background: #F8FAFC;
+    color: #64748B;
+    font-family: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kpi-strip__seg--buses:hover {
+    background: #EEF3FB;
+    color: #003AA0;
+}
+
+.kpi-strip__seg--buses-on {
+    background: #003AA0;
+    color: #ffffff;
+}
+
+.kpi-strip__seg--buses-on:hover {
+    background: #002F88;
+    color: #ffffff;
+}
+
+.kpi-strip__seg--buses .filtro-btn__count {
+    background: rgba(0,0,0,0.12);
+    color: inherit;
+    /* Ancho fijo (no min-width: 20px como el filtro-btn genérico) para que el botón Buses
+       nunca cambie de tamaño al tildar/destildar, sea cual sea la cantidad de unidades. */
+    min-width: 26px;
+}
+
+/* Checkbox visual del botón Buses (25/07/2026): caja cuadrada que se tilda/destilda con
+   _verBuses. El ✓ es texto plano (no MudIcon/SVG) para no sumar otra caja con line-height
+   propio dentro del flex — line-height:1 lo centra sin desplazar el resto de la fila. */
+.kpi-strip__checkbox {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    border-radius: 3px;
+    border: 1.5px solid #94A3B8;
+    background: #ffffff;
+    color: #ffffff;
+    font-size: 0.65rem;
+    line-height: 1;
+    transition: all 0.15s ease;
+}
+
+.kpi-strip__seg--buses-on .kpi-strip__checkbox {
+    border-color: #ffffff;
+    background: #ffffff;
+    color: #003AA0;
+}
+
+.kpi-strip__seg--buses-on .filtro-btn__count {
+    background: rgba(255,255,255,0.25);
+    color: #fff;
+}
+
+/* Botón "Ocupación" (31/07/2026): es una ACCIÓN (abre el Tablero de ocupación), no un
+   toggle → sin checkbox ni contador. Va CON RELIEVE (pedido del usuario, 01/08/2026) para
+   que se lea como botón y no como un segmento más de la franja de KPIs: se despega con
+   margen propio, borde completo, degradado claro y sombra; al apretarlo se hunde. */
+.kpi-strip__seg--tablero {
+    margin: 4px 8px 4px 4px;
+    padding: 0 12px;
+    border: 1px solid #C3D2E8;
+    border-radius: 7px;
+    background: linear-gradient(#FFFFFF, #E9F0FA);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.95), 0 1px 2px rgba(17,47,91,0.18);
+    color: #003AA0;
+}
+
+.kpi-strip__seg--tablero:hover {
+    background: linear-gradient(#FFFFFF, #DCE8FA);
+    border-color: #9FBBE4;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.95), 0 2px 5px rgba(17,47,91,0.22);
+    color: #003AA0;
+}
+
+.kpi-strip__seg--tablero:active {
+    transform: translateY(1px);
+    background: linear-gradient(#DCE8FA, #EAF1FB);
+    box-shadow: inset 0 2px 4px rgba(17,47,91,0.22);
+}
+
+.kpi-strip__seg--tablero:disabled {
+    opacity: 0.5;
+    cursor: default;
+    color: #94A3B8;
+    background: #F1F5F9;
+    border-color: #DDE4EE;
+    box-shadow: none;
+    transform: none;
+}
+
+.kpi-strip__seg--tablero:disabled:hover {
+    background: #F1F5F9;
+    color: #94A3B8;
+    border-color: #DDE4EE;
+    box-shadow: none;
+}
+
+/* ═══════════════════════════════════════════
+   TABLERO DE OCUPACIÓN DE FLOTA (31/07/2026)
+   Diálogo lanzado desde el botón "Ocupación" de la Planilla de Tráfico.
+   Barras horarias por unidad programada, dibujadas con divs posicionados en %
+   (nada de canvas ni librería de gráficos: con ~350 barras es lo único que no
+   castiga a Blazor Server). Ver Components/Shared/OcupacionFlotaDialog.razor.
+   ═══════════════════════════════════════════ */
+
+/* Ancho: 80% de la VENTANA (pedido del usuario, 01/08/2026 — arrancó en 70% y lo subió).
+   Va con 3 clases de especificidad porque MudBlazor.min.css se carga DESPUÉS de app.css
+   (ver App.razor) y su .mud-dialog.mud-dialog-width-full le fija width:100%. El min-width
+   evita que en una ventana chica el tablero quede impracticable: ahí manda el scroll
+   horizontal. */
+.mud-dialog-container .mud-dialog.ocup-dialog {
+    width: 80vw;
+    max-width: 80vw;
+    min-width: min(1080px, 96vw);
+}
+
+.ocup-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.ocup-resumen { font-size: 0.82rem; color: #5B7290; }
+.ocup-resumen b { color: #112F5B; }
+
+/* El contador de conflictos ES el filtro (01/08/2026): apagado se lee como el dato rojo de
+   siempre pero con relieve de botón; prendido se llena de rojo y suma la ✕ para salir. */
+.ocup-conf {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border: 1px solid #F3C0C0;
+    border-radius: 6px;
+    background: #FDF2F2;
+    color: #DC2626;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.ocup-conf:hover {
+    background: #FBE3E3;
+    border-color: #E79999;
+}
+
+.ocup-conf--on {
+    background: #DC2626;
+    border-color: #DC2626;
+    color: #FFFFFF;
+}
+
+.ocup-conf--on:hover {
+    background: #C11F1F;
+    border-color: #C11F1F;
+}
+
+/* "N sin unidad" (04/08/2026): mismo mecanismo que el chip de conflictos — contador que ES
+   el filtro — pero en ámbar: no es un error de diagramación, es trabajo pendiente. */
+.ocup-sc {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border: 1px solid #F1C27D;
+    border-radius: 6px;
+    background: #FFF4E5;
+    color: #9A5B00;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.ocup-sc:hover {
+    background: #FCE9CE;
+    border-color: #E0A74F;
+}
+
+.ocup-sc--on {
+    background: #B45309;
+    border-color: #B45309;
+    color: #FFFFFF;
+}
+
+.ocup-sc--on:hover {
+    background: #96450A;
+    border-color: #96450A;
+}
+
+/* El contracara del chip: el día está 100% asignado. No es un botón (no hay nada que filtrar). */
+.ocup-ok {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border: 1px solid #A7D8B5;
+    border-radius: 6px;
+    background: #EFF9F2;
+    color: #1B7A45;
+}
+
+/* Banda de estado del filtro: que sea imposible leer un tablero recortado sin saberlo. */
+.ocup-foco {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #FDF2F2;
+    border: 1px solid #F3C0C0;
+    color: #8A1C1C;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 0.78rem;
+    margin-bottom: 8px;
+}
+
+.ocup-foco__quitar {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 9px;
+    border: 1px solid #DC2626;
+    border-radius: 5px;
+    background: #FFFFFF;
+    color: #DC2626;
+    cursor: pointer;
+}
+
+.ocup-foco__quitar:hover { background: #DC2626; color: #FFFFFF; }
+
+/* Misma banda, en ámbar, cuando el foco es "solo los que faltan asignar". */
+.ocup-foco--sc {
+    background: #FFF4E5;
+    border-color: #F1C27D;
+    color: #7A4E00;
+}
+
+.ocup-foco--sc .ocup-foco__quitar {
+    border-color: #B45309;
+    color: #B45309;
+}
+
+.ocup-foco--sc .ocup-foco__quitar:hover { background: #B45309; color: #FFFFFF; }
+
+.ocup-ctrls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ocup-ctrls__lbl {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #8FA3BC;
+    font-weight: 600;
+}
+
+/* Segmentado Programada / Real */
+.ocup-seg {
+    display: inline-flex;
+    border: 1px solid #CBD5E1;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.ocup-seg button {
+    font: inherit;
+    font-size: 0.76rem;
+    padding: 3px 10px;
+    border: none;
+    background: #FFFFFF;
+    color: #475569;
+    cursor: pointer;
+}
+
+.ocup-seg button + button { border-left: 1px solid #CBD5E1; }
+.ocup-seg button:hover { background: #EEF3FB; }
+
+.ocup-seg .ocup-seg__on {
+    background: #003AA0;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+
+.ocup-aviso {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    background: #FFF4E5;
+    border: 1px solid #F99410;
+    color: #7A4E00;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 0.78rem;
+    margin-bottom: 8px;
+}
+
+/* El contenedor scrolleable: el encabezado horario y la columna de unidad quedan
+   pegados. --ocup-cols (cantidad de horas del eje) la fija el .razor: con ella se
+   dibujan las líneas de hora del fondo sin depender del largo del eje. */
+.ocup-scroll {
+    max-height: calc(100vh - 310px);
+    min-height: 220px;
+    overflow: auto;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    background: #FFFFFF;
+}
+
+.ocup-row {
+    /* 2ª columna 76px: "12,4 h" + el badge de servicios tienen que entrar en UN renglón
+       (con 64px se partía en dos y la fila crecía de alto).
+       min-width: por debajo de eso las horas del eje se pisarían entre sí → el tablero
+       scrollea horizontalmente en vez de apretarse (la columna Unidad queda sticky). */
+    display: grid;
+    grid-template-columns: 78px 76px 1fr;
+    min-width: 1180px;
+    border-bottom: 1px solid #F1F5F9;
+}
+
+/* Zebra por unidad (01/08/2026): franjas blanco / gris muy suave para seguir el renglón
+   de punta a punta. La aplica el .razor por índice de UNIDAD, así los sub-renglones de
+   una unidad con solapes comparten el fondo y se leen como un bloque. */
+.ocup-row--alt .ocup-lbl,
+.ocup-row--alt .ocup-hs,
+.ocup-row--alt .ocup-track {
+    background-color: #F4F7FC;
+}
+
+.ocup-row--head {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: #F1F5FA;   /* misma franja que los títulos Unidad/Ocupado: el encabezado se lee como una sola banda */
+    border-bottom: 1px solid #CBD5E1;
+}
+
+/* Hover: resalta el renglón entero (3 clases de especificidad → le gana a la zebra) */
+.ocup-row:not(.ocup-row--head):hover .ocup-lbl,
+.ocup-row:not(.ocup-row--head):hover .ocup-hs,
+.ocup-row:not(.ocup-row--head):hover .ocup-track {
+    background-color: #E8F0FC;
+}
+
+.ocup-lbl {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: #FFFFFF;
+    border-right: 1px solid #E2E8F0;
+    display: flex;
+    align-items: center;
+    padding: 0 6px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #1A2433;
+    font-variant-numeric: tabular-nums;
+}
+
+.ocup-row--sub .ocup-lbl {
+    color: #94A3B8;
+    font-weight: 400;
+    justify-content: flex-end;
+    padding-right: 10px;
+}
+
+.ocup-hs {
+    position: sticky;
+    left: 78px;
+    z-index: 2;
+    background: #FFFFFF;
+    border-right: 1px solid #E2E8F0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 0 6px;
+    font-size: 0.66rem;
+    color: #64748B;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.ocup-hs__n {
+    background: #EEF3FB;
+    color: #003AA0;
+    border-radius: 8px;
+    padding: 0 5px;
+    font-size: 0.6rem;
+    font-weight: 600;
+}
+
+/* Horas ocupadas en negrita (03/08/2026, pedido del usuario) — misma tipografía que
+   las horas del eje (.ocup-tick span: 0,7rem / 600 / #2C3E58), para que el número de
+   horas se lea con el mismo peso que la referencia de tiempo de arriba. */
+.ocup-hs__val {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #2C3E58;
+}
+
+/* Fila-pool "S/C" (04/08/2026): va anclada arriba de todo y tiene que leerse como un bloque
+   aparte de la flota diagramada — fondo cálido y filo naranja en la etiqueta. El hover del
+   renglón (3 clases) le gana igual, así que sigue resaltando al pasar por encima. */
+.ocup-row--sc .ocup-lbl,
+.ocup-row--sc .ocup-hs,
+.ocup-row--sc .ocup-track {
+    background-color: #FFF9F0;
+}
+
+.ocup-row--sc .ocup-lbl {
+    color: #9A5B00;
+    box-shadow: inset 3px 0 0 #F99410;
+}
+
+.ocup-hs__val--sc {
+    color: #9A5B00;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.ocup-hs__n--sc {
+    background: #FCE9CE;
+    color: #9A5B00;
+}
+
+/* Títulos "Unidad" / "Ocupado" (04/08/2026, pedido del usuario): estaban en gris muy
+   claro y 0,62rem, y quedaban por debajo de las horas del eje. Se suben al mismo peso
+   visual que el resto del encabezado (tamaño +, color oscuro) y se apoyan en una franja
+   gris tenue para que se lean como encabezado de columna y no como un dato más. */
+.ocup-lbl--head, .ocup-hs--head {
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #2C3E58;
+    font-weight: 700;
+    justify-content: flex-start;
+    background: #F1F5FA;
+}
+
+.ocup-axis {
+    position: relative;
+    height: 26px;
+}
+
+.ocup-tick {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid #DDE5EF;
+}
+
+.ocup-tick--fuerte { border-left-color: #94A3B8; }
+
+/* Las horas se leían apagadas (01/08/2026): más cuerpo, más peso y más contraste.
+   El ancho mínimo del renglón (.ocup-row) las acompaña para que no se pisen entre sí. */
+.ocup-tick span {
+    position: absolute;
+    top: 5px;
+    left: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #2C3E58;
+    font-variant-numeric: tabular-nums;
+}
+
+.ocup-track {
+    position: relative;
+    height: 20px;
+    background-image: linear-gradient(to right, #EFF3F9 1px, transparent 1px);
+    background-size: calc(100% / var(--ocup-cols, 24)) 100%;
+}
+
+/* Medianoche: separa el día de los servicios que siguen de madrugada (el eje corta 02:00) */
+.ocup-medianoche {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 2px dashed #94A3B8;
+    opacity: 0.75;
+}
+
+/* Línea de "ahora" — opción "cortina del pasado" (03/08/2026, elegida por el usuario).
+   Solo se dibuja si el tablero muestra el día de HOY (OcupacionFlotaDialog calcula
+   _esHoy) y se corre sola cada minuto vía timer del diálogo. El velo tiñe lo que ya
+   pasó — va ARRIBA de las barras (después en el DOM) con pointer-events:none, así el
+   clic sigue llegando a la barra para abrir el Zoom del Viaje. El filo del velo es la
+   hora actual; en el encabezado esa misma hora se repite en una píldora, sticky. */
+.ocup-pasado {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    background: rgba(17, 47, 91, 0.10);
+    border-right: 1px solid rgba(17, 47, 91, 0.42);
+    pointer-events: none;
+}
+
+.ocup-ahora {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 5;
+    pointer-events: none;
+}
+
+.ocup-ahora__pill {
+    position: absolute;
+    top: 5px;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    font-size: 0.64rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    background: #112F5B;
+    color: #FFFFFF;
+    border-radius: 99px;
+    padding: 1px 7px;
+    line-height: 1.5;
+}
+
+/* Las barras van SIN texto adentro (01/08/2026, pedido del usuario): el destino escrito
+   sobre la paleta ensuciaba la lectura del eje. El detalle vive en el tooltip. */
+.ocup-bar {
+    position: absolute;
+    top: 3px;
+    height: 14px;
+    min-width: 3px;
+    border-radius: 3px;
+    cursor: pointer;
+    overflow: hidden;
+}
+
+.ocup-bar:hover {
+    outline: 2px solid #112F5B;
+    outline-offset: 1px;
+    z-index: 4;
+}
+
+/* Sub-renglón: el servicio se pisa con otro de la misma unidad */
+.ocup-bar--conf { box-shadow: inset 0 0 0 1.5px #DC2626; }
+
+/* Servicio sin interno asignado (fila-pool S/C, 04/08/2026): conserva el color de su tipo
+   —Empresa / Turismo / Nortur— pero rayado y con filo punteado, para que no se confunda con
+   una unidad ya diagramada. Va ANTES de --dudosa a propósito: si además el dato está mal,
+   manda la marca roja de --dudosa, que es más urgente. */
+.ocup-bar--sc {
+    background-image: repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.6) 0 3px, transparent 3px 7px);
+    box-shadow: inset 0 0 0 1.5px rgba(17, 47, 91, 0.55);
+    opacity: 0.9;
+}
+
+/* Duración fuera de rango (sin cierre, cierra antes de arrancar, o más de 12 h) */
+.ocup-bar--dudosa {
+    background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 4px, transparent 4px 9px);
+    box-shadow: inset 0 0 0 1.5px #DC2626;
+}
+
+/* Sigue después de las 02:00: la barra se corta con un filo marcado */
+.ocup-bar--cortada {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-right: 3px solid #DC2626;
+}
+
+.ocup-leyenda {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 6px 2px 0;
+    font-size: 0.74rem;
+    color: #5B7290;
+}
+
+.ocup-leyenda i {
+    display: inline-block;
+    width: 11px;
+    height: 11px;
+    border-radius: 3px;
+    margin-right: 5px;
+    vertical-align: -1px;
+}
+
+.ocup-leyenda__conf {
+    background: #FFFFFF;
+    box-shadow: inset 0 0 0 1.5px #DC2626;
+}
+
+.ocup-leyenda__sc {
+    background: #B0BECF;
+    background-image: repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.7) 0 2px, transparent 2px 5px);
+    box-shadow: inset 0 0 0 1.5px rgba(17, 47, 91, 0.55);
+}
+
+.ocup-leyenda__nota { color: #8FA3BC; }
+
+/* ── Tooltip de la barra: tarjeta clara con filo azul (elegida por el usuario, 01/08/2026)
+   Reemplaza al `title` nativo, que no se puede estilar y llega tarde. La arma descarga.js
+   con listeners delegados (cero round-trips de SignalR) leyendo los data-tip-* de la barra.
+   position:fixed + z-index alto: tiene que escapar del overflow del tablero y quedar por
+   encima del MudDialog (que vive en ~1400). ── */
+.ocup-tip {
+    position: fixed;
+    z-index: 3000;
+    max-width: 360px;
+    background: #FFFFFF;
+    border: 1px solid #003AA0;
+    border-radius: 8px;
+    box-shadow: 0 12px 32px -10px rgba(17,47,91,0.5);
+    color: #1A2433;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    pointer-events: none;             /* nunca se interpone al clic en la barra */
+    opacity: 0;
+    transition: opacity 0.08s ease;
+}
+
+.ocup-tip--on { opacity: 1; }
+
+.ocup-tip__hd {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 6px 10px;
+    background: #EEF3FB;
+    border-bottom: 1px solid #D6E2F5;
+    border-radius: 7px 7px 0 0;
+}
+
+.ocup-tip__u {
+    font-weight: 700;
+    font-size: 0.83rem;
+    color: #112F5B;
+    font-variant-numeric: tabular-nums;
+}
+
+.ocup-tip__dur {
+    margin-left: auto;
+    color: #5B7290;
+    font-size: 0.74rem;
+    white-space: nowrap;
+}
+
+.ocup-tip__body {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 8px 10px 9px;
+}
+
+.ocup-tip__rec {
+    font-weight: 600;
+    color: #003AA0;
+}
+
+.ocup-tip__grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 12px;
+    align-items: baseline;
+}
+
+.ocup-tip__k {
+    font-size: 0.69rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #8FA3BC;
+    font-weight: 600;
+}
+
+.ocup-tip__v { color: #1A2433; font-weight: 500; }
+
+.ocup-tip__pie {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 6px;
+    border-top: 1px solid #EEF2F7;
+    font-size: 0.72rem;
+    color: #5B7290;
+}
+
+.ocup-tip__chip {
+    padding: 1px 7px;
+    border: 1px solid #C3D2E8;
+    border-radius: 4px;
+    background: #F8FAFC;
+    color: #112F5B;
+    font-weight: 600;
+}
+
+.ocup-tip__aviso {
+    padding: 4px 8px;
+    border-radius: 5px;
+    background: #FDECEC;
+    color: #B91C1C;
+    font-size: 0.73rem;
+}
+
+.ocup-tip__cta {
+    color: #8FA3BC;
+    font-size: 0.7rem;
+}
+
+/* Terminal chica (1280×720): el tablero cede alto antes que legibilidad — misma regla
+   que el estándar de modales (§ --nt-dlg-*). */
+@media (max-height: 800px) {
+    .ocup-scroll { max-height: calc(100vh - 260px); }
 }
 
 /* Chips de leyenda de estados */
@@ -1608,9 +2848,10 @@ body.planilla-fixed .buses-panel__wrap {
 
 .estado-foco__quitar:hover { background: #002F88; }
 
-/* El chip de la columna Estado de cada fila también filtra (clic = ver solo ese estado). */
-.estado-chip--filtra { cursor: pointer; }
-.estado-chip--filtra:hover {
+/* El chip de la columna Estado de cada fila abre el menú de acciones del viaje
+   (clic izquierdo = clic derecho sobre la fila). Antes filtraba por estado — 31/07/2026. */
+.estado-chip--menu { cursor: pointer; }
+.estado-chip--menu:hover {
     box-shadow: 0 0 0 2px rgba(0,58,160,0.35);
 }
 
@@ -1621,16 +2862,19 @@ body.planilla-fixed .buses-panel__wrap {
 .estado-chip {
     display: inline-block;
     padding: 1px 7px;
-    /* Ancho FIJO idéntico para TODOS los estados (SIN ASIGNAR, ASIGNADO, EN CURSO,
-       CHEQUEO, FINALIZADO, FACTURADO): todos los chips quedan del mismo tamaño y
+    /* Ancho FIJO idéntico para TODOS los estados (SIN ASIG, ASIGNADO, EN CURSO,
+       CHEQUEO, FINALIZ., FACTUR.): todos los chips quedan del mismo tamaño y
        perfectamente alineados uno debajo del otro, sin importar el largo del texto.
-       96px cubre el más largo ("SIN ASIGNAR" ≈ 91px) con margen. La columna Estado
-       (col width:106px) le da lugar. */
-    width: 96px;
+       70px (era 96) + 0,60rem de fuente (era 0,68) = columna Estado un 30% más angosta
+       (18/08/2026, pedido del usuario). Medido en el browser: el texto más ancho con
+       estas etiquetas es ASIGNADO ≈ 53px, y adentro del chip quedan 56px útiles
+       (70 − 14 de padding). Los textos abreviados los define
+       TraficoFilaRow.EstadoLabelChip: si cambian, volver a medir antes de tocar el ancho. */
+    width: 70px;
     box-sizing: border-box;
     text-align: center;
     border-radius: 999px;
-    font-size: 0.68rem;
+    font-size: 0.60rem;
     font-weight: 700;
     letter-spacing: 0.03em;
     white-space: nowrap;
@@ -1638,10 +2882,12 @@ body.planilla-fixed .buses-panel__wrap {
 }
 
 /* Cada estado con su color — paleta original FoxPro */
+/* SIN ASIGNAR: fondo blanco + letras negras, igual que el botón de la leyenda
+   del pie (mismo look que .leyenda: bg #FFFFFF, texto #1A2433, borde gris suave). */
 .estado-chip--sin-asignar {
-    background: #FFF3CD;
-    color: #7C5C00;
-    border-color: #F0D070;
+    background: #FFFFFF;
+    color: #1A2433;
+    border-color: rgba(0,0,0,0.15);
 }
 .estado-chip--asignado {
     background: #FFF7B0;
@@ -1979,6 +3225,8 @@ h1:focus {
     display: block;
 }
 .zoom-field__value--acento { color: var(--z-acento); font-weight: 700; }
+/* Valor vencido / en alerta dentro de una ficha (tarjetas de combustible, vencimientos). */
+.zoom-field__value--alerta { color: #C62828; font-weight: 700; }
 
 /* ── Bloques de la columna izquierda ── */
 .zoom-box {
@@ -3202,6 +4450,7 @@ h1:focus {
 }
 .acc-ev--login    { background: #DCFCE7; color: #15803D; }
 .acc-ev--logout   { background: #E8EFF9; color: #1D4ED8; }
+.acc-ev--desconectado { background: #EDE9FE; color: #6D28D9; }
 .acc-ev--expirada { background: #FEF3C7; color: #B45309; }
 .acc-ev--vencida  { background: #FFEDD5; color: #C2410C; }
 .acc-ev--fallido  { background: #FEE2E2; color: #B91C1C; }
@@ -3271,6 +4520,34 @@ h1:focus {
     font-style: italic;
 }
 
+/* Checklist en vivo de la política de contraseñas (bajo el campo Password). */
+.usr-pass-reqs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    margin-top: 2px;
+}
+
+.usr-pass-reqs__title {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #55627A;
+    margin-right: 2px;
+}
+
+.usr-pass-req {
+    font-size: 0.72rem;
+    color: #9AA6B8;
+    white-space: nowrap;
+    transition: color .12s ease;
+}
+
+.usr-pass-req--ok {
+    color: #2E7D32;
+    font-weight: 600;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Informe "Reservas por fecha y servicio" (rfs-*)
    Barra de filtros horizontal compacta + tabla pivote con columna de fecha
@@ -3299,24 +4576,255 @@ h1:focus {
     align-items: center;
 }
 
-.rfs-metrica .mud-radio-group,
+/* Aviso "máx. N días" al lado de las fechas cuando el rango elegido pasa el tope permitido.
+   Va en la propia barra (no un toast) para que se vea ANTES de apretar Aplicar filtros. */
+.rfs-rango-alerta {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: #B3261E;
+    background: #FDECEA;
+    border: 1px solid #F3C4BF;
+    border-radius: 6px;
+    padding: 3px 8px;
+}
+
+.rfs-rango-alerta .mud-icon-root {
+    font-size: 1rem;
+}
+
+/* ── Selector de MÉTRICA: botonera segmentada (20/08/2026) ──
+   Eran cuatro radios sueltos que se perdían entre los combos de la barra. Ahora es un bloque
+   único —recuadro gris + el elegido relleno en azul— que se lee de un vistazo como "qué estoy
+   midiendo". Alto 40px para cerrar la fila con los inputs Dense de al lado. */
+/* Sin rótulo arriba (20/08/2026): la botonera es un ítem más de la fila y se alinea con los
+   combos. El rótulo la hacía más alta que ellos y la corría hacia abajo. */
 .rfs-metrica {
     display: flex;
     align-items: center;
     white-space: nowrap;
+    flex-shrink: 0;
+    /* Los MudSelect/MudDatePicker de la barra no son cajas de 40px: son ítems flex de 52px
+       (40 del control + 12 del hueco del helper-text), y adentro el control queda a 8px del
+       borde de arriba. Sin este padding la botonera se centra sobre su propio alto de 40 y
+       queda 2px MÁS ARRIBA que los combos. Medido en el navegador, no estimado. */
+    padding: 8px 0 4px;
+}
+
+.rfs-seg {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 40px;
+    padding: 3px;
+    background: #EDF1F7;
+    border: 1px solid #C3D3E8;
+    border-radius: 9px;
+}
+
+.rfs-seg__btn {
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #4A6486;
+    height: 30px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease;
+}
+
+.rfs-seg__btn:hover {
+    background: #DCE6F5;
+    color: #003AA0;
+}
+
+/* El elegido: relleno azul de marca, como un botón primario chico. */
+.rfs-seg__btn--on,
+.rfs-seg__btn--on:hover {
+    background: #003AA0;
+    color: #FFFFFF;
+    box-shadow: 0 1px 3px rgba(0, 58, 160, 0.35);
+}
+
+.rfs-seg__btn:focus-visible {
+    outline: 2px solid #F99410;
+    outline-offset: 1px;
+}
+
+/* ── "Aplicar filtros" con cambios pendientes ──
+   Naranja de marca + halo: es el color de ATENCIÓN de la app (el mismo del buscador con
+   filtro activo). `!important` porque MudBlazor pinta el filled desde su propia paleta. */
+.rfs-aplicar--pend.mud-button-filled {
+    background-color: #F99410 !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 0 0 3px rgba(249, 148, 16, 0.22) !important;
+}
+.rfs-aplicar--pend.mud-button-filled:hover {
+    background-color: #E07C00 !important;
 }
 
 /* Fila de KPIs: las tarjetas se reparten el ancho por igual, sean 4 o 5.
    min-width:0 permite que el contenido con white-space:nowrap se ajuste sin desbordar. */
-.rfs-kpis {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
+/* Variante de la barra de filtros con controles de ancho FIJO (Reservas por cliente).
+   Sin esto, un select que queda solo en la segunda línea al hacer wrap se estira a todo el
+   ancho: MudSelect trae `width:100%`, así que su flex-basis resuelve al 100% del contenedor
+   y, sin nadie con quien competir, se queda con toda la línea. El `<span>` separador
+   conserva su `flex:1 1 auto` inline (el estilo inline le gana a esta regla). */
+.rfs-filtros--fijo > *,
+.rfs-filtros--fijo > .mud-input-control {
+    flex: 0 0 auto;
 }
 
+/* Contenedor de ancho fijo para un control de la barra. El ancho se pone acá y NO en el
+   `Style` del MudSelect: ese estilo no siempre cae en el elemento que es el ítem flex, y el
+   select terminaba ocupando toda la segunda línea al hacer wrap. */
+.rfs-campo {
+    flex: 0 0 auto;
+}
+
+.rfs-campo .mud-input-control {
+    width: 100%;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   FRANJA DE KPIs — contrato de responsividad (11/08/2026)
+   ══════════════════════════════════════════════════════════════════════════════
+   Antes esto era flex + `min-width:240px` y a 1360×768 se rompía: el min-width era
+   MENOR al ancho que la tarjeta necesitaba (~370px en una línea), así que el navegador
+   metía 5 por fila y RECORTABA el texto en vez de bajar de fila; encima la 6ª tarjeta
+   se quedaba con todo el sobrante (1312px de ancho, sola en su fila).
+
+   Ahora es GRID con auto-fit:
+   · todas las tarjetas miden EXACTAMENTE lo mismo, siempre (se acabó la huérfana ancha);
+   · el salto de fila ocurre cuando de verdad no entra, no por un número inventado;
+   · el ancho mínimo es un TOKEN (--nt-kpi-min), no un literal repartido por el CSS.
+
+   Peor caso soportado: 1360×768 físicos con escala de Windows al 125% = 1088×614 px CSS.
+   Con 6 KPIs a 190px + gaps entran 5 por fila; abajo de 1200px pasa a 3+3 (equilibrado). */
+.rfs-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(var(--nt-kpi-min, 190px), 1fr));
+    gap: var(--nt-kpi-gap, 12px);
+    align-items: stretch;
+}
+
+/* min-width:0 — sin esto un hijo de grid nunca baja de su ancho de contenido y vuelve
+   a aparecer el desborde horizontal que estamos matando. */
 .rfs-kpis > * {
-    flex: 1 1 0;
-    min-width: 180px;
+    min-width: 0;
+}
+
+/* Pantalla angosta (1360@125% = 1088 CSS, o ventana no maximizada): bajamos el mínimo
+   en vez de forzar 3 columnas. Medido: con 3 columnas fijas las tarjetas quedaban de 340px
+   —el doble de lo que necesitan— y la franja se partía en 2 filas de 59px = 128px de alto,
+   sobre 614px disponibles. Con 165px entran las 6 en UNA fila: se gana alto para los
+   gráficos y se leen todos los indicadores de un vistazo, sin partir la lectura. */
+@media (max-width: 1200px) {
+    .rfs-kpis {
+        --nt-kpi-min: 165px;
+        --nt-kpi-gap: 10px;
+    }
+}
+
+@media (max-width: 780px) {
+    .rfs-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+/* ── La tarjeta ── (layout y jerarquía de cesión documentados en KpiCard.razor)
+   El selector va con `.mud-paper` a propósito: MudBlazor.min.css se carga DESPUÉS de
+   app.css (ver App.razor), así que a igual especificidad `.mud-paper` gana y nos pisaba
+   background, padding y border-radius. Por eso la versión vieja de la tarjeta usaba
+   estilos inline. Con las dos clases juntas ganamos sin ensuciar el .razor. */
+.mud-paper.nt-kpi {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+    height: 100%;
+    min-width: 0;
+    padding: 7px 12px;
+    border-radius: 8px;
+    overflow: hidden;
+    border-left: 4px solid var(--nt-kpi-color, #003AA0);
+    background: linear-gradient(135deg, #ffffff 60%, color-mix(in srgb, var(--nt-kpi-color, #003AA0) 9%, #ffffff) 100%);
+}
+
+/* La etiqueta NUNCA se recorta con "…": identifica la tarjeta. Si no entra en un renglón,
+   baja a dos (por eso `normal` y no `nowrap`) y ahí sí se limita, para que una etiqueta
+   larguísima no empuje el alto de toda la fila. */
+.nt-kpi__label {
+    font-size: 0.7rem;
+    font-weight: 800;
+    color: #4A5568;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    line-height: 1.2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.nt-kpi__valrow {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 0;
+}
+
+/* El VALOR no se recorta JAMÁS: nunca lleva ellipsis. Cuando no entra, la válvula de
+   escape es partir en 2 renglones, y SOLO por espacios (`white-space:normal` sin
+   `overflow-wrap:anywhere`): así un número formateado —"158.840", "6.037"— nunca se
+   parte al medio (no tiene espacios donde quebrar), pero un valor de TEXTO largo
+   —"GATE1 TRAVEL" del KPI Cliente líder— baja a dos renglones en vez de salirse
+   de la tarjeta. Es la diferencia entre un dato completo y un dato mutilado. */
+.nt-kpi__value {
+    font-size: var(--nt-kpi-value-size, 1.3rem);
+    font-weight: 900;
+    color: var(--nt-kpi-color, #003AA0);
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    white-space: normal;
+    min-width: 0;
+    flex: 0 1 auto;
+}
+
+/* El SUB es lo único descartable: hasta 2 renglones. Lo que exceda se corta, pero el
+   texto completo vive en el `title` (tooltip) — nunca se pierde el dato. */
+.nt-kpi__sub {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #718096;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* 768px de alto físico (614 CSS al 125%) es poco: apretamos la franja para no comerle
+   espacio a los gráficos y la tabla, que es lo que el usuario vino a mirar. */
+@media (max-height: 720px) {
+    .mud-paper.nt-kpi {
+        padding: 5px 10px;
+        --nt-kpi-value-size: 1.15rem;
+    }
+    .nt-kpi__label,
+    .nt-kpi__sub {
+        font-size: 0.66rem;
+    }
 }
 
 /* El panel del calendario (modo Dialog) NO debe heredar el ancho del input (135px):
@@ -3451,10 +4959,98 @@ h1:focus {
     font-size: 0.85rem;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   CÓDIGO DE COLOR POR TIPO DE SERVICIO EN LA GRILLA (20/08/2026)
+   Azul Empresa · Naranja Turismo · Verde Nortur — los mismos colores por entidad
+   que la torta y las barras. Tres piezas:
+     1. micro-barra de mezcla al pie de cada celda,
+     2. la grilla entera teñida cuando hay una categoría enfocada,
+     3. sub-filas del TOTAL, una por categoría.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 1 · Micro-barra de mezcla. Es UN solo elemento con gradiente de topes duros (no tres
+   divs): con cientos de choferes × 31 columnas, cada nodo de más se paga. `position:
+   relative` en la celda para anclarla; alto 3px para que no le pelee al número. */
+.rfs-mix-cel {
+    position: relative;
+}
+.rfs-mix {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 2px;
+    height: 3px;
+    border-radius: 2px;
+    opacity: 0.75;
+    pointer-events: none;
+}
+.rfs-tabla td.rfs-mix-cel:hover .rfs-mix {
+    opacity: 1;
+}
+/* Con una fila atenuada por el foco de chofer, la barra se apaga con ella. */
+.rfs-tabla td.rfs-atenua .rfs-mix {
+    opacity: 0.25;
+}
+
+/* 2 · Grilla teñida con la categoría enfocada. El color entra por `--nt-cat` (inline). */
+.rfs-tabla-wrap.rfs-cat-foco {
+    border-color: var(--nt-cat);
+    border-top-width: 3px;
+}
+.rfs-cat-foco .rfs-tabla thead th {
+    color: var(--nt-cat);
+    border-bottom-color: var(--nt-cat);
+}
+.rfs-cat-foco .rfs-tabla tfoot td,
+.rfs-cat-foco .rfs-tabla tfoot td.rfs-grantot {
+    color: var(--nt-cat);
+    border-top-color: var(--nt-cat);
+}
+
+/* 3 · Sub-filas del pie, una por categoría. Más chicas y más livianas que el TOTAL: son
+   el desglose, no el número principal. El `bottom` de cada una lo pone el Razor (sticky
+   no apila filas solo). */
+.rfs-tabla tfoot tr.rfs-subtot td {
+    height: 24px;
+    padding-top: 0;
+    padding-bottom: 0;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--nt-cat);
+    background: #F6F9FD;
+    border-top: none;
+}
+.rfs-tabla tfoot tr.rfs-subtot td.rfs-col-fecha {
+    background: #F6F9FD;
+    font-weight: 700;
+    color: var(--nt-cat);
+}
+.rfs-tabla tfoot tr.rfs-subtot:first-of-type td {
+    border-top: 1px solid #E2E9F4;
+}
+.rfs-subtot-tot {
+    font-weight: 800;
+}
+/* El punto de color de la etiqueta, alineado con el texto de la sub-fila. */
+.rfs-subtot-lbl .vpc-dot {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 8px;
+    margin-right: 6px;
+}
+
 /* ── Columnas TOTAL + TENDENCIA fijas a la derecha (espejo de la columna Fecha) ──
    Con muchas columnas de mes, el total de fila y la tendencia quedaban invisibles sin
    scrollear hasta el final. Sticky right en las dos últimas celdas de cada fila:
-   TENDENCIA (última, right:0) y TOTAL (anteúltima, corrida por el ancho de Tendencia). */
+   TENDENCIA (última, right:0) y TOTAL (anteúltima, corrida por el ancho de Tendencia).
+
+   ⚠ Las reglas de la ANTEÚLTIMA columna van sobre `.rfs-tabla-tend` (30/07/2026), la clase
+   que se pone SOLO en la tabla que tiene columna TENDENCIA (ReservasPorCliente). Antes
+   estaban sobre `.rfs-tabla` a secas y en los pivotes sin Tendencia (banda horaria, fecha ×
+   servicio, km, chofer) le pegaban a la ÚLTIMA COLUMNA DE DATOS: la dejaban sticky en
+   right:132px (flotando sobre otra columna) y le pisaban el fondo azul del header
+   (`:nth-last-child(2)` = 0-2-2 le gana a `th.rfs-th-foco` = 0-2-1) → header con letra
+   blanca sobre fondo claro = ilegible (lo reportó el frente final en banda horaria). */
 .rfs-tabla th:last-child,
 .rfs-tabla td:last-child {
     position: sticky;
@@ -3469,33 +5065,46 @@ h1:focus {
     min-width: 132px;
 }
 
-.rfs-tabla th:nth-last-child(2),
-.rfs-tabla td:nth-last-child(2) {
+.rfs-tabla-tend th:nth-last-child(2),
+.rfs-tabla-tend td:nth-last-child(2) {
     position: sticky;
     right: 132px;
     border-left: 1px solid #E2E9F4;
 }
 
+/* Con período de comparación la última columna lleva base + Δ + % + sparkline → necesita más
+   ancho, y la columna TOTAL tiene que correrse el mismo tanto (si no, se superponen). */
+.rfs-tabla-comp th.rfs-th-tend,
+.rfs-tabla-comp td.rfs-tend {
+    width: 208px;
+    min-width: 208px;
+}
+
+.rfs-tabla-comp.rfs-tabla-tend th:nth-last-child(2),
+.rfs-tabla-comp.rfs-tabla-tend td:nth-last-child(2) {
+    right: 208px;
+}
+
 .rfs-tabla tbody td:last-child,
-.rfs-tabla tbody td:nth-last-child(2) {
+.rfs-tabla-tend tbody td:nth-last-child(2) {
     background: #F8FAFD;
     z-index: 1;
 }
 
 .rfs-tabla thead th:last-child,
-.rfs-tabla thead th:nth-last-child(2) {
+.rfs-tabla-tend thead th:nth-last-child(2) {
     z-index: 3;
     background: #F4F7FB;
 }
 
 .rfs-tabla tfoot td:last-child,
-.rfs-tabla tfoot td:nth-last-child(2) {
+.rfs-tabla-tend tfoot td:nth-last-child(2) {
     z-index: 3;
     background: #EEF3FA;
 }
 
 .rfs-tabla tbody tr:hover td:last-child,
-.rfs-tabla tbody tr:hover td:nth-last-child(2) {
+.rfs-tabla-tend tbody tr:hover td:nth-last-child(2) {
     background: #F0F5FC;
 }
 
@@ -3567,6 +5176,60 @@ h1:focus {
 .rfs-var-na,
 .rfs-tend-delta.rfs-var-na {
     color: #C6D2E2;
+}
+
+/* Valor del período de comparación, delante del Δ ("4.321 ▲ +524 +12%"). Gris: es el
+   contexto, no el dato principal — el color queda para la variación. */
+.rfs-tend-base {
+    font-weight: 600;
+    color: #8FA3BC;
+    margin-right: 2px;
+}
+
+/* Δ chico al lado de la cantidad, en el modo de celda "Cantidad y variación". */
+.rfs-celda-delta {
+    display: inline-block;
+    margin-left: 5px;
+    font-size: 0.66rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Badge de variación de los KPIs ("▲ +12,1%") ── */
+.kpi-delta {
+    flex: 0 0 auto;
+    font-size: 0.72rem;
+    font-weight: 800;
+    white-space: nowrap;
+    padding: 1px 6px;
+    border-radius: 999px;
+    letter-spacing: 0.01em;
+}
+
+.kpi-delta--up {
+    color: #166534;
+    background: #DCFCE7;
+}
+
+.kpi-delta--down {
+    color: #991B1B;
+    background: #FEE2E2;
+}
+
+.kpi-delta--flat {
+    color: #475569;
+    background: #F1F5F9;
+}
+
+/* Tarjeta KPI clickeable (abre la composición del indicador). */
+.kpi-click {
+    cursor: pointer;
+    transition: box-shadow 120ms ease, transform 120ms ease;
+}
+
+.kpi-click:hover {
+    box-shadow: 0 4px 14px rgba(17, 47, 91, 0.18) !important;
+    transform: translateY(-1px);
 }
 
 /* ── Pill de estado (drill-down) ── */
@@ -3668,11 +5331,204 @@ h1:focus {
     color: #E07C00 !important;
     font-weight: 600;
 }
-/* Halo naranja suave al pasar el mouse / enfocar, para reforzar que resalta. */
+/* Halo naranja suave al pasar el mouse / enfocar, para reforzar que resalta.
+   OJO: MudBlazor 9.5 NO tiene la clase `.mud-focused` — el foco se detecta con
+   `:focus-within` (ver skill blazor-nortur § trampas de MudBlazor). Con `.mud-focused`
+   esta regla nunca disparaba al enfocar; solo andaba el hover. */
 .rfs-topn-select:hover .mud-input.mud-input-outlined,
-.rfs-topn-select .mud-input.mud-input-outlined.mud-focused {
+.rfs-topn-select .mud-input-control:focus-within .mud-input.mud-input-outlined {
     box-shadow: 0 0 0 3px rgba(249, 148, 16, 0.18);
     background: #E8F1FF;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BARRA DE HERRAMIENTAS DE LA GRILLA — Viajes por chofer (19/08/2026)
+   INVERTIDA el 20/08/2026: controles a la IZQUIERDA, información a la DERECHA.
+
+       BUSCAR │ VISTA (Agrupar por · Tipo de servicio · Métrica)  …  títulos + EXCEL
+   Antes eran cuatro controles sueltos en una fila plana, sin jerarquía, y el
+   buscador (300px, el más ancho) desbalanceaba la barra entera.
+
+   🔴 CONTRASTE SOBRE BLANCO — la trampa de esta barra.
+   La regla global de campos (`--nt-campo: #EDEFF4`) está calibrada para ACLARAR
+   sobre el gris "Piedra" `#D5D9E2` del fondo de página. Estos controles, en
+   cambio, viven adentro de una MudPaper BLANCA: ahí `#EDEFF4` queda a un paso
+   del blanco, el campo pierde el borde de lectura y la barra se ve "lavada".
+   Sobre blanco la regla se INVIERTE: el campo se tiñe apenas (#F2F6FC) y el
+   borde se define, para que el control siga leyéndose como una caja.
+   Vale para cualquier barra de controles que se apoye sobre una tarjeta blanca.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.vpc-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    /* 22px (y no el mb-3 de 12px): deja lugar al contador que cuelga debajo del
+       buscador en position:absolute, para que no se monte sobre la grilla. */
+    margin-bottom: 22px;
+}
+
+/* Bloque derecho: información (títulos) + la única acción (Excel). Empujado al
+   extremo derecho con margin-left:auto — cuando la barra se parte en dos líneas
+   sigue quedando alineado a la derecha, que es donde el ojo lo espera. */
+.vpc-head__right {
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-end;
+    gap: 14px;
+    flex: 1 1 380px;
+    min-width: 320px;
+    margin-left: auto;
+}
+
+/* Los títulos leen de derecha a izquierda: el texto se alinea al borde derecho,
+   pegado al botón de Excel. */
+.vpc-head__titles {
+    text-align: right;
+    min-width: 0;
+}
+
+/* Bloque de controles: ahora a la IZQUIERDA (invertido el 20/08/2026). */
+.vpc-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* Los tres combos de "vista" van pegados: se leen como una sola unidad. */
+.vpc-toolbar__group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Filete separador de grupos. El color va medido: con #DCE5F1 sobre la tarjeta
+   BLANCA el filete existía en el DOM pero no se veía (verificado en captura), y
+   sin filete se pierde la lectura de "tres grupos". #BFCFE4 se distingue sin
+   competir con los bordes de los campos. */
+.vpc-toolbar__sep {
+    width: 1px;
+    height: 30px;
+    background: #BFCFE4;
+    flex: 0 0 1px;
+    margin: 0 2px;
+}
+
+.vpc-toolbar__excel {
+    height: 40px;            /* misma altura que los inputs Dense, para que la fila cierre */
+    flex-shrink: 0;
+}
+
+/* ── Campos de la barra sobre fondo BLANCO (ver el bloque de arriba) ── */
+.vpc-toolbar .mud-input.mud-input-outlined {
+    background: #F2F6FC;
+    border-radius: 8px;
+    transition: background .15s ease, box-shadow .15s ease;
+}
+.vpc-toolbar .mud-input.mud-input-outlined .mud-input-outlined-border {
+    border-color: #C3D3E8 !important;
+    border-width: 1.5px !important;
+}
+/* Foco: borde naranja + halo. `:focus-within` (NO `.mud-focused`, que no existe).
+   Especificidad a propósito mayor que la del borde de reposo y la del estado
+   "buscando", para que el foco gane siempre. */
+.vpc-toolbar .mud-input-control:focus-within .mud-input.mud-input-outlined .mud-input-outlined-border {
+    border-color: #F99410 !important;
+    border-width: 2px !important;
+}
+.vpc-toolbar .mud-input-control:focus-within .mud-input.mud-input-outlined {
+    background: #FFFFFF;
+    box-shadow: 0 0 0 3px rgba(249, 148, 16, 0.16);
+}
+/* Etiqueta apagada y valor en la tinta de marca: el dato pesa más que el rótulo. */
+.vpc-toolbar .mud-input-label {
+    color: #6B82A0;
+    font-weight: 600;
+}
+.vpc-toolbar .mud-select-input,
+.vpc-toolbar .mud-input-slot {
+    color: #112F5B;
+    font-weight: 600;
+    font-size: 0.82rem;
+}
+
+/* ── Buscador ── */
+.vpc-search {
+    position: relative;
+    flex: 0 0 auto;
+}
+.vpc-search .mud-input-control {
+    width: 250px;
+}
+/* El texto tipeado va normal (no bold como los combos): es contenido, no un valor elegido. */
+.vpc-search .mud-input-slot {
+    font-weight: 500;
+}
+.vpc-search input::placeholder {
+    color: #93A7C2;
+    opacity: 1;
+    font-weight: 400;
+}
+
+/* Buscando: el campo se marca en naranja aunque no esté enfocado, así se ve desde
+   lejos que la grilla está recortada. El prefijo `.vpc-toolbar` es para ganarle en
+   especificidad al borde de reposo de arriba. */
+.vpc-toolbar .vpc-search--activo .mud-input.mud-input-outlined .mud-input-outlined-border {
+    border-color: #F99410 !important;
+    border-width: 2px !important;
+}
+
+/* Contador de resultados colgado del buscador. Absoluto: aparece y desaparece sin
+   mover nada de la barra (sin saltos de layout mientras se tipea). */
+.vpc-search__count {
+    position: absolute;
+    top: calc(100% + 3px);
+    left: 4px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: #E07C00;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+/* ── Punto de color de las categorías (Empresa azul · Turismo naranja · Nortur verde) ──
+   El mismo código de color de la torta y las barras, ahora también en el combo y en el pie
+   de la grilla. "Todos" lleva un punto tricolor: muestra los tres de un saque. */
+.vpc-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex: 0 0 9px;
+    margin-right: 7px;
+    vertical-align: baseline;
+    background: #B9C6D8;
+}
+.vpc-dot--tri {
+    background: conic-gradient(#2058D0 0 33.34%, #F99410 33.34% 66.67%, #16A34A 66.67% 100%);
+}
+
+.vpc-catsel {
+    display: flex;
+    align-items: center;
+}
+/* En el desplegable Y en el valor cerrado (MudSelect reusa el ChildContent del ítem) el
+   punto tiene que quedar centrado con el texto. */
+.vpc-catsel .mud-select-input .vpc-dot,
+.mud-list-item .vpc-dot {
+    vertical-align: middle;
+    position: relative;
+    top: -1px;
+}
+
+/* Pantallas chicas (contrato de responsividad: peor caso real 1088×614): los filetes
+   pierden sentido cuando la barra se parte en dos líneas, y el buscador cede ancho. */
+@media (max-width: 1180px) {
+    .vpc-toolbar__sep { display: none; }
+    .vpc-search .mud-input-control { width: 210px; }
 }
 
 /* Chip compacto que anuncia el servicio enfocado + botón (X) para quitarlo. */
@@ -3710,8 +5566,442 @@ h1:focus {
     white-space: nowrap;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   AVISO DE DOCUMENTACIÓN DE CHOFERES (20/08/2026)
+   Reemplaza el MudAlert ámbar con el link "Ver detalle" perdido adentro del texto.
+   Separa por GRAVEDAD: cada contador es un botón que abre el detalle ya filtrado.
+   Tarjeta blanca con filete rojo (no fondo rojo pleno): el aviso aparece en casi
+   todas las cargas del informe, y un bloque rojo diario se gasta y deja de leerse.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.vpc-doc-aviso {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    background: #FFFFFF;
+    border: 1px solid #D7DEE9;
+    border-left: 4px solid #DC2626;
+    border-radius: 12px;
+    padding: 10px 14px;
+    box-shadow: 0 1px 2px rgba(17, 47, 91, .08);
+    color: #16233A;
+    font-size: 0.875rem;
+}
+
+.vpc-doc-aviso__ico {
+    flex: none;
+    color: #DC2626;
+    font-size: 22px;
+}
+
+.vpc-doc-aviso__txt {
+    flex: 1 1 260px;
+    min-width: 0;
+}
+
+/* Contador clickeable. Es un <button> (no un <span> con onclick): así llega por
+   teclado y el lector de pantalla lo anuncia como acción, no como texto. */
+.vpc-doc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    padding: 5px 11px;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: filter .12s ease;
+}
+.vpc-doc-chip b {
+    font-size: 0.95rem;
+    font-variant-numeric: tabular-nums;
+}
+.vpc-doc-chip:hover {
+    filter: brightness(.96);
+    text-decoration: underline;
+}
+.vpc-doc-chip:focus-visible {
+    outline: 2px solid #F99410;
+    outline-offset: 2px;
+}
+.vpc-doc-chip--rojo {
+    background: #FDEBEB;
+    color: #9B1C1C;
+    border-color: rgba(220, 38, 38, .35);
+}
+.vpc-doc-chip--ambar {
+    background: #FEF3E0;
+    color: #8A5100;
+    border-color: rgba(249, 148, 16, .40);
+}
+
+/* ── Modal de documentación (ChoferesVencimientosDialog) ── */
+.cvd-dialog .cvd-tools {
+    /* La barra vive sobre la tarjeta blanca del modal → hereda .vpc-toolbar,
+       que ya trae los campos calibrados para fondo blanco. */
+    margin-top: 2px;
+}
+
+/* Segmentado de gravedad. Botones HTML nativos: tres MudButton con variantes
+   distintas no se leen como UN control, y el segmentado tiene que decir
+   "elegí uno de estos tres". */
+.cvd-seg {
+    display: inline-flex;
+    border: 1px solid #C3D3E8;
+    border-radius: 8px;
+    overflow: hidden;
+    flex-shrink: 0;
+    height: 40px;               /* misma altura que los inputs Dense */
+}
+.cvd-seg__b {
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0 12px;
+    border: 0;
+    border-right: 1px solid #C3D3E8;
+    background: #FFFFFF;
+    color: #4A5875;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.cvd-seg__b:last-child {
+    border-right: 0;
+}
+.cvd-seg__b:hover {
+    background: #F2F6FC;
+}
+.cvd-seg__b--on {
+    background: #003AA0;
+    color: #FFFFFF;
+}
+.cvd-seg__b:focus-visible {
+    outline: 2px solid #F99410;
+    outline-offset: -2px;
+}
+
+/* Nombre + línea de contexto (tipo de chofer y viajes del período). */
+.cvd-nom {
+    display: block;
+    font-weight: 600;
+    color: #112F5B;
+    white-space: nowrap;
+}
+.cvd-sub {
+    display: block;
+    font-size: 0.68rem;
+    color: #7C89A3;
+    white-space: nowrap;
+}
+
+/* Documento al día: se ve, pero no compite con el rojo y el ámbar. */
+.cvd-ok {
+    color: #4A5875;
+}
+/* Documento que no le corresponde al chofer (AEP sin fecha): guión apagado. */
+.cvd-na {
+    color: #A6B6CC;
+}
+
+.cvd-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 7px;
+    vertical-align: 1px;
+}
+.cvd-dot--rojo { background: #DC2626; }
+.cvd-dot--ambar { background: #F99410; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   EXPORTAR A PDF — panel "… por chofer" (20/08/2026)
+   Mismo patrón que el comprobante de Liquidación a Clientes: `imprimirElemento`
+   (descarga.js) abre el bloque en una ventana aislada y dispara la impresión del
+   navegador — el usuario elige "Guardar como PDF". `.no-print` oculta los controles
+   de pantalla (selector Top N, chips de foco); `.vpc-print-tabla`/`.vpc-print-pie`
+   son el reverso: invisibles en pantalla, aparecen solo dentro de esa ventana.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Chips de foco + botón PDF, agrupados a la derecha del título (mismo renglón). */
+.rfs-bar-head__der {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Botón "PDF" del panel de gráficos.
+   Rojo PDF, distinto del verde de Excel — así no se confunden de un vistazo.
+   Outlined (no relleno): el Excel de la grilla ya es un relleno fuerte y dos macizos en la
+   misma pantalla se pelean por la atención. El borde de 1.5px + la sombra suave le dan el
+   relieve que pedía sin llegar a competir. */
+.rfs-pdf-btn {
+    color: #B91C1C !important;
+    border-color: #E4A0A0 !important;
+    border-width: 1.5px !important;
+    background: #FFF7F7 !important;
+    height: 34px;
+    padding: 0 14px !important;
+    border-radius: 8px !important;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: none;
+    flex-shrink: 0;
+    box-shadow: 0 1px 2px rgba(185, 28, 28, 0.12);
+    transition: background .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.rfs-pdf-btn:hover {
+    background: #FEE2E2 !important;
+    border-color: #B91C1C !important;
+    box-shadow: 0 2px 6px rgba(185, 28, 28, 0.22);
+}
+/* El ícono un poco más grande que el texto: es lo que se reconoce a la distancia. */
+.rfs-pdf-btn .mud-icon-root {
+    font-size: 1.15rem;
+}
+.rfs-pdf-btn.mud-disabled {
+    color: #C7D0DE !important;
+    border-color: #E2E9F4 !important;
+    background: #FAFBFD !important;
+    box-shadow: none;
+}
+
+/* Tabla de detalle y encabezado del documento: SOLO existen para el PDF. En pantalla el
+   gráfico ya cumple ese rol; en papel hace falta el número exacto (un PDF no tiene tooltip). */
+.vpc-print-tabla,
+.vpc-print-pie,
+.pdf-doc {
+    display: none;
+}
+
+@media print {
+    .no-print {
+        display: none !important;
+    }
+
+    /* Respiro de la hoja. Va acá y NO en `@page`, porque el margen de página se manda en 0
+       a propósito (así Chrome no tiene dónde dibujar su encabezado/pie con la fecha y el
+       about:blank — ver imprimirElemento en descarga.js).
+       ⚠ Límite conocido: el padding vertical de un bloque solo separa en la PRIMERA y la
+       ÚLTIMA hoja. Para las del medio, el aire de arriba lo da el <thead> repetido de la
+       tabla (padding-top propio) — ver .vpc-print-tabla thead th más abajo. */
+    .pdf-hoja {
+        padding: 9mm 11mm;
+        box-sizing: border-box;
+    }
+
+    /* ── Encabezado del documento ──
+       Sin bloques de color macizo: Chrome NO imprime fondos salvo que el usuario tilde
+       "Gráficos de fondo", así que un banner azul con texto blanco podría salir en blanco
+       sobre blanco (ilegible). Imágenes, bordes y color de TEXTO sí se imprimen siempre:
+       de ahí el diseño de banda blanca + filete + logos <img>. */
+    .pdf-doc {
+        display: block;
+        margin-bottom: 10px;
+    }
+    .pdf-doc__marca {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding-bottom: 6px;
+        border-bottom: 2px solid #003AA0;
+    }
+    .pdf-doc__logo-nortur {
+        height: 15px;
+        width: auto;
+    }
+    .pdf-doc__logo-buslink {
+        height: 17px;
+        width: auto;
+    }
+    .pdf-doc__div {
+        width: 1px;
+        height: 16px;
+        background: #C3D3E8;
+        /* El filete es un fondo: se fuerza para que también salga impreso. */
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    .pdf-doc__marca-txt {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        color: #112F5B;
+    }
+    .pdf-doc__spacer {
+        flex: 1 1 auto;
+    }
+    .pdf-doc__emitido {
+        font-size: 9px;
+        color: #7A90AD;
+    }
+    .pdf-doc__titulo {
+        margin-top: 8px;
+        font-size: 15px;
+        font-weight: 800;
+        color: #112F5B;
+    }
+    /* Los filtros con los que se armó el informe: sin esto dos PDF distintos son
+       indistinguibles y nadie puede reproducir el número. */
+    .pdf-doc__filtros {
+        margin-top: 2px;
+        font-size: 9px;
+        color: #6B82A0;
+    }
+    .pdf-doc__nota {
+        margin-top: 6px;
+        font-size: 9px;
+        font-style: italic;
+        color: #B45309;
+    }
+
+    /* Franja de KPIs: filete de color a la izquierda (borde = se imprime) en vez de tarjeta
+       con fondo de color (= puede no imprimirse). */
+    .pdf-doc__kpis {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+    }
+    .pdf-kpi {
+        flex: 1 1 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        padding: 4px 8px;
+        border-left: 3px solid #003AA0;
+        border-top: 1px solid #E2E9F4;
+        border-right: 1px solid #E2E9F4;
+        border-bottom: 1px solid #E2E9F4;
+    }
+    .pdf-kpi__lbl {
+        font-size: 7.5px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #7A90AD;
+    }
+    .pdf-kpi__val {
+        font-size: 13px;
+        font-weight: 800;
+        color: #112F5B;
+    }
+    /* El nombre de un chofer es mucho más largo que un número: baja de cuerpo para no
+       desbordar la tarjeta. */
+    .pdf-kpi__val--txt {
+        font-size: 9.5px;
+        line-height: 1.15;
+    }
+    .pdf-kpi__sub {
+        font-size: 7.5px;
+        color: #8FA3BC;
+    }
+
+    .vpc-print-tabla {
+        display: table;
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 14px;
+        font-size: 10.5px;
+        color: #1F2937;
+    }
+    /* El título de la tabla NO puede quedar solo al pie de una hoja con las filas en la
+       siguiente (quedaba huérfano debajo del gráfico). `break-after: avoid` lo pega a la
+       primera fila; si el navegador lo ignora, el peor caso es el de antes. */
+    .vpc-print-tabla caption {
+        caption-side: top;
+        text-align: left;
+        font-weight: 700;
+        font-size: 12px;
+        color: #112F5B;
+        margin-bottom: 6px;
+        break-after: avoid;
+        page-break-after: avoid;
+    }
+    /* Misma idea a nivel tabla: si no entra nada de la tabla en lo que queda de la hoja,
+       que empiece limpia en la siguiente en vez de dejar el título colgado. */
+    .vpc-print-tabla {
+        break-before: auto;
+    }
+    /* El encabezado se repite en cada hoja (comportamiento nativo de <thead> al imprimir).
+       El padding-top generoso es a propósito: en las hojas del medio es lo ÚNICO que separa
+       la tabla del borde de la hoja (el margen de página es 0). */
+    .vpc-print-tabla thead {
+        display: table-header-group;
+    }
+    /* Que no se parta una fila entre dos hojas. */
+    .vpc-print-tabla tr {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+    /* Fila de cierre del informe. */
+    .vpc-print-tabla tr.vpc-print-tot td {
+        font-weight: 800;
+        color: #112F5B;
+        border-top: 2px solid #112F5B;
+        border-bottom: none;
+        padding-top: 5px;
+    }
+    .vpc-print-tabla th,
+    .vpc-print-tabla td {
+        padding: 3px 8px;
+        text-align: right;
+        border-bottom: 1px solid #E2E9F4;
+        /* Explícito y no heredado: la ventana de impresión copia TODOS los estilos del
+           documento (ver imprimirElemento en descarga.js), y alguna regla ajena a esta
+           tabla puede colar un color distinto en una celda puntual (visto con valores
+           "0h" en azul de marca en vez del gris de texto). */
+        color: #1F2937;
+    }
+    .vpc-print-tabla thead th {
+        font-weight: 700;
+        color: #112F5B;
+        border-bottom: 2px solid #D7E2F2;
+        /* Ver el comentario de .vpc-print-tabla thead: en las hojas del medio este padding
+           es el único aire entre el borde del papel y la primera fila. */
+        padding-top: 8mm;
+    }
+    /* El SVG del gráfico entra tal cual: ApexCharts renderiza vectorial, no canvas,
+       así que imprime nítido en cualquier tamaño de papel sin configuración extra. */
+    .vpc-print-pie {
+        display: block;
+        margin-top: 10px;
+        font-size: 9px;
+        color: #8FA3BC;
+    }
+}
+
+/* ── Filtros tocados y sin aplicar (30/07/2026) ──
+   El tablero muestra los números del último "Aplicar", así que se atenúa y se despinta un
+   poco para que se lea como "esto ya no corresponde a los filtros de arriba". Sigue siendo
+   legible y clickeable a propósito: no se bloquea el trabajo, solo se avisa. */
+.rfs-desactualizado {
+    opacity: 0.55;
+    filter: saturate(0.65);
+    transition: opacity 0.15s ease, filter 0.15s ease;
+}
+
+/* El botón Aplicar late suave mientras haya cambios pendientes. */
+.rfs-btn-pendiente {
+    animation: rfs-pulso 1.6s ease-in-out infinite;
+}
+
+@keyframes rfs-pulso {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55); }
+    50%      { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0); }
+}
+
+/* Respeta a quien pidió menos movimiento en el sistema operativo. */
+@media (prefers-reduced-motion: reduce) {
+    .rfs-btn-pendiente { animation: none; }
+}
+
 /* Columna enfocada de la tabla: header y total resaltados. */
-.rfs-tabla th.rfs-th-foco {
+.rfs-tabla th.rfs-th-foco,
+.rfs-tabla thead th.rfs-th-foco {
     background: #003AA0;
     color: #fff;
 }
@@ -3724,6 +6014,33 @@ h1:focus {
 /* Celdas de columnas NO enfocadas: atenuadas cuando hay un foco activo. */
 .rfs-tabla td.rfs-atenua {
     opacity: 0.32;
+}
+
+/* ── Panel de Flota ──
+   En este informe las categorías son FILAS (no columnas como en los pivotes de Reservas),
+   así que el foco se marca sobre la celda de la primera columna, no sobre el header. */
+.rfs-tabla td.pfl-cat-foco {
+    background: #DBEAFE;
+    color: #003AA0;
+    font-weight: 800;
+}
+
+/* Punto de color de la categoría: ata la fila de la tabla con su barra y su porción de
+   torta (mismo color por entidad en todo el tablero). */
+.pfl-punto {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-right: 7px;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+
+/* Números que piden atención: unidades sin uso, viajes sin asignar, tipos sin flota. */
+.rfs-tabla td.pfl-alerta {
+    color: #B45309;
+    font-weight: 700;
 }
 
 /* Cursor pointer sobre las marcas clickeables de los gráficos (barras y porciones del donut),
@@ -3749,3 +6066,1781 @@ h1:focus {
     margin-right: 5px;
     vertical-align: baseline;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Cartel de validación bloqueante — Snackbar "Contorno" (30/07/2026)
+   Estándar elegido por el usuario entre 5 variantes en rojo (NorturColors.Rojo,
+   ya mapeado a Severity.Error en el tema) para avisos que CORTAN una acción del
+   usuario (ej: rango Desde–Hasta > 60 días en Reservas por banda horaria).
+   Uso: Snackbar.Add(msg, Severity.Error, cfg => {
+            cfg.SnackbarVariant = Variant.Outlined;
+            cfg.SnackbarTypeClass = "nt-toast-contorno"; });
+   (Es SnackbarTypeClass — SnackbarOptions no tiene una propiedad `Class` genérica.)
+   Estilo self-contained: fondo blanco, filo e ícono en rojo de marca, texto en
+   la tinta estándar de la app (no rojo — a propósito, es la variante más liviana
+   de las 5: un límite operativo no es una falla del sistema, no hace falta gritar).
+   ═══════════════════════════════════════════════════════════════════════════ */
+.mud-snackbar.nt-toast-contorno {
+    background: #FFFFFF;
+    color: #112F5B;
+    border: 1.5px solid #DC2626;
+}
+.mud-snackbar.nt-toast-contorno .mud-snackbar-icon,
+.mud-snackbar.nt-toast-contorno .mud-snackbar-close-button {
+    color: #DC2626;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   F4 · AVISOS DE TRÁFICO (alarma por hora)
+   Dos piezas: el diálogo que fija la hora (.aviso-dialog, réplica de trafico_hs_aviso.scx)
+   y el popup que suena cuando llega el momento (.avisos-dialog).
+   Plano: docs/PlanoFoxPro/trafico/TRAFICO_F4_AVISO.md
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── Diálogo del F4 ───────────────────────────────────────────── */
+.aviso-dialog .aviso-salida {
+    font-weight: 700;
+    color: #003AA0;
+}
+.aviso-dialog .aviso-sep {
+    height: 1px;
+    background: #E8EFF9;
+    margin: 12px 0 14px;
+}
+.aviso-chips {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.aviso-chips__label {
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: #7A90AD;
+}
+.aviso-chips__o {
+    font-size: 0.74rem;
+    color: #9AA7BC;
+    margin-left: 4px;
+}
+.aviso-chip {
+    border: 1px solid #C9D9EF;
+    background: #F6F9FE;
+    color: #003AA0;
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .12s, border-color .12s, color .12s;
+}
+.aviso-chip:hover:not(:disabled) { background: #E8F0FC; border-color: #003AA0; }
+.aviso-chip--on { background: #003AA0; border-color: #003AA0; color: #fff; }
+.aviso-chip:disabled { opacity: .45; cursor: default; }
+
+.aviso-hora {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.aviso-preview {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #16A34A;
+}
+.aviso-preview--mal { color: #C62828; }
+.aviso-dialog .aviso-auto { margin-top: 10px; }
+
+/* ── Popup de la alarma ───────────────────────────────────────── */
+/* Banda roja: el Text1 de trafico_aviso.scx tenía DisabledBackColor = 255,0,0. */
+.avisos-dialog .avisos-titlebar {
+    background: #C62828;
+    color: #fff;
+    padding: 10px 14px;
+    margin: -1px -1px 0;
+    border-radius: 4px 4px 0 0;
+}
+.avisos-titlebar__text {
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: .01em;
+}
+.avisos-titlebar__chip {
+    margin-left: 10px;
+    background: rgba(255,255,255,.18);
+    border: 1px solid rgba(255,255,255,.35);
+    border-radius: 999px;
+    padding: 1px 10px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+.avisos-wrap {
+    max-height: 46vh;
+    overflow: auto;
+}
+.avisos-tabla {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+}
+.avisos-tabla thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: #F1F5FB;
+    color: #46617F;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    text-align: left;
+    padding: 7px 8px;
+    border-bottom: 1px solid #D9E4F2;
+    white-space: nowrap;
+}
+.avisos-tabla tbody td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #EDF2F9;
+    white-space: nowrap;
+}
+.avisos-tabla tbody tr { cursor: pointer; }
+.avisos-tabla tbody tr:hover { background: #F6F9FE; }
+.avisos-tabla .c { text-align: center; }
+.avisos-tabla .nro { font-weight: 700; color: #003AA0; }
+.avisos-tabla .hora { font-weight: 600; font-variant-numeric: tabular-nums; }
+/* El recorrido es el único campo largo: se le da el ancho sobrante y se corta con … */
+.avisos-tabla .rec {
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Ya chequeado: mismo celeste que usa la grilla de Tráfico para el estado CHEQUEO. */
+.avisos-fila--chq { background: #EAF4FF; }
+.avisos-manual {
+    display: inline-block;
+    margin-left: 5px;
+    background: #F99410;
+    color: #fff;
+    border-radius: 3px;
+    padding: 0 4px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    vertical-align: text-top;
+}
+.avisos-estado {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #46617F;
+}
+.avisos-nota { color: #7A90AD; }
+/* Aviso que llegó por la ventana de gracia (se pasó mientras nadie miraba la pantalla). */
+.avisos-tabla .avisos-tarde { color: #B45309; }
+.avisos-tarde__badge {
+    display: inline-block;
+    margin-left: 5px;
+    background: #FEF3C7;
+    color: #B45309;
+    border: 1px solid #FCD34D;
+    border-radius: 3px;
+    padding: 0 4px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    vertical-align: text-top;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   F6-F9 · CAMBIO DE CRONOGRAMA (diagramación)
+   Plano: docs/PlanoFoxPro/trafico/TRAFICO_CRONOGRAMA.md
+   ════════════════════════════════════════════════════════════════ */
+
+/* Ítems del submenú: etiqueta a la izquierda, atajo grisado a la derecha. */
+.cron-menu-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: 18px;
+}
+.cron-menu-item__key {
+    margin-left: auto;
+    opacity: .55;
+    font-size: .78rem;
+}
+
+.cron-dialog .cron-actual {
+    font-weight: 700;
+    color: #003AA0;
+}
+.cron-dialog .cron-sep {
+    height: 1px;
+    background: #E8EFF9;
+    margin: 12px 0 14px;
+}
+
+/* Los 3 radios del Optiongroup1, como chips. */
+.cron-opciones {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+.cron-opciones__label {
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: #7A90AD;
+}
+.cron-op {
+    border: 1px solid #C9D9EF;
+    background: #F6F9FE;
+    color: #003AA0;
+    border-radius: 999px;
+    padding: 4px 14px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .12s, border-color .12s, color .12s;
+}
+.cron-op:hover { background: #E8F0FC; border-color: #003AA0; }
+.cron-op--on { background: #003AA0; border-color: #003AA0; color: #fff; }
+
+.cron-combos {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.cron-preview {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 14px;
+    font-size: 0.85rem;
+    color: #16A34A;
+}
+.cron-preview strong { font-size: 0.95rem; }
+.cron-preview__nota {
+    color: #7A90AD;
+    font-size: 0.76rem;
+}
+.cron-masivo {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed #E8EFF9;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   F1 · AYUDA DE COMANDOS  +  F2 · ALTA DE NOVEDADES
+   Planos: TRAFICO_F1_AYUDA.md / TRAFICO_F2_NOVEDADES.md
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── F1: la lista colapsable de atajos ── */
+.ayuda-intro {
+    font-size: 0.82rem;
+    color: #7A90AD;
+    margin-bottom: 14px;
+}
+.ayuda-fam {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: #F99410;
+    margin: 16px 0 7px;
+}
+.ayuda-fam:first-of-type { margin-top: 4px; }
+.ayuda-lista { display: flex; flex-direction: column; gap: 4px; }
+
+.ayuda-item {
+    border: 1px solid #E8EFF9;
+    border-radius: 7px;
+    overflow: hidden;
+    background: #FFF;
+}
+.ayuda-item--on { border-color: #C9D9EF; background: #F6F9FE; }
+.ayuda-item__head {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 11px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+}
+.ayuda-item__head:hover { background: #EEF4FD; }
+.ayuda-item__titulo { font-size: 0.87rem; font-weight: 600; color: #16233A; }
+
+/* La tecla. Ancho fijo para que la columna quede pareja aunque diga Ctrl+F8. */
+.ayuda-kbd {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+    min-width: 62px;
+    text-align: center;
+    background: #EDF3FA;
+    border: 1px solid #D8E3F0;
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 2px 6px;
+    color: #003AA0;
+    flex-shrink: 0;
+}
+/* Marca las teclas que modifican datos: el cuadro del FoxPro no distingue. */
+.ayuda-badge {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: #B45309;
+    background: #FEF3C7;
+    border: 1px solid #FCD34D;
+    border-radius: 3px;
+    padding: 0 5px;
+}
+.ayuda-item__cuerpo {
+    padding: 2px 12px 11px 83px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.ayuda-que { margin: 0; font-size: 0.83rem; color: #46617F; line-height: 1.5; }
+.ayuda-cuando { margin: 0; font-size: 0.8rem; color: #7A90AD; }
+.ayuda-cuando strong { color: #46617F; }
+.ayuda-nota {
+    margin: 2px 0 0;
+    font-size: 0.78rem;
+    color: #B45309;
+    border-left: 2px solid #FCD34D;
+    padding-left: 8px;
+}
+.ayuda-pie {
+    margin-top: 18px;
+    padding-top: 12px;
+    border-top: 1px solid #E8EFF9;
+    font-size: 0.78rem;
+    color: #9AA7BC;
+}
+@media (max-width: 560px) {
+    .ayuda-item__cuerpo { padding-left: 12px; }
+}
+
+/* ── F2: el formulario de alta dentro del libro ── */
+.nov-alta {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: #F6F9FE;
+    border: 1px solid #C9D9EF;
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 16px;
+}
+.nov-alta__h {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #003AA0;
+}
+.nov-alta__f { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.nov-alta__hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.74rem;
+    color: #7A90AD;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   CENTRO DE AYUDA (07/08/2026) — botón "Ayuda ▾" del AppBar,
+   su menú y los dialogs de Manuales / Novedades / Acerca de.
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── El botón en la barra azul. Mismo peso visual que el reloj: discreto,
+      pero con caja propia para que se lea como "acá se hace clic". ── */
+.appbar-ayuda {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 4px 10px;
+    margin-right: 10px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 6px;
+    color: #E8F0FC;
+    font: inherit;
+    font-size: 0.86rem;
+    line-height: 1;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s ease, border-color .15s ease;
+}
+.appbar-ayuda:hover {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.35);
+    color: #FFF;
+}
+.appbar-ayuda__caret { margin-left: -2px; opacity: .8; }
+
+/* ── Chip "Vencimientos" (11/08/2026) — el PRIMERO de los tres de la barra.
+      Misma caja que Ayuda y Usuario para que los tres se lean como una familia.
+      Va SIN número (decisión de Claudio): el cartel solo, los totales se leen
+      adentro del modal. ── */
+.appbar-vto {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 4px 10px;
+    margin-right: 10px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 6px;
+    color: #E8F0FC;
+    font: inherit;
+    font-size: 0.86rem;
+    line-height: 1;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s ease, border-color .15s ease;
+}
+.appbar-vto:hover {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.35);
+    color: #FFF;
+}
+
+/* En pantallas angostas (las PCs del cliente a 125% de escala dan ~1088px CSS) la
+   barra queda al límite: el chip se achica a la campana sola para no empujar al
+   chip de usuario fuera de la pantalla. El texto vuelve cuando hay lugar. */
+@media (max-width: 1279px) {
+    .appbar-vto { padding: 4px 7px; margin-right: 6px; gap: 4px; }
+    .appbar-vto > span { display: none; }
+}
+
+/* ── Menú de usuario (07/08/2026) — hermano del botón Ayuda: reemplaza el texto
+      "Usuario: X" y el botón naranja de cerrar sesión que estaban sueltos. ── */
+.appbar-usuario {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 4px 8px;
+    margin-right: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 6px;
+    color: #E8F0FC;
+    font: inherit;
+    font-size: 0.86rem;
+    line-height: 1;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s ease, border-color .15s ease;
+}
+.appbar-usuario:hover {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.35);
+    color: #FFF;
+}
+.appbar-usuario__nombre { font-weight: 600; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+.appbar-usuario__caret  { margin-left: -2px; opacity: .8; }
+
+/* Ficha de la cabecera del desplegable: quién sos, sin acción asociada. */
+.usermenu-ficha {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 268px;
+    padding: 10px 16px 8px;
+}
+.usermenu-ficha__avatar {
+    flex: none;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #E8EFF9;
+    color: #003AA0;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: .5px;
+}
+.usermenu-ficha__txt    { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.usermenu-ficha__nombre { font-size: 0.92rem; font-weight: 700; color: #16233A; line-height: 1.2; }
+.usermenu-ficha__rol    { font-size: 0.75rem; color: #46617F; line-height: 1.25; }
+.usermenu-ficha__mods   { font-size: 0.72rem; color: #7A90AD; line-height: 1.25; }
+
+/* Pie con la salida: separado por una línea y sobre fondo gris, para que se lea
+   como "el borde de la sesión" y no se clickee de paso. */
+.usermenu-pie {
+    border-top: 1px solid #E4EAF2;
+    background: #F7F9FC;
+    padding: 8px;
+    margin-top: 4px;
+}
+.usermenu-salir {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 7px 10px;
+    background: #FFF;
+    border: 1px solid #D8E0EB;
+    border-radius: 6px;
+    color: #B3261E;
+    font: inherit;
+    font-size: 0.84rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s ease, border-color .15s ease;
+}
+.usermenu-salir:hover { background: #FDECEA; border-color: #E5A9A3; }
+
+/* ── El desplegable: dos renglones por ítem (título + para qué sirve),
+      como el combo de ayuda de la captura de referencia. ── */
+.ayuda-menu-popover .mud-list-item,
+.usuario-menu-popover .mud-list-item { padding-top: 6px; padding-bottom: 6px; }
+
+.ayuda-mi {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    min-width: 268px;
+}
+.ayuda-mi__ico { color: #46617F; margin-top: 2px; flex: none; }
+.ayuda-mi__txt { display: flex; flex-direction: column; gap: 1px; }
+.ayuda-mi__tit { font-size: 0.88rem; font-weight: 600; color: #16233A; line-height: 1.25; }
+.ayuda-mi__sub { font-size: 0.73rem; color: #7A90AD; line-height: 1.25; }
+
+/* ── Manuales ── */
+.ayuda-docs { display: flex; flex-direction: column; gap: 6px; }
+.ayuda-doc {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 12px;
+    border: 1px solid #E8EFF9;
+    border-radius: 7px;
+    background: #FFF;
+    text-decoration: none;
+    color: inherit;
+}
+.ayuda-doc:hover { background: #F6F9FE; border-color: #C9D9EF; }
+.ayuda-doc__ico { color: #C0392B; flex: none; }
+.ayuda-doc__txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ayuda-doc__tit { font-size: 0.87rem; font-weight: 600; color: #16233A; }
+.ayuda-doc__meta { font-size: 0.73rem; color: #7A90AD; }
+.ayuda-doc__dl { margin-left: auto; color: #7A90AD; flex: none; }
+
+.ayuda-vacio {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 26px 10px;
+    text-align: center;
+    color: #46617F;
+}
+.ayuda-vacio p { margin: 0; font-size: 0.88rem; }
+.ayuda-vacio__hint { font-size: 0.78rem !important; color: #7A90AD; }
+.ayuda-vacio code {
+    background: #F1F5FB;
+    border: 1px solid #E8EFF9;
+    border-radius: 3px;
+    padding: 0 4px;
+    font-size: 0.76rem;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   MODAL DE VENCIMIENTOS (11/08/2026) — el contenido de la vieja franja
+   .tablero-bar, con lugar para leerse. Una tarjeta por documento, el total
+   grande y el desglose vencidos / por vencer abajo (antes iba en un tooltip).
+   ════════════════════════════════════════════════════════════════ */
+
+.vto-sec { margin-bottom: 14px; }
+.vto-sec:last-of-type { margin-bottom: 10px; }
+
+.vto-sec__head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 6px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid #E6ECF6;
+    color: #46617F;
+}
+.vto-sec__tit {
+    font-size: 0.74rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #112F5B;
+}
+.vto-sec__tot { margin-left: auto; font-size: 0.78rem; color: #7A90AD; }
+
+/* auto-fit + minmax: 2 o 3 tarjetas por renglón según el ancho real del modal,
+   sin media queries. A 1088px CSS (el peor caso del contrato) siguen entrando. */
+.vto-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+    gap: 8px;
+}
+
+.vto-card {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 8px 10px;
+    border: 1px solid #E1E9F4;
+    border-left: 3px solid #C7D3E4;
+    border-radius: 8px;
+    background: #FBFCFE;
+}
+.vto-card--danger { border-left-color: #DC2626; background: #FEF5F5; }
+.vto-card--warn   { border-left-color: #F99410; background: #FFFAF2; }
+.vto-card--ok     { border-left-color: #22C55E; background: #F6FDF9; }
+
+.vto-card__lbl {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #7A90AD;
+}
+.vto-card__num {
+    font-size: 1.5rem;
+    font-weight: 800;
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+    color: #112F5B;
+}
+.vto-card--danger .vto-card__num { color: #B91C1C; }
+.vto-card--warn   .vto-card__num { color: #B26200; }
+.vto-card--ok     .vto-card__num { color: #15803D; }
+
+.vto-card__det { display: flex; flex-direction: column; gap: 1px; }
+.vto-card__det-l { font-size: 0.73rem; color: #7A90AD; }
+.vto-card__det-l--danger { color: #B91C1C; font-weight: 600; }
+.vto-card__det-l--warn   { color: #B26200; font-weight: 600; }
+
+.vto-nota {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #F1F5FB;
+    color: #46617F;
+    font-size: 0.76rem;
+    line-height: 1.35;
+}
+.vto-nota b { color: #16233A; }
+
+/* ── Novedades ── */
+.ayuda-novedades { display: flex; flex-direction: column; gap: 4px; }
+.ayuda-nov {
+    border: 1px solid #E8EFF9;
+    border-radius: 7px;
+    overflow: hidden;
+    background: #FFF;
+}
+.ayuda-nov--on { border-color: #C9D9EF; background: #F6F9FE; }
+.ayuda-nov__head {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 11px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+}
+.ayuda-nov__head:hover { background: #EEF4FD; }
+.ayuda-nov__fecha {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.72rem;
+    color: #7A90AD;
+    flex: none;
+    width: 76px;
+}
+.ayuda-nov__tit { font-size: 0.86rem; font-weight: 600; color: #16233A; }
+.ayuda-nov__modulo {
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: #003AA0;
+    background: #E8F0FC;
+    border-radius: 3px;
+    padding: 1px 6px;
+    flex: none;
+}
+.ayuda-nov__cuerpo {
+    padding: 2px 12px 11px 97px;
+    font-size: 0.83rem;
+    color: #46617F;
+    line-height: 1.5;
+}
+
+/* ── Acerca de ── */
+.ayuda-acerca__marca {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid #E8EFF9;
+}
+.ayuda-acerca__marca img { height: 40px; width: auto; }
+.ayuda-acerca__nombre {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: #16233A;
+    letter-spacing: .04em;
+}
+.ayuda-acerca__sub { font-size: 0.78rem; color: #7A90AD; }
+
+.ayuda-acerca__datos { display: flex; flex-direction: column; }
+.ayuda-acerca__fila {
+    display: flex;
+    gap: 12px;
+    padding: 5px 2px;
+    border-bottom: 1px dashed #EEF4FD;
+    font-size: 0.84rem;
+}
+.ayuda-acerca__k { color: #7A90AD; width: 92px; flex: none; }
+.ayuda-acerca__v { color: #16233A; font-weight: 600; word-break: break-word; }
+
+.ayuda-acerca__soporte {
+    display: flex;
+    align-items: center;
+    margin-top: 14px;
+    padding: 9px 11px;
+    background: #F6F9FE;
+    border: 1px solid #C9D9EF;
+    border-radius: 7px;
+    font-size: 0.82rem;
+    color: #46617F;
+}
+.ayuda-acerca__soporte a { color: #003AA0; }
+
+/* Pie legal — centrado, en negrita y legible (a pedido del dueño, 07/08/2026:
+   la primera versión a 0.72rem/gris claro no se leía). */
+.ayuda-acerca__copy {
+    margin-top: 14px;
+    padding-top: 11px;
+    border-top: 1px solid #E8EFF9;
+    display: block;
+    width: 100%;
+    text-align: center;
+    font-size: 0.86rem;
+    font-weight: 600;
+    color: #46617F;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   /ayuda — la ayuda online de Buslink (07/08/2026).
+   Es un DOCUMENTO: ancho de lectura acotado, índice pegajoso a la
+   izquierda y buscador arriba. No usa el chrome del sistema.
+   ════════════════════════════════════════════════════════════════ */
+
+.doc { min-height: 100vh; background: #F4F7FC; }
+
+.doc__top {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 10px 22px;
+    background: linear-gradient(90deg, #001B44 0%, #003AA0 100%);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .18);
+}
+.doc__marca { display: flex; align-items: center; gap: 10px; flex: none; }
+.doc__marca img { height: 30px; width: auto; }
+.doc__marca-nombre {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: #FFF;
+    letter-spacing: .05em;
+    line-height: 1.2;
+}
+.doc__marca-sub { font-size: 0.72rem; color: #A9C2E8; }
+
+.doc__buscador {
+    flex: 1;
+    max-width: 520px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 7px;
+    padding: 5px 10px;
+    color: #DCE8F9;
+}
+.doc__buscador input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: #FFF;
+    font: inherit;
+    font-size: 0.86rem;
+}
+.doc__buscador input::placeholder { color: #94AFD6; }
+.doc__buscador-x {
+    background: none;
+    border: none;
+    color: #A9C2E8;
+    cursor: pointer;
+    font-size: 0.85rem;
+    line-height: 1;
+}
+
+.doc__volver {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    color: #DCE8F9;
+    text-decoration: none;
+    font-size: 0.84rem;
+    white-space: nowrap;
+}
+.doc__volver:hover { color: #FFF; text-decoration: underline; }
+
+.doc__body {
+    display: flex;
+    align-items: flex-start;
+    gap: 30px;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 26px 22px 60px;
+}
+
+/* Índice */
+.doc__indice {
+    position: sticky;
+    top: 74px;
+    flex: none;
+    width: 244px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+}
+.doc__indice-mod {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: #F99410;
+    margin: 14px 0 5px;
+}
+.doc__indice-mod:first-child { margin-top: 0; }
+.doc__indice-link {
+    font-size: 0.82rem;
+    color: #46617F;
+    text-decoration: none;
+    padding: 4px 8px;
+    border-left: 2px solid #E8EFF9;
+    line-height: 1.35;
+}
+.doc__indice-link:hover { color: #003AA0; background: #EEF4FD; border-left-color: #003AA0; }
+
+/* Cuerpo */
+.doc__contenido { flex: 1; min-width: 0; }
+
+.doc__mod {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: #16233A;
+    margin: 30px 0 4px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #E8EFF9;
+}
+.doc__mod:first-child { margin-top: 0; }
+
+.doc__sec {
+    background: #FFF;
+    border: 1px solid #E8EFF9;
+    border-radius: 9px;
+    padding: 16px 20px;
+    margin-top: 14px;
+    scroll-margin-top: 84px;   /* que el ancla no quede tapada por la barra */
+}
+.doc__sec-tit { font-size: 1rem; font-weight: 700; color: #003AA0; margin: 0 0 8px; }
+.doc__p { margin: 0 0 8px; font-size: 0.9rem; color: #46617F; line-height: 1.6; }
+.doc__ul { margin: 4px 0 0; padding-left: 20px; }
+.doc__ul li { font-size: 0.88rem; color: #46617F; line-height: 1.6; margin-bottom: 5px; }
+
+.doc__vacio {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 60px 10px;
+    text-align: center;
+    color: #46617F;
+}
+.doc__vacio p { margin: 0; font-size: 0.92rem; }
+.doc__vacio-hint { font-size: 0.82rem !important; color: #7A90AD; }
+
+.doc__pie {
+    margin-top: 30px;
+    padding-top: 14px;
+    border-top: 1px solid #E8EFF9;
+    font-size: 0.8rem;
+    color: #7A90AD;
+    text-align: center;
+}
+
+@media (max-width: 900px) {
+    .doc__indice { display: none; }
+    .doc__top { flex-wrap: wrap; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   DESPLEGABLES DE LA BARRA (nt-drop) — 07/08/2026.
+
+   Por qué CSS propio y no MudMenu: con MudBlazor 9.5 el MudMenu con
+   ActivatorContent NO abre el popover al clickear el activador (probado
+   con Playwright: el activador se monta, el clic no dispara nada y no hay
+   errores de JS). Como el logout vive adentro del desplegable, el bug
+   dejaba al usuario sin poder cerrar sesión. Mismo criterio que el drawer
+   lateral, que tampoco usa MudDrawer.
+   ════════════════════════════════════════════════════════════════ */
+
+.nt-drop { position: relative; display: inline-flex; }
+
+/* Capa invisible a pantalla completa: un clic afuera cierra el panel.
+   Va DEBAJO del panel y por encima de todo lo demás. */
+.nt-drop__backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1400;
+    background: transparent;
+}
+
+.nt-drop__panel {
+    position: absolute;
+    top: calc(100% + 9px);
+    right: 0;
+    z-index: 1401;
+    min-width: 300px;
+    padding: 6px;
+    background: #FFF;
+    border: 1px solid #D8E3F2;
+    border-radius: 10px;
+    box-shadow: 0 10px 28px rgba(0, 27, 68, .22);
+    animation: nt-drop-in .12s ease-out;
+}
+.nt-drop__panel--usuario { min-width: 312px; }
+
+@keyframes nt-drop-in {
+    from { opacity: 0; transform: translateY(-5px); }
+    to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .nt-drop__panel { animation: none; }
+}
+
+.nt-drop__item {
+    display: block;
+    width: 100%;
+    padding: 7px 9px;
+    background: none;
+    border: none;
+    border-radius: 7px;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+.nt-drop__item:hover { background: #EEF4FD; }
+
+.nt-drop__sep {
+    height: 1px;
+    background: #E8EFF9;
+    margin: 5px 4px;
+}
+
+/* El AppBar de MudBlazor recorta lo que se sale del toolbar; sin esto el
+   panel quedaría cortado por el borde inferior de la barra azul. */
+.mud-appbar .mud-toolbar { overflow: visible; }
+
+/* Estado "abierto" de los dos activadores: quedan encendidos mientras el
+   panel está desplegado, para que se vea de dónde salió. */
+.appbar-ayuda--on,
+.appbar-usuario--on {
+    background: rgba(255, 255, 255, 0.22);
+    border-color: rgba(255, 255, 255, 0.45);
+    color: #FFF;
+}
+
+/* ═══════════════════════════════════════════
+   HUB DE INFORMES (/informes) — 10/08/2026
+   Tarjetas agrupadas por módulo. El contenido sale de
+   Services/InformesCatalogo.cs; acá solo vive la presentación.
+   El color de cada módulo llega por la variable inline --inf-color.
+   ═══════════════════════════════════════════ */
+
+.inf-hub {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 4px 0 32px;
+}
+
+.inf-hub__head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid #E5EAF1;
+}
+
+.inf-hub__title {
+    margin: 0;
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--nt-panel-grad-a);
+    letter-spacing: -0.01em;
+}
+
+.inf-hub__subtitle {
+    margin: 3px 0 0;
+    font-size: 0.85rem;
+    color: #6A7A90;
+}
+
+.inf-hub__count {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    background: #E8EFF9;
+    color: #003AA0;
+    font-weight: 700;
+    font-size: 0.75rem;
+}
+
+/* ── Barra de búsqueda + chips de módulo ── */
+
+.inf-hub__toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    margin: 16px 0 20px;
+}
+
+.inf-hub__search {
+    flex: 0 1 340px;
+    min-width: 240px;
+}
+
+.inf-hub__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1 1 auto;
+}
+
+.inf-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 11px;
+    border-radius: 14px;
+    border: 1px solid #CBD5E6;
+    background: #FFF;
+    color: #4A5A70;
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.inf-chip:hover { background: #F2F6FC; }
+
+.inf-chip--on,
+.inf-chip--on:hover {
+    background: var(--nt-panel-grad-b);
+    border-color: var(--nt-panel-grad-b);
+    color: #FFF !important;
+}
+
+.inf-chip .mud-icon-root { font-size: 1rem; }
+
+.inf-hub__switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    color: #6A7A90;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.inf-hub__switch input { cursor: pointer; }
+
+/* ── Sección de módulo ── */
+
+.inf-modulo { margin-bottom: 26px; }
+
+.inf-modulo__head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding-left: 10px;
+    border-left: 4px solid var(--inf-color, #003AA0);
+}
+
+.inf-modulo__head .mud-icon-root { color: var(--inf-color, #003AA0); }
+
+.inf-modulo__head h2 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--inf-color, #003AA0);
+}
+
+.inf-modulo__count {
+    min-width: 20px;
+    padding: 0 6px;
+    border-radius: 10px;
+    background: var(--inf-color, #003AA0);
+    color: #FFF;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-align: center;
+    line-height: 18px;
+}
+
+/* ── Grilla de tarjetas ── */
+
+.inf-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+}
+
+.inf-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 14px 14px 13px;
+    border: 1px solid #E1E8F2;
+    border-left: 4px solid var(--inf-color, #003AA0);
+    border-radius: 8px;
+    background: #FFF;
+    text-decoration: none;
+    color: inherit;
+    position: relative;
+    transition: box-shadow 0.14s, transform 0.14s, border-color 0.14s;
+}
+
+.inf-card:hover {
+    box-shadow: 0 4px 14px rgba(17, 47, 91, 0.13);
+    transform: translateY(-2px);
+    border-color: var(--inf-color, #003AA0);
+}
+
+.inf-card__icon {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--inf-color, #003AA0) 12%, #FFF);
+    color: var(--inf-color, #003AA0);
+}
+
+.inf-card__body { min-width: 0; flex: 1; }
+
+.inf-card__title {
+    margin: 0 0 3px;
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: #17283F;
+    line-height: 1.25;
+}
+
+/* La pregunta de negocio: es lo que el usuario final lee para decidir si es
+   el informe que busca. Se muestra completa (wrap), nunca recortada. */
+.inf-card__q {
+    margin: 0;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    color: #6A7A90;
+}
+
+.inf-card__go {
+    align-self: center;
+    flex-shrink: 0;
+    color: var(--inf-color, #003AA0);
+    opacity: 0;
+    transition: opacity 0.14s;
+}
+
+.inf-card:hover .inf-card__go { opacity: 1; }
+
+/* ── Tarjeta "Próximamente": está en el Metrocar y falta migrar.
+   Se muestra en gris y sin link, para que el usuario sepa que existe
+   y que viene (a diferencia del drawer, que las oculta). ── */
+
+.inf-card--soon {
+    border-left-color: #C3CBD8;
+    background: #FAFBFD;
+    cursor: default;
+}
+
+.inf-card--soon:hover {
+    box-shadow: none;
+    transform: none;
+    border-color: #E1E8F2;
+    border-left-color: #C3CBD8;
+}
+
+.inf-card--soon .inf-card__icon {
+    background: #EEF1F6;
+    color: #93A1B5;
+}
+
+/* El badge va absoluto arriba a la derecha → el título le reserva el lugar
+   para que no lo pise cuando el nombre del informe es largo. */
+.inf-card--soon .inf-card__title { color: #7E8CA0; padding-right: 88px; }
+.inf-card--soon .inf-card__q     { color: #98A5B8; }
+
+.inf-card__badge {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    padding: 1px 7px;
+    border-radius: 9px;
+    background: #EEF1F6;
+    color: #8593A8;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+/* ── Sin resultados de búsqueda ── */
+
+.inf-vacio {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 48px 16px;
+    color: #8593A8;
+}
+
+.inf-vacio p { margin: 0; font-size: 0.9rem; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Panel de Clientes — selector de vistas y Salud del padrón
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Selector Cartera | Salud del padrón: dos pestañas anchas con subtítulo, para
+   que se entienda qué contesta cada vista antes de entrar. */
+.pad-vistas { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.pad-vista {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 16px; border-radius: 10px; cursor: pointer;
+    background: #fff; border: 1px solid #DCE6F5; color: #45608A;
+    font-size: 0.86rem; font-weight: 600; font-family: inherit;
+    transition: background .12s, border-color .12s, color .12s;
+}
+.pad-vista:hover { background: #F2F7FF; border-color: #B9CEEC; }
+.pad-vista small { font-weight: 500; color: #90A4BF; font-size: 0.74rem; }
+
+/* Selector compuesto + !important porque `.pad-vista:hover` (0,2,0) le gana a
+   `.pad-vista--on` (0,1,0): con el mouse todavía encima después del click, la pestaña
+   recién activada se pintaba con el fondo claro del hover y su texto blanco quedaba
+   ilegible. Con `.pad-vistas .pad-vista--on` el estado activo manda siempre. */
+.pad-vistas .pad-vista--on {
+    background: #003AA0 !important;
+    border-color: #003AA0 !important;
+    color: #fff !important;
+    box-shadow: 0 2px 8px rgba(0,58,160,0.22);
+}
+.pad-vistas .pad-vista--on small { color: rgba(255,255,255,0.78) !important; }
+.pad-vistas .pad-vista--on .mud-icon-root { color: #fff !important; }
+
+/* Tarjetas de problemas: el número manda, el subtítulo dice cuántos operan hoy. */
+.pad-problemas {
+    display: grid; gap: 8px;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+}
+
+.pad-prob {
+    display: flex; align-items: center; gap: 10px; text-align: left;
+    padding: 8px 12px; border-radius: 10px; cursor: pointer;
+    background: #FAFCFF; border: 1px solid #E3EBF7; font-family: inherit;
+    transition: background .12s, border-color .12s;
+}
+.pad-prob:hover { background: #F2F7FF; border-color: #B9CEEC; }
+.pad-prob--on { background: #EAF2FF; border-color: #003AA0; box-shadow: inset 0 0 0 1px #003AA0; }
+
+.pad-prob__n { font-size: 1.28rem; font-weight: 800; line-height: 1; min-width: 46px; }
+.pad-prob__txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pad-prob__tit { font-size: 0.79rem; font-weight: 600; color: #1F3A63; }
+.pad-prob__sub { font-size: 0.71rem; color: #8FA3BC; }
+
+/* Grupos que comparten CUIT */
+.pad-grupos { display: flex; flex-direction: column; gap: 10px; }
+
+.pad-grupo {
+    padding: 8px 12px; border-radius: 10px;
+    background: #FAFCFF; border: 1px solid #E3EBF7;
+}
+.pad-grupo__cuit {
+    font-size: 0.74rem; font-weight: 700; color: #45608A;
+    letter-spacing: .02em; margin-bottom: 5px;
+}
+.pad-grupo__items { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.pad-chip {
+    padding: 3px 10px; border-radius: 999px; cursor: pointer;
+    background: #fff; border: 1px solid #DCE6F5; color: #1F3A63;
+    font-size: 0.75rem; font-family: inherit;
+}
+.pad-chip:hover { background: #EAF2FF; border-color: #003AA0; }
+
+/* Punto de color del segmento en la tabla del padrón */
+.pad-punto {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 6px; vertical-align: middle;
+}
+
+/* ── Panel de Clientes · Retención y riesgo ─────────────────────────────── */
+
+/* Matriz ABC × recencia: dos números por celda (cuántos y cuánto). */
+.ret-matriz td.rfs-num { padding-top: 4px; padding-bottom: 4px; line-height: 1.2; }
+.ret-n { display: block; font-weight: 700; font-size: 0.86rem; }
+.ret-monto { display: block; font-size: 0.7rem; color: #7A90AD; }
+
+/* El riesgo se lee por color: un cliente clase A dormido es rojo, el mismo
+   estado en un C es apenas un dato. */
+.ret-riesgo--alto  { background: #FEE2E2 !important; }
+.ret-riesgo--alto .ret-monto  { color: #B91C1C; }
+.ret-riesgo--medio { background: #FEF3C7 !important; }
+.ret-riesgo--medio .ret-monto { color: #B45309; }
+.ret-celda--sel { box-shadow: inset 0 0 0 2px #003AA0; }
+
+/* Etiqueta de clase ABC */
+.ret-clase {
+    display: inline-block; min-width: 20px; text-align: center;
+    padding: 1px 6px; border-radius: 6px; margin-right: 6px;
+    font-weight: 800; font-size: 0.76rem; color: #fff;
+}
+.ret-clase--a { background: #003AA0; }
+.ret-clase--b { background: #0891B2; }
+.ret-clase--c { background: #94A3B8; }
+.ret-clase__sub { font-size: 0.7rem; color: #8FA3BC; }
+
+/* Badge de estado del cliente entre períodos */
+.ret-badge {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font-size: 0.72rem; font-weight: 600; color: #fff;
+}
+
+/* Filtros rápidos por estado, arriba de la tabla */
+.ret-filtro {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 11px; border-radius: 8px; cursor: pointer;
+    background: #fff; border: 1px solid #DCE6F5; color: #45608A;
+    font-size: 0.78rem; font-family: inherit; height: 36px;
+}
+.ret-filtro:hover { background: #F2F7FF; border-color: #B9CEEC; }
+.ret-filtro--on { background: #EAF2FF; border-color: #003AA0; box-shadow: inset 0 0 0 1px #003AA0; }
+.ret-filtro__n { font-weight: 800; font-size: 0.9rem; }
+
+/* Solapa Actividad de la ficha de cliente: servicios y recorridos en dos columnas
+   que colapsan a una sola en pantallas chicas (terminales de 1280×720). */
+.cli-act-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--nt-dlg-gap-box); }
+@media (max-width: 900px) { .cli-act-cols { grid-template-columns: 1fr; } }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PANEL DEL OPERADOR (/panel-operador) — informe nuevo, 11/08/2026
+   Badge "En desarrollo", tabla de perfil, matriz creador×modificador y la
+   tira de días de la semana. Todo dentro del contrato de 1088×614 px CSS
+   (skill responsive-nortur): las tablas scrollean en su caja, nunca la página.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Badge de informe en evaluación. Deliberadamente gris pizarra (no naranja de
+   marca): comunica "borrador", no "atención". */
+.nt-badge-dev {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 10px; border-radius: 999px;
+    background: #EEF2F7; border: 1px solid #CBD5E1; color: #475569;
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em;
+}
+
+/* ── Tablas del panel (perfil y matriz) ── */
+.op-tabla { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.op-tabla thead th {
+    position: sticky; top: 0; z-index: 2;
+    background: #F5F8FD; color: #45608A;
+    font-weight: 700; font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.02em; text-align: right;
+    padding: 7px 10px; border-bottom: 1px solid #DCE6F5; white-space: nowrap;
+}
+.op-tabla tbody td { padding: 6px 10px; border-bottom: 1px solid #F0F4FA; }
+.op-tabla tbody tr { cursor: pointer; }
+.op-tabla tbody tr:hover { background: #F7FAFF; }
+.op-tabla tfoot td {
+    padding: 7px 10px; font-weight: 800; color: #112F5B;
+    background: #F5F8FD; border-top: 2px solid #DCE6F5;
+}
+
+/* Columna del nombre: pegada a la izquierda al scrollear en horizontal. */
+.op-th-oper {
+    position: sticky; left: 0; z-index: 3;
+    text-align: left !important; background: #fff;
+    min-width: 150px; white-space: nowrap;
+}
+.op-tabla thead .op-th-oper { background: #F5F8FD; z-index: 4; }
+.op-tabla tfoot .op-th-oper { background: #F5F8FD; }
+.op-tabla tbody tr:hover .op-th-oper { background: #F7FAFF; }
+.op-oper { font-weight: 700; color: #112F5B; }
+
+.op-num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.op-num--fuerte { font-weight: 800; color: #112F5B; }
+.op-num--alerta { color: #B3261E; font-weight: 700; }
+.op-num--cruz { color: #B45309; font-weight: 700; }
+
+/* Foco (cross-filter): el resto se apaga, el enfocado se marca con la barra azul. */
+.op-fila--apagada { opacity: 0.42; }
+.op-fila--foco { background: #EAF2FF !important; }
+.op-fila--foco .op-th-oper { background: #EAF2FF !important; box-shadow: inset 3px 0 0 #003AA0; }
+
+/* Chips de estado del usuario (sin padrón / de baja / solo corrige). */
+.op-chip {
+    display: inline-block; margin-left: 6px; padding: 0 7px;
+    border-radius: 999px; font-size: 0.66rem; font-weight: 700;
+    background: #EEF2F7; color: #64748B; border: 1px solid #DCE6F5;
+    vertical-align: middle;
+}
+.op-chip--alerta { background: #FDECEA; color: #B3261E; border-color: #F5C6C2; }
+
+/* ── Matriz creador × modificador ── */
+.op-matriz thead th { text-align: right; }
+.op-celda--propia { color: #A9B7CA; }           /* diagonal: corregirse a uno mismo no es fricción */
+.op-celda--cruz { color: #B45309; font-weight: 700; background: #FFF8EE; }
+
+/* ── Tira de días de la semana, debajo de la evolución ── */
+.op-dows { display: flex; gap: 5px; margin-top: 10px; }
+.op-dow {
+    flex: 1 1 0; min-width: 0; text-align: center;
+    padding: 5px 2px; border-radius: 8px;
+    background: #F5F8FD; border: 1px solid #E7EEF9;
+}
+.op-dow--cero { opacity: 0.5; }
+.op-dow__n { display: block; font-weight: 800; font-size: 0.82rem; color: #112F5B; font-variant-numeric: tabular-nums; }
+.op-dow__d { display: block; font-size: 0.66rem; color: #7A90AD; text-transform: uppercase; }
+
+/* ── Clientes del operador (barras horizontales propias, sin librería) ── */
+.op-clientes { display: flex; flex-direction: column; gap: 7px; }
+.op-cli__head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.op-cli__nom {
+    font-size: 0.78rem; color: #112F5B; font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.op-cli__val { font-size: 0.78rem; font-weight: 800; color: #112F5B; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.op-cli__pct { font-weight: 600; color: #7A90AD; font-size: 0.72rem; }
+.op-cli__barra { height: 6px; border-radius: 999px; background: #EEF3FA; overflow: hidden; margin-top: 2px; }
+.op-cli__barra span { display: block; height: 100%; border-radius: 999px; background: #2058D0; }
+
+/* Terminal chica (1088×614): la tabla aprieta antes de recortar un número. */
+@media (max-width: 1200px) {
+    .op-tabla { font-size: 0.75rem; }
+    .op-tabla tbody td, .op-tabla thead th { padding: 5px 7px; }
+    .op-th-oper { min-width: 128px; }
+}
+
+/* Ranking de altas por operador — barras HTML, NO ApexCharts (11/08/2026).
+   Con datos muy dispares (10.997 vs 7 altas) los datalabels de ApexCharts se montan
+   sobre las barras cortas por más OffsetX que se les dé. Acá el número vive FUERA
+   de la barra, en su propia columna, así que la escala no lo puede pisar nunca. */
+.op-rank { display: flex; flex-direction: column; gap: 4px; }
+.op-rank__fila {
+    display: grid; grid-template-columns: 92px 1fr 108px;
+    align-items: center; gap: 8px;
+    padding: 3px 6px; border-radius: 7px; cursor: pointer;
+}
+.op-rank__fila:hover { background: #F5F8FD; }
+.op-rank--apagada { opacity: 0.38; }
+.op-rank--foco { background: #EAF2FF; box-shadow: inset 3px 0 0 #003AA0; }
+
+.op-rank__nom {
+    font-size: 0.75rem; font-weight: 700; color: #112F5B;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.op-rank__barra { height: 13px; border-radius: 4px; background: #F0F4FA; overflow: hidden; }
+.op-rank__barra span { display: block; height: 100%; border-radius: 4px; }
+.op-rank__val {
+    text-align: right; font-size: 0.78rem; font-weight: 800; color: #112F5B;
+    white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+/* El % en gris y a la derecha del valor: jerarquía sin recortar ninguno de los dos. */
+.op-rank__pct {
+    display: inline-block; min-width: 44px; text-align: right;
+    font-weight: 600; font-size: 0.7rem; color: #7A90AD;
+}
+
+@media (max-width: 1200px) {
+    .op-rank__fila { grid-template-columns: 78px 1fr 96px; }
+}
+
+/* La matriz es una columna por operador + total: aprieta el paso SIEMPRE (no solo en
+   pantalla chica) para que la última columna entre sin obligar a descubrir el scroll. */
+.op-matriz { font-size: 0.75rem; }
+.op-matriz thead th, .op-matriz tbody td { padding: 5px 6px; }
+.op-matriz .op-th-oper { min-width: 118px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PANEL DE TERCERIZACIÓN (/panel-tercerizacion) — informe nuevo, 11/08/2026
+   Reutiliza .op-* del Panel del Operador (tablas, ranking, chips) y agrega
+   solo lo propio: la ficha del prestador y la barra de mezcla propio/tercero.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Ficha del prestador enfocado, debajo del ranking. */
+.terc-ficha { border-top: 1px solid #E7EEF9; padding-top: 10px; }
+.terc-ficha__tit { font-size: 0.8rem; font-weight: 800; color: #112F5B; margin-bottom: 6px; }
+.terc-ficha__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.terc-ficha__grid > div {
+    background: #F5F8FD; border: 1px solid #E7EEF9; border-radius: 8px;
+    padding: 4px 6px; text-align: center; font-size: 0.66rem; color: #7A90AD;
+    line-height: 1.25;
+}
+.terc-ficha__grid > div > span {
+    display: block; font-size: 0.85rem; font-weight: 800; color: #112F5B;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Barra de mezcla propio (azul) vs tercerizado (naranja) dentro de la tabla. */
+.terc-mix {
+    display: flex; height: 11px; width: 100%; min-width: 120px;
+    border-radius: 4px; overflow: hidden; background: #F0F4FA;
+}
+.terc-mix__p { background: #2058D0; }
+.terc-mix__t { background: #F99410; }
+
+/* Fila del cruce de oportunidad que amerita mirar. */
+.terc-fila--pregunta { background: #FFF8EE; }
+.terc-fila--pregunta .op-th-oper { background: #FFF8EE; }
+/* Fila "Otras N categorías": la cola agrupada, para que el TOTAL cierre con los KPIs. */
+.terc-fila--resto { background: #FAFBFD; font-style: italic; }
+.terc-fila--resto .op-th-oper { background: #FAFBFD; color: #7A90AD; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AYUDA CONTEXTUAL DE INFORMES (11/08/2026)
+   Botón "?" del título, ícono ⓘ por panel y el modal con índice lateral.
+   El modal hereda el tamaño/compactación del estándar --nt-dlg-* como todos.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Botón "Ayuda" del título del informe. */
+.ayuda-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 10px; border-radius: 999px; cursor: pointer;
+    background: #fff; border: 1px solid #CBD5E1; color: #45608A;
+    font-size: 0.72rem; font-weight: 700; font-family: inherit;
+    line-height: 1.6;
+}
+.ayuda-btn:hover { background: #EAF2FF; border-color: #003AA0; color: #003AA0; }
+
+/* Ícono ⓘ de la cabecera de un panel: discreto hasta que se lo busca. */
+.ayuda-ico {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; border-radius: 50%;
+    background: transparent; border: none; cursor: pointer;
+    color: #B6C4D8; font-family: inherit;
+}
+.ayuda-ico:hover { background: #EAF2FF; color: #003AA0; }
+
+/* ── El modal ── */
+.ayuda-rep-dialog .mud-dialog-content { padding-top: 10px; }
+
+.ayuda-rep__resumen {
+    display: flex; gap: 8px; align-items: flex-start;
+    background: #EEF2F9; border-left: 3px solid #003AA0; border-radius: 8px;
+    padding: 9px 12px; margin-bottom: 12px;
+    font-size: 0.84rem; color: #1F242C; line-height: 1.4;
+}
+.ayuda-rep__resumen .mud-icon-root { color: #F99410; flex-shrink: 0; }
+
+.ayuda-rep__cuerpo { display: grid; grid-template-columns: 208px 1fr; gap: 14px; }
+
+/* Índice lateral */
+.ayuda-rep__nav { display: flex; flex-direction: column; gap: 3px; }
+.ayuda-rep__navbtn {
+    display: flex; align-items: center; gap: 7px; text-align: left;
+    padding: 6px 9px; border-radius: 8px; cursor: pointer;
+    background: transparent; border: 1px solid transparent; color: #45608A;
+    font-size: 0.76rem; font-family: inherit; line-height: 1.25;
+}
+.ayuda-rep__navbtn:hover { background: #F2F7FF; }
+.ayuda-rep__navbtn--on { background: #EAF2FF; border-color: #B9CEEC; color: #003AA0; font-weight: 700; }
+.ayuda-rep__navbtn--lim { color: #B45309; }
+.ayuda-rep__navbtn--lim.ayuda-rep__navbtn--on { background: #FFF4E3; border-color: #F0C48A; color: #B45309; }
+.ayuda-rep__navbtn .mud-icon-root { flex-shrink: 0; }
+
+/* Secciones: scrollean dentro del modal, no mueven la página. */
+.ayuda-rep__secciones {
+    max-height: min(58vh, 520px); overflow-y: auto; padding-right: 6px;
+    scroll-behavior: smooth;
+}
+.ayuda-rep__sec {
+    border: 1px solid #E7EEF9; border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 10px; background: #fff;
+}
+.ayuda-rep__sec--dat { background: #FAFBFD; }
+.ayuda-rep__sec--lim { background: #FFF8EE; border-color: #F0C48A; }
+
+.ayuda-rep__h {
+    display: flex; align-items: center; gap: 6px; margin: 0 0 6px;
+    font-size: 0.88rem; font-weight: 800; color: #112F5B;
+}
+.ayuda-rep__sec--lim .ayuda-rep__h { color: #B45309; }
+.ayuda-rep__intro { margin: 0 0 8px; font-size: 0.78rem; color: #7A90AD; line-height: 1.35; }
+
+/* Glosario término → explicación. */
+.ayuda-rep__lista { margin: 0; }
+.ayuda-rep__lista dt {
+    font-size: 0.79rem; font-weight: 700; color: #112F5B; margin-top: 7px;
+}
+.ayuda-rep__lista dt:first-child { margin-top: 0; }
+.ayuda-rep__lista dd {
+    margin: 1px 0 0; font-size: 0.79rem; color: #45608A; line-height: 1.42;
+}
+
+/* Pantalla chica / terminal de 720p: el índice pasa arriba como chips. */
+@media (max-width: 900px), (max-height: 720px) {
+    .ayuda-rep__cuerpo { grid-template-columns: 1fr; }
+    .ayuda-rep__nav { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+    .ayuda-rep__navbtn { border-color: #DCE6F5; font-size: 0.72rem; padding: 4px 8px; }
+    .ayuda-rep__navbtn span { display: none; }   /* solo los íconos: entran los 6 en una fila */
+    .ayuda-rep__navbtn--on span { display: inline; }
+    .ayuda-rep__secciones { max-height: min(52vh, 420px); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PARÁMETROS DEL SISTEMA (/parametros) — parametro_empresa.scx + parametro.scx
+   Formulario de configuración en 2 solapas. Layout en grid auto-fill: los campos
+   se reacomodan solos y NUNCA se recortan (contrato responsive-nortur: el peor
+   caso real es 1088×614 px CSS = 1360×768 con Windows al 125%).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Grilla de campos: mínimo 250px por campo → a 1040px útiles entran 4 por fila,
+   a 1088 CSS entran 3, y en pantallas angostas caen a 1 sin cortar ninguna etiqueta. */
+.param-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 10px 14px;
+    align-items: start;
+}
+
+/* Variante para campos largos (leyendas, firma): 2 columnas como máximo. */
+.param-grid--ancho {
+    grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+}
+
+/* Un campo que ocupa 2 columnas de la grilla (valores largos: el remitente del SMTP).
+   Si solo entra 1 columna, el span no rompe nada: la grilla lo deja a ancho completo. */
+.param-col2 { grid-column: span 2; }
+@media (max-width: 620px) { .param-col2 { grid-column: span 1; } }
+
+/* Los fondos y el borde de los campos de esta pantalla NO se definen acá: son el estándar
+   de toda la app (bloque "CAMPOS DE FORMULARIO" arriba de todo, variables --nt-campo*).
+   Esta pantalla fue donde se diseñó ese estándar, pero ya no tiene reglas propias. */
+
+/* Título de cada grupo de campos. */
+.param-grupo {
+    display: flex; align-items: center; gap: 6px;
+    font-weight: 700; color: #112F5B;
+    margin: 18px 0 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #E3EBF7;
+}
+.param-tabs .param-grupo:first-of-type { margin-top: 0; }
+.param-info { color: #7A90AD; }
+
+/* Logo: ruta a la izquierda, vista previa a la derecha (como el form FoxPro). */
+.param-logo {
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start;
+}
+.param-logo__datos { flex: 1 1 320px; min-width: 260px; }
+.param-logo__preview {
+    flex: 0 0 auto;
+    width: 230px; height: 134px;
+    border: 1px solid #DCE6F5; border-radius: 8px;
+    background: #F7FAFF;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+}
+.param-logo__preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.param-logo__vacio {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    color: #93A7C2; text-align: center; padding: 8px; line-height: 1.3;
+}
+
+/* Fila de la prueba de correo. */
+.param-probar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+    padding: 10px 12px;
+    background: #F7FAFF; border: 1px solid #E3EBF7; border-radius: 10px;
+}
+
+/* Botonera inferior. */
+.param-acciones {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    padding: 10px 14px; border-radius: 12px;
+}
+
+/* Vista previa de las últimas filas de la tabla del GPS (solapa GPS de /parametros).
+   Tabla ajena de ancho desconocido → scroll horizontal propio, sin desbordar la página. */
+.param-gps-preview {
+    max-height: 320px; overflow: auto;
+    border: 1px solid #DCE6F5; border-radius: 8px; background: #fff;
+}
+.param-gps-preview table { border-collapse: collapse; font-size: 0.74rem; white-space: nowrap; }
+.param-gps-preview th, .param-gps-preview td {
+    padding: 4px 8px; border-bottom: 1px solid #EEF3FB; text-align: left;
+}
+.param-gps-preview thead th {
+    position: sticky; top: 0; z-index: 1;
+    background: #F2F6FC; color: #112F5B; font-weight: 700;
+}
+.param-gps-preview tbody tr:hover td { background: #F7FAFF; }

@@ -1,4 +1,4 @@
-@page "/viajes-por-chofer"
+﻿@page "/viajes-por-chofer"
 @using ApexCharts
 @using MudColor = MudBlazor.Color
 @using MudSize = MudBlazor.Size
@@ -9,6 +9,7 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject IDialogService DialogService
+@inject ISnackbar Snackbar
 @rendermode InteractiveServer
 
 <PageTitle>BusLink</PageTitle>
@@ -19,7 +20,7 @@
         Viajes por chofer
     </MudText>
     <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
-        Metrocar Nortur · actividad diaria de los choferes: viajes, turismo, cabecera y kilómetros
+        Nortur · actividad diaria de los choferes: viajes, tipo de servicio y kilómetros
     </MudText>
 </div>
 
@@ -36,31 +37,98 @@
                        MinDate="_min" MaxDate="_max" DateFormat="dd/MM/yyyy"
                        PickerVariant="PickerVariant.Dialog" Editable="true"
                        Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
+        @* Aviso en vivo: el rango tiene tope (ver RangoMaximoDias). Se muestra ANTES de apretar
+           "Aplicar filtros" para que el usuario no crea que la pantalla se rompió. *@
+        @if (RangoDiasElegidos > RangoMaximoDias)
+        {
+            <MudTooltip Text="@($"Elegiste {RangoDiasElegidos} días. El máximo es {RangoMaximoDias} (3 meses).")">
+                <span class="rfs-rango-alerta">
+                    <MudIcon Icon="@Icons.Material.Filled.WarningAmber" Size="MudSize.Small" />
+                    máx. @RangoMaximoDias días
+                </span>
+            </MudTooltip>
+        }
     </div>
 
-    @* Internos: suma el cliente interno NORTUR (guardias / traslados internos). Excluido por
-       defecto, como en todos los informes FoxPro. *@
-    <MudSwitch T="bool" @bind-Value="_internos" Color="MudColor.Primary" Size="MudSize.Small"
-               Label="Internos" LabelPlacement="Placement.End" Style="flex-shrink:0;" />
-
-    @* Contratados: el FoxPro fijaba solo PROPIO. Switch para sumar los CONTRATADO (fleteros). *@
-    <MudSwitch T="bool" @bind-Value="_contratados" Color="MudColor.Primary" Size="MudSize.Small"
-               Label="Incluir contratados" LabelPlacement="Placement.End" Style="flex-shrink:0;" />
-
+    @* Métrica: botonera segmentada dentro de un recuadro gris (20/08/2026). Antes eran cuatro
+       radios sueltos que se perdían entre los combos. NO va a la base: cambia el tablero al
+       instante, por eso no pinta el botón "Aplicar filtros" (ver HayCambiosSinAplicar).
+       Sin rótulo visible (pedido del usuario): los cuatro nombres ya dicen qué es, y el rótulo
+       arriba empujaba el bloque hacia abajo y lo desalineaba de los combos. El nombre queda en
+       el `aria-label` para quien navegue con lector de pantalla. *@
     <div class="rfs-metrica">
-        <MudRadioGroup T="string" Value="_metrica" ValueChanged="CambiarMetrica">
-            <MudRadio T="string" Value="@("Viajes")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Viajes</MudRadio>
-            <MudRadio T="string" Value="@("Km")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Km</MudRadio>
-            <MudRadio T="string" Value="@("Pax")" Color="MudColor.Primary" Size="MudSize.Small" Dense="true">Pax</MudRadio>
-        </MudRadioGroup>
+        <div class="rfs-seg" role="group" aria-label="Métrica">
+            @foreach (var m in Metricas)
+            {
+                var mm = m;
+                <button type="button"
+                        class="rfs-seg__btn @(_metrica == mm ? "rfs-seg__btn--on" : "")"
+                        aria-pressed="@(_metrica == mm ? "true" : "false")"
+                        @onclick="() => CambiarMetrica(mm)">@mm</button>
+            }
+        </div>
     </div>
 
-    <span style="flex:1 1 auto;"></span>
+    @* Tipo de servicio (18/08/2026): reemplaza el switch "Internos". Mismo esquema de 3
+       categorías que Reservas por banda horaria — Empresa (antes "Cabecera", nombre engañoso
+       que se confundía con el modo de facturación CABECERA_KM/SERV) / Turismo / Nortur (ex
+       "Interno", renombrado 19/08/2026).
+       Default (20/08/2026): las TRES tildadas — ver el comentario de `_categoriasSel`.
+       OJO: este filtro va A LA BASE (define qué se trae). El selector de tipo de servicio que
+       está sobre la grilla es otra cosa: enfoca en memoria lo ya traído. *@
+    @* El ancho va en este contenedor y NO en el Style del MudSelect — ver app.css § .rfs-campo
+       (ahí el estilo cae en un div interno y el ítem flex sigue midiéndose por contenido).
+       182px era el mínimo medido para que entrara el peor texto real, "Empresa, Turismo";
+       218px es ese mínimo +20%, que es el aire que pidió el usuario. *@
+    <div class="rfs-campo" style="width:218px;">
+        <MudSelect T="string" Label="Tipo de servicio" MultiSelection="true" @bind-SelectedValues="_categoriasSel"
+                   SelectAll="true" SelectAllText="Todos" Dense="true"
+                   Margin="Margin.Dense" Variant="Variant.Outlined"
+                   MultiSelectionTextFunc="@(s => s.Count == ReportService.CategoriasServicio.Count ? "Todos" : string.Join(", ", s))">
+            @foreach (var c in ReportService.CategoriasServicio)
+            {
+                <MudSelectItem T="string" Value="@c">
+                    <span class="vpc-dot" style="@($"background:{ColorCat(c)};")" aria-hidden="true"></span>@c
+                </MudSelectItem>
+            }
+        </MudSelect>
+    </div>
 
+    @* Tipo de chofer (18/08/2026): reemplaza el switch "Incluir contratados". Default: solo
+       Propio tildado — igual que el switch anterior (el FoxPro fijaba tipo_chofe='PROPIO'). *@
+    <div class="rfs-campo" style="width:170px;">
+        <MudSelect T="string" Label="Tipo de chofer" MultiSelection="true" @bind-SelectedValues="_tipoChoferSel"
+                   SelectAll="true" SelectAllText="Todos" Dense="true"
+                   Margin="Margin.Dense" Variant="Variant.Outlined"
+                   MultiSelectionTextFunc="@(s => s.Count == TiposChofer.Length ? "Todos" : string.Join(", ", s))">
+            @foreach (var t in TiposChofer)
+            {
+                <MudSelectItem T="string" Value="@t">@t</MudSelectItem>
+            }
+        </MudSelect>
+    </div>
+
+    @* Tipo de vehículo (18/08/2026, nuevo): en qué unidades trabajó cada chofer. Default: todos. *@
+    <div class="rfs-campo" style="width:180px;">
+        <MudSelect T="string" Label="Tipo de vehículo" MultiSelection="true" @bind-SelectedValues="_vehiculosSel"
+                   SelectAll="true" SelectAllText="Todos" Dense="true"
+                   Margin="Margin.Dense" Variant="Variant.Outlined"
+                   MultiSelectionTextFunc="@(s => s.Count == _vehiculos.Count ? "Todos" : $"{s.Count} de {_vehiculos.Count}")">
+            @foreach (var v in _vehiculos)
+            {
+                <MudSelectItem T="string" Value="@v.Id">@v.Nombre</MudSelectItem>
+            }
+        </MudSelect>
+    </div>
+
+    @* Se pinta de naranja cuando hay filtros tocados sin aplicar: sin eso, el usuario cambia
+       una fecha, no pasa nada en pantalla (la query no salió) y cree que el informe miente. *@
     <MudButton Variant="Variant.Filled" Color="MudColor.Primary"
                OnClick="Cargar" Disabled="_cargando" StartIcon="@Icons.Material.Filled.Search"
-               Style="border-radius:8px; height:40px; text-transform:none; flex-shrink:0;">
-        @(_cargando ? "Cargando..." : "Aplicar filtros")
+               Class="@(HayCambiosSinAplicar ? "rfs-aplicar--pend" : "")"
+               title="@(HayCambiosSinAplicar ? "Hay filtros cambiados sin aplicar" : "")"
+               Style="border-radius:8px; height:40px; text-transform:none; flex-shrink:0; margin-left:auto;">
+        @(_cargando ? "Cargando..." : HayCambiosSinAplicar ? "Aplicar filtros •" : "Aplicar filtros")
     </MudButton>
 </MudPaper>
 
@@ -74,59 +142,254 @@ else if (_filas.Count == 0)
 }
 else
 {
+    @* ── Alerta: choferes en actividad con documentación por vencer ──
+       Separada por GRAVEDAD (20/08/2026, elegido por el usuario): "ya está en infracción" y
+       "hay que renovar" son dos problemas distintos y se atienden en momentos distintos. Cada
+       contador es un botón que abre el detalle YA FILTRADO por esa gravedad. *@
+    @if (_choferesVencidos.Count > 0)
+    {
+        <div class="vpc-doc-aviso mb-3">
+            <MudIcon Icon="@Icons.Material.Filled.Badge" Class="vpc-doc-aviso__ico" />
+            <span class="vpc-doc-aviso__txt">
+                <b>Documentación de choferes</b> — sobre @_choferesConActividad conductores en actividad en el período.
+            </span>
+            @if (_docVencidos > 0)
+            {
+                <button type="button" class="vpc-doc-chip vpc-doc-chip--rojo"
+                        title="Ver solo los choferes con documentación vencida"
+                        @onclick="@(() => VerVencimientos("vencidos"))">
+                    <b>@_docVencidos</b> vencido@(_docVencidos == 1 ? "" : "s")
+                </button>
+            }
+            @if (_docPorVencer > 0)
+            {
+                <button type="button" class="vpc-doc-chip vpc-doc-chip--ambar"
+                        title="@($"Ver solo los que vencen dentro de {_diasAvisoChofer} días")"
+                        @onclick="@(() => VerVencimientos("porvencer"))">
+                    <b>@_docPorVencer</b> vence@(_docPorVencer == 1 ? "" : "n") en @_diasAvisoChofer días
+                </button>
+            }
+            <MudButton Variant="Variant.Outlined" Color="MudColor.Primary" Size="MudSize.Small"
+                       OnClick="@(() => VerVencimientos("todos"))"
+                       Style="text-transform:none; border-radius:8px; flex-shrink:0;">
+                Ver detalle
+            </MudButton>
+        </div>
+    }
+
     @* ── KPIs ── con foco activo se recalculan al subconjunto enfocado (cross-filter) *@
     <div class="rfs-kpis mb-3">
-        <KpiCard Label="@KpiTotalLabel" Value="@Fmt(_totalMetrica)"
-                 Sub="@($"prom. {Fmt(_promedioDia)} {UnidadMetrica}/día activo")" Color="@NorturColors.Azul" />
+        <KpiCard Label="@KpiTotalLabel" Value="@FmtMetrica(_totalMetrica)"
+                 Sub="@($"prom. {FmtMetrica(_promedioDia)} {UnidadMetrica}/día activo")" Color="@NorturColors.Azul" />
         <KpiCard Label="Choferes con actividad" Value="@_choferesActivos.ToString()"
                  Sub="@($"{Fmt(_diasFranco)} días de franco")" Color="@NorturColors.Verde" />
         <KpiCard Label="Chofer líder" Value="@_choferLider"
-                 Sub="@($"{Fmt(_maxChofer)} {UnidadMetrica}")" Color="@NorturColors.Naranja" />
-        <KpiCard Label="Turismo / Cabecera" Value="@($"{Fmt(_totalTurismo)} / {Fmt(_totalCabecera)}")"
-                 Sub="@($"{_pctTurismo}% turismo")" Color="@NorturColors.Rojo" />
+                 Sub="@($"{FmtMetrica(_maxChofer)} {UnidadMetrica}")" Color="@NorturColors.Naranja" />
+        <KpiCard Label="Empresa / Turismo / Nortur" Value="@($"{Fmt(_mixEmpresa)} / {Fmt(_mixTurismo)} / {Fmt(_mixNortur)}")"
+                 Sub="@MixSub" Color="@NorturColors.Rojo"
+                 Title="Mezcla de tipos de servicio (viajes) — no cambia con el foco de tipo de servicio, para poder compararlos" />
+        <KpiCard Label="Choferes sin actividad" Value="@_choferesInactivos.Count.ToString()"
+                 Sub="@($"de {_rosterActivo.Count} en el padrón")"
+                 Color="@(_choferesInactivos.Count > 0 ? NorturColors.Rojo : NorturColors.Verde)"
+                 OnClick="VerInactivos" Title="Clic para ver el listado" />
     </div>
 
     <div @key="_chartsKey">
-        @* ── Evolución diaria (área): turismo vs cabecera ── *@
-        <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
-            @CabeceraFoco("Evolución diaria — turismo vs cabecera")
-            <ApexChart TItem="EvolItem" Options="_optsEvol" Height="300" @ref="_evolChart">
-                <ApexPointSeries TItem="EvolItem" Items="_evolData" Name="Turismo"
-                                 SeriesType="SeriesType.Area" XValue="@(x => x.Dia)" YValue="@(x => x.Turismo)" />
-                <ApexPointSeries TItem="EvolItem" Items="_evolData" Name="Cabecera"
-                                 SeriesType="SeriesType.Area" XValue="@(x => x.Dia)" YValue="@(x => x.Cabecera)" />
-            </ApexChart>
-        </MudPaper>
+        @* ── Evolución diaria (área): Empresa / Turismo / Nortur ──
+           Oculta momentáneamente (19/08/2026, pedido del frente final) — se decide después si
+           vuelve. El código y los datos (_evolData/_evolChart) quedan intactos: reactivar es
+           volver MostrarEvolucionDiaria a true. *@
+        @if (MostrarEvolucionDiaria)
+        {
+            <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
+                @CabeceraFoco("Evolución diaria — tipo de servicio")
+                <ApexChart TItem="EvolItem" Options="_optsEvol" Height="300" @ref="_evolChart">
+                    <ApexPointSeries TItem="EvolItem" Items="_evolData" Name="Empresa"
+                                     SeriesType="SeriesType.Area" XValue="@(x => x.Dia)" YValue="@(x => x.Empresa)" />
+                    <ApexPointSeries TItem="EvolItem" Items="_evolData" Name="Turismo"
+                                     SeriesType="SeriesType.Area" XValue="@(x => x.Dia)" YValue="@(x => x.Turismo)" />
+                    <ApexPointSeries TItem="EvolItem" Items="_evolData" Name="Nortur"
+                                     SeriesType="SeriesType.Area" XValue="@(x => x.Dia)" YValue="@(x => x.Nortur)" />
+                </ApexChart>
+            </MudPaper>
+        }
 
-        @* ── Ranking de choferes + donut turismo/cabecera ── *@
+        @* ── Ranking de choferes + donut tipo de servicio ── *@
         <MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
             <MudItem xs="12" md="7" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
-                    <div class="rfs-bar-head mb-2">
-                        <div class="rfs-bar-title">
-                            <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@($"{UnidadMetricaCap} por chofer — {TituloTopN}")</MudText>
-                            <MudSelect T="int" Value="_topN" ValueChanged="CambiarTopN"
-                                       Label="Mostrar" Dense="true" Margin="Margin.Dense"
-                                       Variant="Variant.Outlined" Class="rfs-topn-select">
-                                <MudSelectItem T="int" Value="10">Top 10</MudSelectItem>
-                                <MudSelectItem T="int" Value="15">Top 15</MudSelectItem>
-                                <MudSelectItem T="int" Value="20">Top 20</MudSelectItem>
-                                <MudSelectItem T="int" Value="999">Todos (@_rankingChoferes.Count)</MudSelectItem>
-                            </MudSelect>
+                    @* Todo lo de adentro de este div va al PDF (mismo patrón que el comprobante
+                       de Liquidación a Clientes — ver LiquidacionResumenDialog.razor). El
+                       selector "Mostrar" y los chips de foco llevan `no-print`: son controles de
+                       pantalla, no datos del reporte. La tabla de abajo del gráfico es la MISMA
+                       información en texto — imprescindible porque un PDF no es interactivo (no
+                       se puede pasar el mouse por una barra para leer el valor exacto). *@
+                    <div id="vpc-barras-print" class="pdf-hoja">
+                        @* ══════ ENCABEZADO DEL DOCUMENTO — solo aparece en el PDF ══════
+                           Va con logos <img> (NO background-image): Chrome NO imprime fondos
+                           salvo que el usuario tilde "Gráficos de fondo", pero las imágenes
+                           y los bordes SÍ se imprimen siempre. Por eso la banda es blanca con
+                           filete de color en vez de un bloque de color macizo. *@
+                        <div class="pdf-doc">
+                            <div class="pdf-doc__marca">
+                                <img src="images/logo.png" alt="NORTUR" class="pdf-doc__logo-nortur" />
+                                <span class="pdf-doc__div" aria-hidden="true"></span>
+                                <img src="images/buslink_icon_e.png" alt="" class="pdf-doc__logo-buslink" />
+                                <span class="pdf-doc__marca-txt">BUSLINK</span>
+                                <span class="pdf-doc__spacer"></span>
+                                <span class="pdf-doc__emitido">Emitido @DateTime.Now.ToString("dd/MM/yyyy HH:mm")</span>
+                            </div>
+
+                            <div class="pdf-doc__titulo">@($"{UnidadMetricaCap} por chofer")</div>
+                            <div class="pdf-doc__filtros">@FiltrosAplicadosTexto()</div>
+
+                            @* Franja de KPIs — los mismos cuatro de la pantalla. Sin fondo de
+                               color (ver arriba): filete lateral + valor en el color de marca. *@
+                            <div class="pdf-doc__kpis">
+                                <div class="pdf-kpi" style="border-left-color:@NorturColors.Azul;">
+                                    <span class="pdf-kpi__lbl">@KpiTotalLabel</span>
+                                    <span class="pdf-kpi__val">@FmtMetrica(_totalMetrica)</span>
+                                    <span class="pdf-kpi__sub">@($"prom. {FmtMetrica(_promedioDia)} {UnidadMetrica}/día activo")</span>
+                                </div>
+                                <div class="pdf-kpi" style="border-left-color:@NorturColors.Verde;">
+                                    <span class="pdf-kpi__lbl">Choferes con actividad</span>
+                                    <span class="pdf-kpi__val">@_choferesActivos</span>
+                                    <span class="pdf-kpi__sub">@($"{Fmt(_diasFranco)} días de franco")</span>
+                                </div>
+                                <div class="pdf-kpi" style="border-left-color:@NorturColors.Naranja;">
+                                    <span class="pdf-kpi__lbl">Chofer líder</span>
+                                    <span class="pdf-kpi__val pdf-kpi__val--txt">@_choferLider</span>
+                                    <span class="pdf-kpi__sub">@($"{FmtMetrica(_maxChofer)} {UnidadMetrica}")</span>
+                                </div>
+                                <div class="pdf-kpi" style="border-left-color:@NorturColors.Rojo;">
+                                    <span class="pdf-kpi__lbl">Empresa / Turismo / Nortur</span>
+                                    <span class="pdf-kpi__val">@($"{Fmt(_mixEmpresa)} / {Fmt(_mixTurismo)} / {Fmt(_mixNortur)}")</span>
+                                    <span class="pdf-kpi__sub">@MixSub</span>
+                                </div>
+                            </div>
+
+                            @if (PdfGraficoRecortado)
+                            {
+                                <div class="pdf-doc__nota">
+                                    Gráfico: top @TopMaxPdf de @_pdfFilas.Count · la tabla de abajo incluye los @_pdfFilas.Count
+                                </div>
+                            }
                         </div>
-                        @ChipsFoco
+
+                        <div class="rfs-bar-head mb-2 no-print">
+                            <div class="rfs-bar-title">
+                                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@($"{UnidadMetricaCap} por chofer — {TituloTopN}")</MudText>
+                                <MudSelect T="int" Value="_topN" ValueChanged="CambiarTopN"
+                                           Label="Mostrar" Dense="true" Margin="Margin.Dense"
+                                           Variant="Variant.Outlined" Class="rfs-topn-select no-print">
+                                    <MudSelectItem T="int" Value="10">Top 10</MudSelectItem>
+                                    <MudSelectItem T="int" Value="15">Top 15</MudSelectItem>
+                                    <MudSelectItem T="int" Value="20">Top 20</MudSelectItem>
+                                    <MudSelectItem T="int" Value="999">Todos (@_rankingChoferes.Count)</MudSelectItem>
+                                </MudSelect>
+                            </div>
+                            <div class="rfs-bar-head__der no-print">
+                                @ChipsFoco
+                                @* Botón con TEXTO, no solo ícono (20/08/2026): como ícono suelto
+                                   de 28px pasaba desapercibido. Mismo formato que el "Descargar
+                                   Excel" de la grilla —convención de la app: la acción se
+                                   nombra— pero Outlined y en rojo, para que no le compita al
+                                   verde relleno del Excel. Muestra "Exportando…" mientras dura
+                                   el remonte del gráfico en modo PDF (ver ExportarBarrasPdf). *@
+                                <MudButton Variant="Variant.Outlined" Size="MudSize.Small"
+                                           StartIcon="@Icons.Material.Filled.PictureAsPdf"
+                                           OnClick="ExportarBarrasPdf"
+                                           Disabled="_barItems.Count == 0 || _exportando"
+                                           Class="rfs-pdf-btn" title="Exportar este gráfico a PDF">
+                                    @(_exportando ? "Exportando…" : "PDF")
+                                </MudButton>
+                            </div>
+                        </div>
+                        @* Barras APILADAS por tipo de servicio (19/08/2026, pedido del frente final):
+                           el largo de cada barra sigue siendo el total del chofer (mismo ranking de
+                           siempre), pero dividida en 3 tramos de color según cuánto hizo de cada
+                           categoría — mismos colores fijos que la torta y el resto de la app. El
+                           color ya NO identifica al chofer (antes 15 hues por chofer); identifica la
+                           categoría, así que un clic en un tramo enfoca por tipo de servicio, igual
+                           que un clic en la torta. Enfocar por CHOFER se hace desde la tabla de abajo
+                           (clic en el nombre), no desde acá.
+                           @key propio: al cambiar el foco de tipo de servicio el ranking se
+                           RE-ORDENA (cambia la forma del gráfico), y eso pide remontar. *@
+                        @* Width fijo SOLO en modo PDF: ApexCharts hornea el ancho en píxeles
+                           dentro del <svg> al renderizar, así que el gráfico llegaba al PDF con
+                           el ancho del panel de pantalla (~830px) y dejaba un cuarto de hoja
+                           vacío a la derecha. 1040px ≈ A4 apaisada (1123px) menos el padding
+                           de `.pdf-hoja`. En pantalla sigue siendo responsivo (null = auto). *@
+                        <ApexChart @key="_barsKey" TItem="BarStackItem" Options="_optsBarCho" Height="@_altoBarras"
+                                   Width="@(_modoPdf ? AnchoBarrasPdf : null)"
+                                   OnDataPointSelection="OnBarChoSelection" OnLegendClicked="OnBarLegendClicked">
+                            <ApexPointSeries TItem="BarStackItem" Items="_barItems" Name="Empresa"
+                                             SeriesType="SeriesType.Bar" XValue="@(x => x.Chofer)" YValue="@(x => x.Empresa)" />
+                            <ApexPointSeries TItem="BarStackItem" Items="_barItems" Name="Turismo"
+                                             SeriesType="SeriesType.Bar" XValue="@(x => x.Chofer)" YValue="@(x => x.Turismo)" />
+                            <ApexPointSeries TItem="BarStackItem" Items="_barItems" Name="Nortur"
+                                             SeriesType="SeriesType.Bar" XValue="@(x => x.Chofer)" YValue="@(x => x.Nortur)" />
+                        </ApexChart>
+
+                        @* Tabla del detalle numérico — SOLO visible en el PDF (ver .vpc-print-tabla
+                           en app.css, @media print). En pantalla el gráfico ya cumple ese rol; en
+                           papel hace falta el número exacto de cada chofer.
+                           Sale de `_pdfFilas` (la selección COMPLETA), no de `_barItems`: el
+                           gráfico puede venir recortado al top que entra en una hoja, la tabla
+                           nunca. El <thead> se repite solo en cada hoja (table-header-group). *@
+                        <table class="vpc-print-tabla">
+                            <caption>Detalle por chofer — @_pdfFilas.Count chofer@(_pdfFilas.Count == 1 ? "" : "es")</caption>
+                            <thead>
+                                <tr>
+                                    <th style="text-align:left;">Chofer</th>
+                                    <th>Empresa</th>
+                                    <th>Turismo</th>
+                                    <th>Nortur</th>
+                                    <th>Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var b in _pdfFilas)
+                                {
+                                    <tr>
+                                        <td style="text-align:left;">@b.Chofer</td>
+                                        <td>@FmtMetrica((int)b.Empresa)</td>
+                                        <td>@FmtMetrica((int)b.Turismo)</td>
+                                        <td>@FmtMetrica((int)b.Nortur)</td>
+                                        <td><b>@FmtMetrica((int)(b.Empresa + b.Turismo + b.Nortur))</b></td>
+                                    </tr>
+                                }
+                                @* Fila de cierre: sin esto el informe tenía 101 filas y ningún
+                                   total. Va como última fila del tbody (NO en <tfoot>: en
+                                   impresión el tfoot se repite en TODAS las hojas). *@
+                                <tr class="vpc-print-tot">
+                                    <td style="text-align:left;">TOTAL</td>
+                                    <td>@FmtMetrica((int)_pdfFilas.Sum(x => x.Empresa))</td>
+                                    <td>@FmtMetrica((int)_pdfFilas.Sum(x => x.Turismo))</td>
+                                    <td>@FmtMetrica((int)_pdfFilas.Sum(x => x.Nortur))</td>
+                                    <td>@FmtMetrica((int)_pdfFilas.Sum(x => x.Empresa + x.Turismo + x.Nortur))</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <p class="vpc-print-pie">
+                            @* Solo "Buslink": el nombre Metrocar es el del sistema viejo que se
+                               está migrando y NO va en material de marca (regla del usuario,
+                               20/08/2026). Sigue siendo válido nombrarlo cuando se habla del
+                               FoxPro en sí ("esto se carga en el Metrocar"). *@
+                            Buslink · emitido @DateTime.Now.ToString("dd/MM/yyyy HH:mm")
+                            · @FiltrosAplicadosTexto()
+                            · vista en pantalla, no reemplaza un comprobante oficial
+                        </p>
                     </div>
-                    <ApexChart TItem="BarItem" Options="_optsBarCho" Height="@_altoBarras" @ref="_barChoChart"
-                               OnDataPointSelection="OnBarChoSelection">
-                        <ApexPointSeries TItem="BarItem" Items="_barItems" Name="@UnidadMetricaCap"
-                                         SeriesType="SeriesType.Bar" XValue="@(x => x.Chofer)" YValue="@(x => x.Valor)" />
-                    </ApexChart>
                 </MudPaper>
             </MudItem>
             <MudItem xs="12" md="5" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
-                    @CabeceraFoco("Turismo vs cabecera")
-                    <ApexChart TItem="DonutItem" Options="_optsPie" Height="300" @ref="_pieChart">
+                    @CabeceraFoco("Tipo de servicio")
+                    @* Clickeable: enfoca el tablero en un tipo de servicio (2ª dimensión del
+                       cross-filter). El clic en la leyenda hace lo mismo. *@
+                    <ApexChart TItem="DonutItem" Options="_optsPie" Height="300" @ref="_pieChart"
+                               OnDataPointSelection="OnPieCatSelection" OnLegendClicked="OnPieCatLegendClicked">
                         <ApexPointSeries TItem="DonutItem" Items="_donutOrigen" Name="Viajes"
                                          SeriesType="SeriesType.Donut" XValue="@(x => x.Label)" YValue="@(x => x.Valor)" />
                     </ApexChart>
@@ -135,84 +398,205 @@ else
         </MudGrid>
     </div>
 
-    @* ── Tabla pivote chofer × día ── *@
+    @* ── Tabla pivote chofer × día/mes ── *@
     <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px;">
-        <div class="d-flex justify-space-between align-center flex-wrap mb-3" style="gap:8px;">
-            <div>
-                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
-                    Detalle: @UnidadMetrica por chofer y día
-                </MudText>
-                <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
-                    Click en una celda para ver los viajes uno por uno · click en el nombre de un chofer para enfocar el tablero · <span style="color:#B08900;">franco</span> = día sin viajes
-                </MudText>
+        @* Cabecera de la grilla (20/08/2026 — INVERTIDA a pedido del usuario): los CONTROLES
+           van a la izquierda y la INFORMACIÓN a la derecha. Antes era al revés.
+           Orden de los controles, de izquierda a derecha: BUSCAR · VISTA (Agrupar por · Tipo
+           de servicio · Métrica), separados por un filete fino para que se lea la jerarquía.
+           El Excel sigue al extremo derecho, junto a los títulos: es la única acción, y esa
+           es la convención de la app (ver skill blazor-nortur § barra de filtros). *@
+        <div class="vpc-head">
+            <div class="vpc-toolbar">
+                @* ── Grupo BUSCAR (1º) ── Filtra la grilla EN VIVO mientras se tipea (Immediate),
+                   en memoria y sin re-query. Va SIN etiqueta flotante a propósito: con la lupa y
+                   el placeholder ya se lee como buscador, y la etiqueta lo disfrazaba de campo de
+                   formulario más (era el control más ancho de la barra y desbalanceaba todo). *@
+                <div class="vpc-search @(BuscandoChofer ? "vpc-search--activo" : "")">
+                    <MudTextField T="string" Value="_buscarChofer"
+                                  ValueChanged="OnBuscarChoferChanged" Immediate="true"
+                                  Clearable="true" Margin="Margin.Dense"
+                                  Variant="Variant.Outlined"
+                                  Placeholder="Buscar chofer…"
+                                  Adornment="MudBlazor.Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Search" />
+                    @if (BuscandoChofer)
+                    {
+                        <span class="vpc-search__count">
+                            @_pivChoferesMostrados.Count de @_pivChoferes.Count choferes
+                        </span>
+                    }
+                </div>
+
+                <span class="vpc-toolbar__sep" aria-hidden="true"></span>
+
+                @* ── Grupo VISTA: los tres combos que definen cómo se arma la grilla ── *@
+                <div class="vpc-toolbar__group">
+                    @* (2º) Métrica: QUÉ número muestra cada celda. Va primero del grupo porque es
+                       la pregunta de más arriba de todas — define qué se está mirando; recién
+                       después importa cómo se agrupa y qué se enfoca.
+                       Es el MISMO `_metrica` que los radios de la barra de filtros de arriba: los
+                       dos controles se sincronizan solos (mismo campo, mismo handler). *@
+                    <MudSelect T="string" Label="Métrica" Value="_metrica" ValueChanged="CambiarMetrica"
+                               Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:120px;">
+                        <MudSelectItem T="string" Value="@("Viajes")">Viajes</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("Km")">Km</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("Pax")">Pax</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("Horas")">Horas</MudSelectItem>
+                    </MudSelect>
+
+                    @* (3º) Agrupación de las columnas: día (grano fino) o mes (rangos largos). Es
+                       un recálculo en MEMORIA — cambia al instante, sin volver a la base. *@
+                    <MudSelect T="bool" Label="Agrupar por" Value="_porMes" ValueChanged="CambiarAgrupacion"
+                               Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:130px;">
+                        <MudSelectItem T="bool" Value="@false">Día</MudSelectItem>
+                        <MudSelectItem T="bool" Value="@true">Mes</MudSelectItem>
+                    </MudSelect>
+
+                    @* (4º) Tipo de servicio EN MEMORIA: enfoca todo el tablero (es la misma perilla
+                       que el clic en la torta). No re-consulta la base.
+                       Cada opción lleva el punto de color de su categoría — el mismo azul/naranja/
+                       verde que usan la torta, las barras y ahora la grilla ("Todos" es tricolor).
+                       Alcanza con ponerlo en los ítems: MudSelect 9.5 dibuja el ChildContent del
+                       ítem elegido también en el campo cerrado (verificado en captura). *@
+                    <div class="vpc-catsel">
+                        <MudSelect T="string" Label="Tipo de servicio" Value="@(_categoriaFocus ?? "")"
+                                   ValueChanged="CambiarCategoriaFoco"
+                                   Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:150px;">
+                            <MudSelectItem T="string" Value="@("")">
+                                <span class="vpc-dot vpc-dot--tri" aria-hidden="true"></span>Todos
+                            </MudSelectItem>
+                            @foreach (var c in _catsPresentes)
+                            {
+                                <MudSelectItem T="string" Value="@c">
+                                    <span class="vpc-dot" style="@($"background:{ColorCat(c)};")" aria-hidden="true"></span>@c
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+                    </div>
+                </div>
             </div>
-            <MudButton Variant="Variant.Filled" Color="MudColor.Success"
-                       StartIcon="@Icons.Material.Filled.Download"
-                       OnClick="DescargarExcel" Disabled="_cargandoDet"
-                       Style="border-radius:8px; text-transform:none;">
-                Descargar Excel
-            </MudButton>
+
+            @* ── Bloque de INFORMACIÓN (derecha): qué se está mirando + la única acción ── *@
+            <div class="vpc-head__right">
+                <div class="vpc-head__titles">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
+                        Detalle: @UnidadMetrica por chofer y @(_porMes ? "mes" : "día")
+                        @if (_categoriaFocus is not null)
+                        {
+                            <span style="@($"color:{ColorCat(_categoriaFocus)};")"> · solo @_categoriaFocus</span>
+                        }
+                    </MudText>
+                    @* El "mostrando X de Y" no vive acá: cuelga debajo del buscador, que es donde
+                       el usuario está mirando cuando tipea. *@
+                    <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                        Click en una celda para ver los viajes uno por uno · click en el nombre de un chofer para enfocar el tablero · <span style="color:#B08900;">F</span> = @(_porMes ? "mes" : "día") sin trabajar
+                    </MudText>
+                </div>
+
+                <MudButton Variant="Variant.Filled" Color="MudColor.Success"
+                           StartIcon="@Icons.Material.Filled.Download"
+                           OnClick="DescargarExcel" Disabled="_cargandoDet"
+                           Class="vpc-toolbar__excel"
+                           Style="border-radius:8px; text-transform:none;">
+                    Descargar Excel
+                </MudButton>
+            </div>
         </div>
         @if (_cargandoDet)
         {
             <MudProgressLinear Indeterminate="true" Color="MudColor.Primary" Class="mb-2" Style="border-radius:4px;" />
         }
-        <div class="rfs-tabla-wrap">
+        @* Con una categoría enfocada, TODA la grilla toma su color (borde, encabezados y pie):
+           de un vistazo se ve que lo que hay abajo es un subconjunto, y cuál. *@
+        <div class="rfs-tabla-wrap @(_categoriaFocus is not null ? "rfs-cat-foco" : "")"
+             style="@(_categoriaFocus is not null ? $"--nt-cat:{ColorCat(_categoriaFocus)};" : "")">
             <table class="rfs-tabla">
                 <thead>
                     <tr>
                         <th class="rfs-col-fecha" style="min-width:220px;">Chofer</th>
-                        @foreach (var d in _pivDias)
+                        @foreach (var col in _pivCols)
                         {
-                            <th class="rfs-th-serv @(EsFinde(d) ? "rfs-finde" : "")" title="@d.ToString("dddd dd/MM")">@d.ToString("dd/MM")</th>
+                            <th class="rfs-th-serv @(col.Finde ? "rfs-finde" : "")" title="@col.Title">@col.Label</th>
                         }
                         <th class="rfs-th-total">TOTAL</th>
                     </tr>
                 </thead>
                 <tbody>
                     @* Virtualize: pueden ser cientos de choferes (regla de performance). *@
-                    <Virtualize Items="_pivChoferes" Context="cho" ItemSize="30" OverscanCount="12" SpacerElement="tr">
+                    <Virtualize Items="_pivChoferesMostrados" Context="cho" ItemSize="30" OverscanCount="12" SpacerElement="tr">
                         <tr>
                             @{ var atenua = _choferFocus is not null && !EnFocoChofer(cho) ? "rfs-atenua" : ""; }
                             <td class="rfs-col-fecha rfs-click @(EnFocoChofer(cho) && _choferFocus is not null ? "rfs-col-foco" : "") @atenua"
                                 style="max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
                                 title="Clic para enfocar el tablero en @NombreDe(cho)"
                                 @onclick="() => ToggleFocoChofer(cho)">@NombreDe(cho)</td>
-                            @foreach (var d in _pivDias)
+                            @foreach (var col in _pivCols)
                             {
-                                var dia = d;
-                                var cell = PivCell(cho, dia);
-                                if (cell is null)
+                                var c = col;
+                                var valor = PivValor(cho, c.Key);
+                                if (valor is not null)
                                 {
-                                    <td class="rfs-num rfs-cero @atenua">·</td>
+                                    <td class="rfs-num rfs-click rfs-mix-cel @atenua" title="Ver viajes de @NombreDe(cho) — @c.Title"
+                                        @onclick="() => AbrirDetalleCelda(cho, c)">
+                                        @FmtMetrica(valor.Value)
+                                        <span class="rfs-mix" style="@($"background:{MixCelda(cho, c.Key)};")" aria-hidden="true"></span>
+                                    </td>
                                 }
-                                else if (cell.Franco)
+                                else if (EsFranco(cho, c.Key))
                                 {
-                                    <td class="rfs-num rfs-finde-cell @atenua" title="@NombreDe(cho) — franco @dia.ToString("dd/MM")"
+                                    <td class="rfs-num rfs-finde-cell @atenua" title="@NombreDe(cho) — sin trabajar @c.Title"
                                         style="color:#B08900; font-style:italic;">F</td>
                                 }
                                 else
                                 {
-                                    <td class="rfs-num rfs-click @atenua" title="Ver viajes de @NombreDe(cho) el @dia.ToString("dd/MM")"
-                                        @onclick="() => AbrirDetalleCelda(cho, dia)">@Fmt(cell.Valor)</td>
+                                    <td class="rfs-num rfs-cero @atenua">·</td>
                                 }
                             }
-                            <td class="rfs-num rfs-tot rfs-click @atenua" title="Ver todos los viajes de @NombreDe(cho)"
-                                @onclick="() => AbrirDetalleChofer(cho)">@Fmt(PivTotFila(cho))</td>
+                            <td class="rfs-num rfs-tot rfs-click rfs-mix-cel @atenua" title="Ver todos los viajes de @NombreDe(cho)"
+                                @onclick="() => AbrirDetalleChofer(cho)">
+                                @FmtMetrica(PivTotFila(cho))
+                                <span class="rfs-mix" style="@($"background:{MixFila(cho)};")" aria-hidden="true"></span>
+                            </td>
                         </tr>
                     </Virtualize>
                 </tbody>
                 <tfoot>
+                    @* El pie es sticky (queda pegado abajo mientras se scrollea). Con las
+                       sub-filas por tipo de servicio son varias filas sticky, y sticky NO las
+                       apila solo: cada una necesita su propio `bottom`. De ahí el cálculo. *@
+                    @{ var subs = MostrarSubTotales ? _catsGrilla.Count : 0; }
                     <tr>
-                        <td class="rfs-col-fecha rfs-tot">TOTAL</td>
-                        @foreach (var d in _pivDias)
+                        <td class="rfs-col-fecha rfs-tot" style="@BottomPie(subs)">TOTAL</td>
+                        @foreach (var col in _pivCols)
                         {
-                            var dia = d;
-                            <td class="rfs-num rfs-tot rfs-click" title="Ver todos los viajes del @dia.ToString("dd/MM")"
-                                @onclick="() => AbrirDetalleDia(dia)">@Fmt(PivTotCol(dia))</td>
+                            var c = col;
+                            <td class="rfs-num rfs-tot rfs-click" style="@BottomPie(subs)"
+                                title="Ver todos los viajes de @c.Title"
+                                @onclick="() => AbrirDetalleCol(c)">@FmtMetrica(PivTotCol(c.Key))</td>
                         }
-                        <td class="rfs-num rfs-tot rfs-grantot">@Fmt(_granTotal)</td>
+                        <td class="rfs-num rfs-tot rfs-grantot" style="@BottomPie(subs)">@FmtMetrica(_granTotal)</td>
                     </tr>
+                    @* Desglose del TOTAL por tipo de servicio, cada uno en su color. Solo cuando
+                       hay más de una categoría a la vista: con un foco activo repetiría el TOTAL. *@
+                    @if (MostrarSubTotales)
+                    {
+                        @for (var i = 0; i < _catsGrilla.Count; i++)
+                        {
+                            var cat = _catsGrilla[i];
+                            var bottom = BottomPie(_catsGrilla.Count - 1 - i);
+                            <tr class="rfs-subtot" style="@($"--nt-cat:{ColorCat(cat)};")">
+                                <td class="rfs-col-fecha rfs-subtot-lbl" style="@bottom">
+                                    <span class="vpc-dot" style="@($"background:{ColorCat(cat)};")" aria-hidden="true"></span>@cat
+                                </td>
+                                @foreach (var col in _pivCols)
+                                {
+                                    <td class="rfs-num" style="@bottom">@FmtCero(PivTotColCat(cat, col.Key))</td>
+                                }
+                                <td class="rfs-num rfs-subtot-tot" style="@bottom">@FmtCero(_pivTotCat.GetValueOrDefault(cat))</td>
+                            </tr>
+                        }
+                    }
                 </tfoot>
             </table>
         </div>
@@ -222,64 +606,189 @@ else
 @code {
     private readonly DateTime _min = ReportService.FechaMinValida.ToDateTime(TimeOnly.MinValue);
     private readonly DateTime _max = ReportService.FechaMaxValida.ToDateTime(TimeOnly.MinValue);
+    private static readonly System.Globalization.CultureInfo Cult =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
 
-    // ── Filtros en edición ── Default: el mes calendario ANTERIOR completo. La tabla es día a
-    // día, así que un mes es un rango cómodo; el mes anterior siempre tiene datos cerrados
-    // (el mes en curso puede estar vacío o a medio cargar en la réplica).
+    // Catálogo fijo del combo "Tipo de chofer" (no tiene tabla propia: es viaje.tipo_chofe).
+    private static readonly string[] TiposChofer = { "Propio", "Contratado" };
+
+    // A partir de este largo de rango, la grilla arranca agrupada por MES: con 3+ meses las
+    // columnas por día no entran en pantalla y la tabla deja de ser legible.
+    private const int DiasParaAgruparPorMes = 92;
+
+    // Panel "Evolución diaria" oculto momentáneamente (19/08/2026, pedido del frente final).
+    // El código y los datos del gráfico quedan intactos; para reactivarlo alcanza con volver
+    // esto a true. `static readonly` (no `const`): con `const` el compilador marca el bloque
+    // del @if como código inalcanzable (CS0162) porque pliega el valor en tiempo de compilación.
+    private static readonly bool MostrarEvolucionDiaria = false;
+
+    // ── Filtros en edición ── Default: el mes calendario ANTERIOR completo.
     private DateTime? _desde = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-1);
     private DateTime? _hasta = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddDays(-1);
-    private bool _internos;
-    private bool _contratados;
-    private string _metrica = "Viajes";                 // "Viajes" | "Km" | "Pax"
 
-    // ── Foco / cross-filter (una dimensión: chofer) ──
+    // Las TRES categorías tildadas de arranque (20/08/2026). Antes venía Empresa+Turismo y
+    // Nortur destildado (herencia del switch viejo "Internos", que arrancaba apagado): como el
+    // combo de tipo de servicio de la grilla solo lista las categorías PRESENTES en los datos
+    // (_catsPresentes), Nortur no aparecía nunca ahí y el código de color de la grilla se
+    // quedaba sin su verde. Trayendo las tres, el tablero arranca completo.
+    private IReadOnlyCollection<string> _categoriasSel = new HashSet<string>(ReportService.CategoriasServicio);
+    // Tipo de chofer: solo Propio tildado por defecto — mismo comportamiento que el switch
+    // "Incluir contratados" que reemplaza (el FoxPro fijaba tipo_chofe='PROPIO').
+    private IReadOnlyCollection<string> _tipoChoferSel = new HashSet<string> { "Propio" };
+    // Tipo de vehículo: todos tildados por defecto (filtro nuevo, sin restricción histórica).
+    private IReadOnlyCollection<string> _vehiculosSel = new HashSet<string>();
+    private bool _todasCategorias => _categoriasSel.Count == ReportService.CategoriasServicio.Count;
+    private bool _todosTiposChofer => _tipoChoferSel.Count == TiposChofer.Length;
+    private bool _todosVehiculos => _vehiculos.Count > 0 && _vehiculosSel.Count == _vehiculos.Count;
+
+    // Arranca en HORAS (20/08/2026, pedido de Claudio): la primera pregunta del informe es
+    // cuánto trabajó cada chofer, no cuántos viajes hizo. Cambiar la métrica NO vuelve a la
+    // base — se recalcula en memoria (ver CambiarMetrica).
+    private string _metrica = "Horas";                  // "Viajes" | "Km" | "Pax" | "Horas"
+    // Horas PRIMERO: es la métrica por defecto, y el primer lugar de la botonera es el que se
+    // lee antes (20/08/2026).
+    private static readonly string[] Metricas = { "Horas", "Viajes", "Km", "Pax" };
+
+    // ── Foco / cross-filter (DOS dimensiones combinables con AND: chofer × tipo de servicio) ──
+    // Cada dimensión RESALTA en sus propios visuales (para poder cambiar de foco) y FILTRA los
+    // de la otra. Todo en memoria, sin re-query. null = sin foco.
     private string? _choferFocus;                        // IdChofer (clave estable)
+    private string? _categoriaFocus;                     // Empresa | Turismo | Nortur
     private bool EnFocoChofer(string id) => _choferFocus is null || _choferFocus == id;
+
+    // Agrupación de las columnas del pivote: false = día, true = mes. En memoria.
+    private bool _porMes;
+    // Se marca cuando el usuario elige la agrupación a mano: desde ahí manda su elección y el
+    // auto-posicionamiento por largo de rango ya no la pisa.
+    private bool _agrupacionManual;
 
     // ── Filtros APLICADOS (snapshot al Aplicar) ──
     private DateOnly _fDesdeAp, _fHastaAp;
-    private bool _internosAp, _contratadosAp;
+    private List<string> _catAp = new();
+    private List<string> _choAp = new();
+    private List<string> _vehAp = new();
+    private bool _aplicadoAlgunaVez;
 
+    // ── "Hay filtros sin aplicar" ──
+    // Solo cuentan los filtros que van A LA BASE (fechas + los tres combos). La métrica y los
+    // controles de la grilla (agrupación, foco, buscador) trabajan en memoria y ya se aplicaron
+    // solos: pintarlos acá diría "te falta hacer algo" cuando no falta nada.
+    // La comparación va contra el snapshot NORMALIZADO (`_catAp` y compañía guardan lista vacía
+    // cuando están todos tildados), así que el lado en edición se normaliza igual antes de
+    // comparar — si no, "todos tildados" leería como distinto de "sin filtro".
+    private List<string> CatEnEdicion => _todasCategorias ? new List<string>() : _categoriasSel.ToList();
+    private List<string> ChoEnEdicion => _todosTiposChofer ? new List<string>() : _tipoChoferSel.ToList();
+    private List<string> VehEnEdicion => _todosVehiculos ? new List<string>() : _vehiculosSel.ToList();
+
+    private static bool MismoSet(List<string> a, List<string> b) =>
+        a.Count == b.Count && !a.Except(b).Any();
+
+    private bool HayCambiosSinAplicar =>
+        _aplicadoAlgunaVez && !_cargando && (
+            _desde is null || _hasta is null ||
+            DateOnly.FromDateTime(_desde.Value) != _fDesdeAp ||
+            DateOnly.FromDateTime(_hasta.Value) != _fHastaAp ||
+            !MismoSet(CatEnEdicion, _catAp) ||
+            !MismoSet(ChoEnEdicion, _choAp) ||
+            !MismoSet(VehEnEdicion, _vehAp));
+
+    private List<VehiculoTipoDto> _vehiculos = new();
     private List<ViajesChoferRow> _filas = new();
     private List<ViajesChoferDetalleRow>? _detalle;     // lazy: al primer drill-down/Excel
     private bool _cargando, _cargandoDet;
     private Guid _chartsKey = Guid.NewGuid();
+    // Key propio del gráfico de barras: el foco de tipo de servicio RE-ORDENA su ranking
+    // (cambia la forma), y un cambio de forma se resuelve remontando, no actualizando.
+    private Guid _barsKey = Guid.NewGuid();
 
     // KPIs
     private int _totalMetrica, _promedioDia, _choferesActivos, _diasFranco;
     private string _choferLider = "—";
-    private int _maxChofer, _totalTurismo, _totalCabecera, _pctTurismo;
-    private string UnidadMetrica => _metrica switch { "Km" => "km", "Pax" => "pax", _ => "viajes" };
-    private string UnidadMetricaCap => _metrica switch { "Km" => "Km", "Pax" => "Pax", _ => "Viajes" };
-    private string KpiTotalLabel => _metrica switch { "Km" => "Total km", "Pax" => "Total pax", _ => "Total viajes" };
+    private int _maxChofer, _mixEmpresa, _mixTurismo, _mixNortur, _pctTurismo;
+    private string UnidadMetrica => _metrica switch { "Km" => "km", "Pax" => "pax", "Horas" => "horas", _ => "viajes" };
+    private string UnidadMetricaCap => _metrica switch { "Km" => "Km", "Pax" => "Pax", "Horas" => "Horas", _ => "Viajes" };
+    private string KpiTotalLabel => _metrica switch { "Km" => "Total km", "Pax" => "Total pax", "Horas" => "Total horas", _ => "Total viajes" };
+    // Horas se guarda internamente en MINUTOS (mismo tipo `int` que las otras métricas, sin
+    // tocar los Dictionary<..,int> del pivote) y se formatea recién al mostrarla — ver Fmt().
+    // El KPI de mezcla NO se recorta con el foco de tipo de servicio (si no, mostraría una sola
+    // categoría y dejaría de ser una mezcla). Cuando hay foco, el Sub lo dice.
+    private string MixSub => _categoriaFocus is not null
+        ? $"enfocado: {_categoriaFocus}"
+        : $"{_pctTurismo}% turismo";
+
+    // Choferes sin actividad: padrón activo de `chofer` vs quién viajó.
+    private List<ChoferListaRow> _rosterActivo = new();
+    private List<ChoferListaRow> _choferesInactivos = new();
+
+    // Choferes en actividad con documentación por vencer (cruce con Agenda de Vencimientos).
+    private List<ChoferDocVista> _choferesVencidos = new();
+    private int _diasAvisoChofer = 30;
+    private int _docVencidos, _docPorVencer;      // desglose del aviso por gravedad
+    private int _choferesConActividad;            // choferes que viajaron (base del KPI "al día")
+
+    // Buscador de chofer: filtra la grilla en memoria, en vivo.
+    private string _buscarChofer = "";
+    private List<string> _pivChoferesMostrados = new();
+    // Hay búsqueda activa: marca el campo en naranja y muestra el contador debajo.
+    private bool BuscandoChofer => !string.IsNullOrWhiteSpace(_buscarChofer);
 
     // ── Gráficos ApexCharts ──
-    private record EvolItem(string Dia, decimal Turismo, decimal Cabecera);
-    private record BarItem(string IdChofer, string Chofer, decimal Valor);
+    private record EvolItem(string Dia, decimal Empresa, decimal Turismo, decimal Nortur);
+    // Una barra por chofer, con el desglose de las 3 categorías ya calculado — alimenta las
+    // 3 series apiladas del gráfico de barras (una por categoría, mismo XValue=Chofer).
+    private record BarStackItem(string IdChofer, string Chofer, decimal Empresa, decimal Turismo, decimal Nortur);
+
+    // ── Modo PDF (20/08/2026) ──
+    // Un <svg> es un elemento ATÓMICO: el navegador no lo puede partir entre dos hojas. Con
+    // "Todos (101)" el gráfico mide 101 × 30 = 3.030px (más de 4 hojas A4), así que al no
+    // entrar en lo que quedaba de la primera hoja se iba ENTERO a la segunda y la primera
+    // quedaba con el título solo y el resto en blanco (bug reportado por el usuario).
+    // Solución: al exportar, el GRÁFICO se recorta al top 25 y se dibuja más compacto para
+    // que entre en una hoja junto al encabezado. La TABLA sigue trayendo la selección
+    // completa, así que no se pierde ni un chofer.
+    private const int TopMaxPdf = 25;
+    private const int AltoBarrasPdf = 500;    // px: lo que queda de una A4 apaisada bajo el encabezado
+    private const int AnchoBarrasPdf = 1040;  // px: A4 apaisada (1123px @96dpi) menos el padding de la hoja
+    private bool _modoPdf;
+    private bool _exportando;
+    private List<BarStackItem> _pdfFilas = new();   // selección completa (tabla del PDF)
+
+    /// <summary>Deja `_barItems` y `_altoBarras` según el modo: en pantalla, la selección
+    /// entera; en PDF, recortada al top que entra en una hoja.</summary>
+    private void AplicarTopeBarras()
+    {
+        _barItems = _modoPdf ? _pdfFilas.Take(TopMaxPdf).ToList() : _pdfFilas;
+        _altoBarras = _modoPdf ? AltoBarrasPdf : Math.Max(360, _barItems.Count * 30);
+    }
+
+    private bool PdfGraficoRecortado => _modoPdf && _pdfFilas.Count > TopMaxPdf;
     private record DonutItem(string Label, decimal Valor);
     private List<EvolItem> _evolData = new();
-    private List<BarItem> _barItems = new();
+    private List<BarStackItem> _barItems = new();
     private List<DonutItem> _donutOrigen = new();
 
     private ApexChart<EvolItem>? _evolChart;
-    private ApexChart<BarItem>? _barChoChart;
     private ApexChart<DonutItem>? _pieChart;
 
-    // Paleta categórica de 15 hues (la misma de los otros informes, validada con dataviz).
-    private static readonly List<string> _palette = new()
-    {
-        "#2058D0", "#F99410", "#16A34A", "#DC2626", "#0EA5E9",
-        "#7C3AED", "#B45309", "#DB2777", "#0D9488", "#65A30D",
-        "#4F46E5", "#EA580C", "#059669", "#9333EA", "#0891B2"
-    };
     private const string _colorOtros = "#94A3B8";
 
-    private Dictionary<string, string> _colorPorChofer = new();
+    // Colores FIJOS por tipo de servicio (color por entidad, igual en todos los informes que
+    // usan este esquema — ver ReservasBandaHoraria.razor). Nortur = ex "Interno" (renombrado
+    // 19/08/2026); el gráfico de barras ahora colorea por ESTA categoría, no por chofer.
+    private static readonly Dictionary<string, string> _colorCategoria = new()
+    {
+        ["Empresa"] = "#2058D0",
+        ["Turismo"] = "#F99410",
+        ["Nortur"] = "#16A34A",
+    };
+    private static string ColorCat(string cat) => _colorCategoria.TryGetValue(cat, out var c) ? c : _colorOtros;
+    private string ColorFocoCat(string cat) =>
+        (_categoriaFocus is null || cat == _categoriaFocus) ? ColorCat(cat) : "#D9E1EC";
+
+    private List<string> _catsPresentes = new();
+
     private Dictionary<string, string> _nombrePorChofer = new();
-    private string ColorCho(string id) => _colorPorChofer.TryGetValue(id, out var c) ? c : _colorOtros;
     private string NombreDe(string id) => _nombrePorChofer.TryGetValue(id, out var n) ? n : id;
-    private string ColorFocoCho(string id) =>
-        (_choferFocus is null || id == _choferFocus) ? ColorCho(id) : "#D9E1EC";
 
     // Selector "Mostrar Top N" del gráfico de barras.
     private int _topN = 15;
@@ -289,19 +798,30 @@ else
 
     private RenderFragment ChipsFoco => __builder =>
     {
-        @if (_choferFocus is not null)
+        @if (_choferFocus is not null || _categoriaFocus is not null)
         {
             <div class="rfs-focus">
-                <span class="rfs-focus__lbl">Chofer:</span>
-                <span class="rfs-focus__val" style="@($"background:{ColorCho(_choferFocus)};")">@NombreDe(_choferFocus)</span>
-                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
-                               OnClick="LimpiarFoco" Title="Quitar filtro de chofer"
-                               Style="color:#64748B; padding:2px;" />
+                @if (_choferFocus is not null)
+                {
+                    <span class="rfs-focus__lbl">Chofer:</span>
+                    <span class="rfs-focus__val" style="background:#112F5B;">@NombreDe(_choferFocus)</span>
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                   OnClick="LimpiarFocoChofer" title="Quitar filtro de chofer"
+                                   Style="color:#64748B; padding:2px;" />
+                }
+                @if (_categoriaFocus is not null)
+                {
+                    <span class="rfs-focus__lbl">Servicio:</span>
+                    <span class="rfs-focus__val" style="@($"background:{ColorCat(_categoriaFocus)};")">@_categoriaFocus</span>
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                   OnClick="LimpiarFocoCategoria" title="Quitar filtro de tipo de servicio"
+                                   Style="color:#64748B; padding:2px;" />
+                }
             </div>
         }
         else
         {
-            <span class="rfs-focus-hint">💡 Clic en un chofer para enfocar el tablero</span>
+            <span class="rfs-focus-hint">💡 Clic en un chofer o en un tipo de servicio para enfocar el tablero</span>
         }
     };
 
@@ -316,7 +836,7 @@ else
     private readonly ApexChartOptions<EvolItem> _optsEvol = new()
     {
         Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Stacked = true, Animations = new() { Enabled = false } },
-        Colors = new List<string> { "#2058D0", "#F99410" },
+        Colors = new List<string> { "#2058D0", "#F99410", "#16A34A" },
         Stroke = new() { Curve = Curve.Smooth, Width = 2 },
         Fill = new() { Type = FillType.Gradient, Gradient = new() { OpacityFrom = 0.5, OpacityTo = 0.1 } },
         DataLabels = new() { Enabled = false },
@@ -328,15 +848,24 @@ else
         Theme = new() { Mode = Mode.Light },
     };
 
-    private readonly ApexChartOptions<BarItem> _optsBarCho = new()
+    // Barras APILADAS por categoría (19/08/2026): Chart.Stacked=true + 3 series (una por
+    // categoría, ver el markup). Ya NO usa Distributed (era para colorear por chofer con la
+    // paleta de 15 hues; ahora el color es fijo por categoría, igual que la torta).
+    private readonly ApexChartOptions<BarStackItem> _optsBarCho = new()
     {
-        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Stacked = true, Animations = new() { Enabled = false } },
         PlotOptions = new()
         {
-            Bar = new() { Horizontal = true, BorderRadius = 4, BorderRadiusApplication = BorderRadiusApplication.End, Distributed = true }
+            Bar = new() { Horizontal = true, BorderRadius = 4, BorderRadiusApplication = BorderRadiusApplication.End }
         },
-        Legend = new() { Show = false },
-        Colors = new List<string> { "#2058D0" },
+        Legend = new()
+        {
+            Show = true, Position = LegendPosition.Top, FontSize = "11px",
+            // Apagamos el toggle nativo (ocultar la serie): el clic en la leyenda enfoca por
+            // tipo de servicio, como en la torta — no oculta el tramo.
+            OnItemClick = new() { ToggleDataSeries = false },
+        },
+        Colors = new List<string> { "#2058D0", "#F99410", "#16A34A" },
         Xaxis = new() { Labels = new() { Style = new() { FontSize = "11px" } } },
         Yaxis = new List<YAxis> { new() { Labels = new() { Style = new() { FontSize = "11px" }, MaxWidth = 180 } } },
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
@@ -352,22 +881,109 @@ else
     private readonly ApexChartOptions<DonutItem> _optsPie = new()
     {
         Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
-        Colors = new List<string> { "#2058D0", "#F99410" },
-        Legend = new() { Position = LegendPosition.Bottom, FontSize = "11px" },
+        Colors = new List<string> { "#2058D0", "#F99410", "#16A34A" },
+        Legend = new()
+        {
+            Position = LegendPosition.Bottom,
+            FontSize = "11px",
+            // Apagamos el toggle nativo (ocultar la serie) para que el clic en la leyenda
+            // signifique SIEMPRE "enfocar", como en Reservas por banda horaria.
+            OnItemClick = new() { ToggleDataSeries = false },
+        },
         Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
         Theme = new() { Mode = Mode.Light },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
     };
 
-    // ── Pivote chofer × día ──
-    private record PivCellData(int Valor, bool Franco);
-    private List<DateOnly> _pivDias = new();
-    private List<string> _pivChoferes = new();          // IdChofer, orden por total desc
-    private Dictionary<(string, DateOnly), PivCellData> _pivMap = new();
+    // ── Pivote chofer × columna (día o mes) ──
+    /// <summary>Una columna del pivote. `Key` es la clave de agrupación de la fecha
+    /// ("yyyy-MM-dd" por día, "yyyy-MM" por mes); `Label` lo que se ve en el header.</summary>
+    private record PivCol(string Key, string Label, string Title, bool Finde);
+
+    private List<PivCol> _pivCols = new();
+    private List<string> _pivChoferes = new();                       // IdChofer, orden por total desc
+    private Dictionary<(string, string), int> _pivMap = new();       // (chofer, colKey) → valor
+    private HashSet<(string, string)> _pivFrancos = new();           // (chofer, colKey) sin trabajar
     private Dictionary<string, int> _pivTotFila = new();
-    private Dictionary<DateOnly, int> _pivTotCol = new();
+    private Dictionary<string, int> _pivTotCol = new();
     private int _granTotal;
 
+    // ── Código de color de la grilla (20/08/2026) ──
+    /// <summary>Mezcla de una celda por tipo de servicio, en la métrica vigente. Alimenta la
+    /// micro-barra de 3 colores que va al pie de cada celda.</summary>
+    private readonly record struct CatMix(int Empresa, int Turismo, int Nortur)
+    {
+        public int Total => Empresa + Turismo + Nortur;
+    }
+
+    private Dictionary<(string, string), CatMix> _pivMix = new();   // (chofer, colKey) → mezcla
+    private Dictionary<string, CatMix> _pivMixFila = new();         // chofer → mezcla (col TOTAL)
+    private Dictionary<(string, string), int> _pivTotColCat = new();// (categoría, colKey) → total
+    private Dictionary<string, int> _pivTotCat = new();             // categoría → gran total
+    private List<string> _catsGrilla = new();                       // categorías con datos en la grilla
+
+    /// <summary>Las sub-filas de TOTAL por categoría solo tienen sentido si hay más de una
+    /// categoría a la vista: con un foco activo repetirían el TOTAL fila por fila.</summary>
+    private bool MostrarSubTotales => _categoriaFocus is null && _catsGrilla.Count > 1;
+
+    /// <summary>Alto de cada sub-fila del pie. Se usa para calcular su `bottom` (el tfoot es
+    /// sticky: sin offsets propios las cuatro filas se apilarían una encima de la otra).</summary>
+    private const int SubTotAlto = 24;
+
+    /// <summary>Barra de 3 colores con la proporción Empresa/Turismo/Nortur de una celda.
+    /// Devuelve "" si no hay nada que pintar. Los porcentajes van en cultura INVARIANTE: con
+    /// es-AR el separador decimal es la coma y el CSS descarta el gradiente entero.</summary>
+    private static string MixGradiente(CatMix m)
+    {
+        var tot = m.Total;
+        if (tot <= 0) return "";
+        var p1 = 100.0 * m.Empresa / tot;
+        var p2 = p1 + 100.0 * m.Turismo / tot;
+        string P(double v) => v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + "%";
+        return $"linear-gradient(to right, {ColorCat("Empresa")} 0 {P(p1)}, " +
+               $"{ColorCat("Turismo")} {P(p1)} {P(p2)}, {ColorCat("Nortur")} {P(p2)} 100%)";
+    }
+
+    /// <summary>Suma un conjunto de filas separando por tipo de servicio, en una sola pasada
+    /// (la grilla puede tener decenas de miles de filas: tres Where anidados costaban tres).</summary>
+    private static CatMix MixDe(IEnumerable<ViajesChoferRow> filas, Func<ViajesChoferRow, int> val)
+    {
+        int e = 0, t = 0, n = 0;
+        foreach (var f in filas)
+        {
+            var v = val(f);
+            switch (f.Categoria)
+            {
+                case "Empresa": e += v; break;
+                case "Turismo": t += v; break;
+                case "Nortur": n += v; break;
+            }
+        }
+        return new CatMix(e, t, n);
+    }
+
+    /// <summary>`bottom` de una fila del pie sticky: cuántas filas tiene por debajo.</summary>
+    private static string BottomPie(int filasDebajo) => $"bottom:{filasDebajo * SubTotAlto}px;";
+
+    private int PivTotColCat(string cat, string colKey) => _pivTotColCat.GetValueOrDefault((cat, colKey));
+
+    /// <summary>Como FmtMetrica, pero el cero se dibuja como el punto medio de la grilla (·) en
+    /// vez de un "0" que ensucia la lectura de la fila.</summary>
+    private string FmtCero(int valor) => valor == 0 ? "·" : FmtMetrica(valor);
+
+    private string MixCelda(string chofer, string colKey) =>
+        _pivMix.TryGetValue((chofer, colKey), out var m) ? MixGradiente(m) : "";
+    private string MixFila(string chofer) =>
+        _pivMixFila.TryGetValue(chofer, out var m) ? MixGradiente(m) : "";
+
     private static bool EsFinde(DateOnly d) => d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+    /// <summary>Clave de columna de una fecha según la agrupación vigente.</summary>
+    private string ColKeyDe(DateOnly d) => _porMes ? d.ToString("yyyy-MM") : d.ToString("yyyy-MM-dd");
+    private static string CapFirst(string s) => s.Length == 0 ? s : char.ToUpper(s[0]) + s[1..];
 
     protected override async Task OnInitializedAsync()
     {
@@ -381,65 +997,172 @@ else
             Nav.NavigateTo("/", forceLoad: false);
             return;
         }
+        _vehiculos = await Reports.GetVehiculosTipoAsync();
+        _vehiculosSel = new HashSet<string>(_vehiculos.Select(v => v.Id));
         await Cargar();
     }
+
+    // El período Desde–Hasta no puede superar este ancho: rangos más largos pegan contra
+    // millones de filas de viaje y afectan la performance del servidor (pedido del usuario, 20/08/2026).
+    private const int RangoMaximoDias = 95;   // 3 meses
+
+    // Días elegidos hoy en los pickers (sin aplicar todavía). 0 si falta alguna fecha.
+    private int RangoDiasElegidos =>
+        _desde is null || _hasta is null ? 0 : (int)(_hasta.Value.Date - _desde.Value.Date).TotalDays;
 
     private async Task Cargar()
     {
         if (_desde is null || _hasta is null) return;
+
+        if (RangoDiasElegidos > RangoMaximoDias)
+        {
+            // Cartel "Contorno" — estándar del proyecto para validaciones bloqueantes (ver app.css § nt-toast-contorno).
+            Snackbar.Add(
+                $"El rango Desde–Hasta no puede superar los {RangoMaximoDias} días (elegiste {RangoDiasElegidos}). Achicá el período e intentá de nuevo.",
+                Severity.Error,
+                config =>
+                {
+                    config.SnackbarVariant = Variant.Outlined;
+                    config.SnackbarTypeClass = "nt-toast-contorno";
+                });
+            return;
+        }
+
         _cargando = true;
         StateHasChanged();
 
         _fDesdeAp = DateOnly.FromDateTime(_desde.Value);
         _fHastaAp = DateOnly.FromDateTime(_hasta.Value);
-        _internosAp = _internos;
-        _contratadosAp = _contratados;
+        _catAp = _todasCategorias ? new List<string>() : _categoriasSel.ToList();
+        _choAp = _todosTiposChofer ? new List<string>() : _tipoChoferSel.ToList();
+        _vehAp = _todosVehiculos ? new List<string>() : _vehiculosSel.ToList();
+        _aplicadoAlgunaVez = true;
         _detalle = null;
         _choferFocus = null;
+        _categoriaFocus = null;
+        _buscarChofer = "";
 
-        _filas = await Reports.GetViajesPorChoferAsync(_fDesdeAp, _fHastaAp, _internosAp, _contratadosAp);
+        // Rango largo → columnas por mes (salvo que el usuario ya haya elegido a mano).
+        if (!_agrupacionManual)
+            _porMes = _fHastaAp.DayNumber - _fDesdeAp.DayNumber + 1 > DiasParaAgruparPorMes;
+
+        _filas = await Reports.GetViajesPorChoferAsync(_fDesdeAp, _fHastaAp, _catAp, _choAp, _vehAp);
+        await CalcularInactivosYVencimientosAsync();
         Recalcular();
         _chartsKey = Guid.NewGuid();
+        _barsKey = Guid.NewGuid();
 
         _cargando = false;
+    }
+
+    /// <summary>Choferes sin actividad (padrón activo vs quién viajó) y choferes en actividad
+    /// con documentación por vencer (cruce con Agenda de Vencimientos). Ambos reusan métodos
+    /// de <see cref="ReportService"/> ya cacheados — no agregan queries nuevas.</summary>
+    private async Task CalcularInactivosYVencimientosAsync()
+    {
+        var padron = await Reports.GetChoferesAsync();
+        var roster = padron.Where(c => c.FInhabilitacion is null).ToList();
+        // El padrón se recorta al mismo Tipo de chofer aplicado (Propio/Contratado), para no
+        // comparar contra choferes que el filtro ya excluyó del todo.
+        if (_choAp.Count == 1)
+        {
+            roster = _choAp[0] == "Contratado"
+                ? roster.Where(c => c.Fletero.Length > 0).ToList()
+                : roster.Where(c => c.Fletero.Length == 0).ToList();
+        }
+        var idsPeriodo = _filas.Select(f => f.IdChofer).ToHashSet();
+        _rosterActivo = roster;
+        _choferesInactivos = roster.Where(c => !idsPeriodo.Contains(c.Codigo.Trim()))
+            .OrderBy(c => c.Nombre).ToList();
+
+        var (diasChofer, _, _) = await Reports.GetParametrosAvisoAsync();
+        _diasAvisoChofer = diasChofer;
+        _choferesConActividad = idsPeriodo.Count;
+
+        // Viajes del período por chofer — alimenta el subtítulo de cada fila del modal
+        // ("Nortur · 34 viajes en el período"): sin eso el modal no dice cuánto pesa el caso.
+        var viajesPorChofer = _filas.GroupBy(f => f.IdChofer)
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.Viajes));
+
+        var hoy = DateOnly.FromDateTime(DateTime.Today);
+        var porVencer = await Reports.GetChoferesPorVencerAsync(diasChofer);
+        // 🔴 La query trae a CASI TODO el padrón porque su ISNULL(registro_4,'1900-01-01')
+        // toma el AEP en blanco como vencido, y 227 de 254 choferes activos lo tienen vacío
+        // (el AEP es solo para los que entran al aeropuerto). Por eso el filtro fino se hace
+        // acá con VencimientosChofer: entra al aviso solo el que tiene algo REAL para revisar.
+        _choferesVencidos = porVencer
+            .Where(v => idsPeriodo.Contains(v.IdChofer.Trim()))
+            .Select(v => VencimientosChofer.Clasificar(
+                v, viajesPorChofer.GetValueOrDefault(v.IdChofer.Trim()), hoy, diasChofer))
+            .Where(v => v.Alerta)
+            .ToList();
+
+        _docVencidos = _choferesVencidos.Count(v => v.Peor == DocEstado.Vencido);
+        _docPorVencer = _choferesVencidos.Count(v => v.Peor == DocEstado.PorVencer);
     }
 
     private void CambiarMetrica(string metrica)
     {
         _metrica = metrica;
-        if (_filas.Count > 0) { Recalcular(); _chartsKey = Guid.NewGuid(); }
+        if (_filas.Count > 0) { Recalcular(); _chartsKey = Guid.NewGuid(); _barsKey = Guid.NewGuid(); }
     }
 
     private void CambiarTopN(int topN)
     {
+        // Cambia la cantidad de barras (la FORMA del gráfico) → remonte, no update.
         _topN = topN;
-        if (_filas.Count > 0) { Recalcular(); _chartsKey = Guid.NewGuid(); }
+        if (_filas.Count > 0) { Recalcular(); _barsKey = Guid.NewGuid(); }
+    }
+
+    /// <summary>Día ↔ mes: solo cambia la FORMA de la tabla (sus columnas). No toca los
+    /// gráficos ni vuelve a la base.</summary>
+    private void CambiarAgrupacion(bool porMes)
+    {
+        _porMes = porMes;
+        _agrupacionManual = true;
+        if (_filas.Count > 0) Recalcular();
     }
 
     private void Recalcular()
     {
+        // Horas: `val` devuelve MINUTOS (el campo `Minutos` de la fila, ver ViajesChoferRow) —
+        // se formatea a "Xh Ym" recién al mostrarlo (FmtMetrica). Mantiene el mismo tipo `int`
+        // en todos los diccionarios/acumuladores del pivote, sin tocar su forma.
         Func<ViajesChoferRow, int> val = _metrica switch
         {
             "Km" => f => f.Km,
             "Pax" => f => f.Pax,
+            "Horas" => f => f.Minutos,
             _ => f => f.Viajes
         };
 
-        // El foco de chofer FILTRA los KPIs, la evolución y el donut; en las barras y la tabla
-        // es resaltado por color/CSS (la lista completa sigue visible).
-        var datos = _choferFocus is null ? _filas : _filas.Where(f => f.IdChofer == _choferFocus).ToList();
+        // Los tres subconjuntos del cross-filter de dos dimensiones:
+        //  · datos     → ambos focos (KPIs y evolución)
+        //  · datosCat  → solo el foco de tipo de servicio (barras y GRILLA: el foco de chofer
+        //                en esos visuales es resaltado, no filtro)
+        //  · datosCho  → solo el foco de chofer (torta de tipo de servicio)
+        bool PasaCat(ViajesChoferRow f) => _categoriaFocus is null || f.Categoria == _categoriaFocus;
+        bool PasaCho(ViajesChoferRow f) => _choferFocus is null || f.IdChofer == _choferFocus;
+        var datos = _filas.Where(f => PasaCat(f) && PasaCho(f)).ToList();
+        var datosCat = _categoriaFocus is null ? _filas : _filas.Where(PasaCat).ToList();
+        var datosCho = _choferFocus is null ? _filas : _filas.Where(PasaCho).ToList();
 
         _nombrePorChofer = _filas.GroupBy(f => f.IdChofer).ToDictionary(g => g.Key, g => g.First().Chofer);
+        _catsPresentes = ReportService.CategoriasServicio
+            .Where(c => _filas.Any(f => f.Categoria == c)).ToList();
 
         // ── KPIs ──
         _totalMetrica = datos.Sum(val);
         var diasActivos = datos.Select(f => (f.IdChofer, f.Fecha)).Distinct().Count();
         _promedioDia = diasActivos > 0 ? (int)Math.Round((double)_totalMetrica / diasActivos) : 0;
         _choferesActivos = datos.Select(f => f.IdChofer).Distinct().Count();
-        _totalTurismo = datos.Sum(f => f.Turismo);
-        _totalCabecera = datos.Sum(f => f.Cabecera);
-        var totalOrigen = _totalTurismo + _totalCabecera;
-        _pctTurismo = totalOrigen > 0 ? (int)Math.Round(100.0 * _totalTurismo / totalOrigen) : 0;
+
+        // Mezcla de categorías: SIN el foco de tipo de servicio (ver MixSub).
+        _mixEmpresa = datosCho.Where(f => f.Categoria == "Empresa").Sum(f => f.Viajes);
+        _mixTurismo = datosCho.Where(f => f.Categoria == "Turismo").Sum(f => f.Viajes);
+        _mixNortur = datosCho.Where(f => f.Categoria == "Nortur").Sum(f => f.Viajes);
+        var totalMix = _mixEmpresa + _mixTurismo + _mixNortur;
+        _pctTurismo = totalMix > 0 ? (int)Math.Round(100.0 * _mixTurismo / totalMix) : 0;
 
         var porChofer = datos.GroupBy(f => f.IdChofer)
             .Select(g => (Id: g.Key, Total: g.Sum(val)))
@@ -447,106 +1170,264 @@ else
         _choferLider = porChofer.Count > 0 ? NombreDe(porChofer[0].Id) : "—";
         _maxChofer = porChofer.Count > 0 ? porChofer[0].Total : 0;
 
-        // ── Pivote chofer × día (con francos calculados en memoria, como el FoxPro) ──
-        // Días = todos los del rango aplicado (columna por día).
-        _pivDias = new();
-        for (var d = _fDesdeAp; d <= _fHastaAp; d = d.AddDays(1)) _pivDias.Add(d);
+        // ── Columnas del pivote (día o mes), recorriendo TODO el rango aplicado ──
+        _pivCols = new();
+        if (_porMes)
+        {
+            for (var d = new DateOnly(_fDesdeAp.Year, _fDesdeAp.Month, 1); d <= _fHastaAp; d = d.AddMonths(1))
+                _pivCols.Add(new PivCol(d.ToString("yyyy-MM"),
+                                        CapFirst(d.ToString("MMM yy", Cult)),
+                                        CapFirst(d.ToString("MMMM yyyy", Cult)),
+                                        Finde: false));
+        }
+        else
+        {
+            for (var d = _fDesdeAp; d <= _fHastaAp; d = d.AddDays(1))
+                _pivCols.Add(new PivCol(d.ToString("yyyy-MM-dd"),
+                                        d.ToString("dd/MM"),
+                                        CapFirst(d.ToString("dddd dd/MM", Cult)),
+                                        EsFinde(d)));
+        }
+        var idxCol = _pivCols.Select((c, i) => (c.Key, i)).ToDictionary(t => t.Key, t => t.i);
 
-        var val2 = val;   // capturado para las lambdas de abajo
-        _pivMap = new();
-        // El foco de chofer resalta por CSS → la tabla arma TODAS las filas (dataset completo).
-        foreach (var f in _filas)
-            _pivMap[(f.IdChofer, f.Fecha)] = new PivCellData(val2(f), Franco: false);
+        // ── Celdas: valor con el foco de tipo de servicio aplicado ──
+        //    Se agrupa UNA sola vez y de ahí salen las dos cosas: el número de la celda y su
+        //    mezcla por tipo de servicio (la micro-barra de 3 colores).
+        var celdas = datosCat.GroupBy(f => (f.IdChofer, Col: ColKeyDe(f.Fecha))).ToList();
+        _pivMap = celdas.ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivMix = celdas.ToDictionary(g => g.Key, g => MixDe(g, val));
 
-        // Francos: para cada chofer, entre su primer y último día trabajado DENTRO del rango,
-        // los días sin viaje se marcan como franco (fila F en la grilla). Igual criterio que el
-        // form FoxPro (Do While con dCntFranco).
+        // ── Francos: se calculan SIEMPRE sobre el dataset COMPLETO (todas las categorías).
+        //    Un "franco" es un día que el chofer no trabajó NADA; si filtramos por Turismo, un
+        //    día en que hizo Empresa NO es franco (trabajó) → ahí la celda queda en "·". ──
+        _pivFrancos = new();
         _diasFranco = 0;
         foreach (var g in _filas.GroupBy(f => f.IdChofer))
         {
-            var dias = g.Select(x => x.Fecha).OrderBy(x => x).ToList();
-            var primero = dias.First();
-            var ultimo = dias.Last();
-            for (var d = primero; d <= ultimo; d = d.AddDays(1))
+            // Franco por COLUMNA (para la grilla): huecos entre la primera y la última con
+            // actividad del chofer. Mismo criterio que el FoxPro, generalizado a día/mes.
+            var colsConDatos = g.Select(x => ColKeyDe(x.Fecha)).Distinct()
+                                .Where(idxCol.ContainsKey).Select(k => idxCol[k]).ToList();
+            if (colsConDatos.Count > 0)
             {
-                if (!_pivMap.ContainsKey((g.Key, d)))
-                {
-                    _pivMap[(g.Key, d)] = new PivCellData(0, Franco: true);
-                    _diasFranco++;
-                }
+                var conDatos = colsConDatos.ToHashSet();
+                for (var i = colsConDatos.Min(); i <= colsConDatos.Max(); i++)
+                    if (!conDatos.Contains(i)) _pivFrancos.Add((g.Key, _pivCols[i].Key));
             }
+
+            // Franco por DÍA (para el KPI): siempre en días, no cambia con la agrupación.
+            var dias = g.Select(x => x.Fecha).Distinct().OrderBy(x => x).ToList();
+            var conDatosDia = dias.ToHashSet();
+            for (var d = dias.First(); d <= dias.Last(); d = d.AddDays(1))
+                if (!conDatosDia.Contains(d)) _diasFranco++;
         }
 
-        _pivTotFila = _filas.GroupBy(f => f.IdChofer).ToDictionary(g => g.Key, g => g.Sum(val2));
-        _pivChoferes = _filas.GroupBy(f => f.IdChofer)
-            .Select(g => (Id: g.Key, Total: g.Sum(val2)))
+        // Totales de la grilla: con el foco de tipo de servicio, SIN el de chofer (que en la
+        // grilla resalta pero no filtra) → los totales cierran con las filas que se ven.
+        _pivTotFila = datosCat.GroupBy(f => f.IdChofer).ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivChoferes = datosCat.GroupBy(f => f.IdChofer)
+            .Select(g => (Id: g.Key, Total: g.Sum(val)))
             .OrderByDescending(x => x.Total).ThenBy(x => NombreDe(x.Id))
             .Select(x => x.Id).ToList();
-        _pivTotCol = _pivDias.ToDictionary(d => d, d => datos.Where(f => f.Fecha == d).Sum(val2));
-        _granTotal = _totalMetrica;
+        _pivTotCol = _pivCols.ToDictionary(
+            c => c.Key,
+            c => datosCat.Where(f => ColKeyDe(f.Fecha) == c.Key).Sum(val));
+        _granTotal = datosCat.Sum(val);
 
-        // ── Evolución diaria (turismo vs cabecera) — filtrada por el foco de chofer ──
-        var metricaTur = _metrica == "Pax";   // en Pax no separamos turismo/cabecera con exactitud
-        _evolData = _pivDias.Select(d =>
+        // ── Código de color de la grilla: mezcla de la columna TOTAL y totales por categoría
+        //    (las sub-filas del pie). Todo sale de `datosCat` — el mismo dataset que los
+        //    números de la grilla — así los colores siempre cierran con lo que se ve. ──
+        _pivMixFila = datosCat.GroupBy(f => f.IdChofer).ToDictionary(g => g.Key, g => MixDe(g, val));
+        _catsGrilla = ReportService.CategoriasServicio.Where(c => datosCat.Any(f => f.Categoria == c)).ToList();
+        _pivTotColCat = new();
+        _pivTotCat = new();
+        foreach (var cat in _catsGrilla)
         {
-            var delDia = datos.Where(f => f.Fecha == d).ToList();
-            return new EvolItem(d.ToString("dd/MM"), delDia.Sum(f => f.Turismo), delDia.Sum(f => f.Cabecera));
-        }).ToList();
+            var deCat = datosCat.Where(f => f.Categoria == cat).ToList();
+            _pivTotCat[cat] = deCat.Sum(val);
+            foreach (var g in deCat.GroupBy(f => ColKeyDe(f.Fecha)))
+                _pivTotColCat[(cat, g.Key)] = g.Sum(val);
+        }
 
-        // ── Ranking de choferes: ranking y colores del dataset COMPLETO (orden/color estables),
-        //    valores con el foco (que en las barras es resaltado por color) ──
-        _rankingChoferes = _filas.GroupBy(f => f.IdChofer)
-            .Select(g => (Id: g.Key, Nombre: g.First().Chofer, Total: g.Sum(val2)))
+        RecalcularPivMostrados();
+
+        // ── Evolución diaria (Empresa/Turismo/Nortur) — filtrada por el foco de chofer.
+        //    Las 3 series van SIEMPRE (con 0 si el foco las vacía) para que el update en el
+        //    lugar no tenga que reordenar series. Oculto en pantalla (MostrarEvolucionDiaria)
+        //    pero se sigue calculando: reactivar el panel no necesita tocar esto. ──
+        var evolPorDia = datosCho.GroupBy(f => f.Fecha)
+            .ToDictionary(g => g.Key, g => g.ToList());
+        _evolData = new();
+        for (var d = _fDesdeAp; d <= _fHastaAp; d = d.AddDays(1))
+        {
+            evolPorDia.TryGetValue(d, out var delDia);
+            int Cat(string c) => delDia?.Where(f => f.Categoria == c).Sum(f => f.Viajes) ?? 0;
+            _evolData.Add(new EvolItem(d.ToString("dd/MM"), Cat("Empresa"), Cat("Turismo"), Cat("Nortur")));
+        }
+
+        // ── Ranking de choferes + desglose por categoría (para las barras apiladas) ──
+        // El orden sale del dataset con el foco de tipo de servicio: enfocando "Turismo" el
+        // gráfico tiene que contestar "quién hace más turismo", no repetir el ranking general
+        // con quince barras en cero. Por eso el chart se remonta (_barsKey).
+        var porChoferCat = datosCat.GroupBy(f => f.IdChofer)
+            .Select(g => (
+                Id: g.Key,
+                Nombre: g.First().Chofer,
+                Empresa: g.Where(f => f.Categoria == "Empresa").Sum(val),
+                Turismo: g.Where(f => f.Categoria == "Turismo").Sum(val),
+                Nortur: g.Where(f => f.Categoria == "Nortur").Sum(val),
+                Total: g.Sum(val)))
             .OrderByDescending(x => x.Total).ThenBy(x => x.Nombre).ToList();
-        _colorPorChofer = _rankingChoferes
-            .Select((x, i) => (x.Id, i))
-            .ToDictionary(t => t.Id, t => t.i < _palette.Count ? _palette[t.i] : _colorOtros);
+        _rankingChoferes = porChoferCat.Select(x => (x.Id, x.Nombre, x.Total)).ToList();
 
-        var nombresRepetidos = _rankingChoferes.GroupBy(x => x.Nombre)
+        var nombresRepetidos = porChoferCat.GroupBy(x => x.Nombre)
             .Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
-        _barItems = _rankingChoferes.Take(_topN)
-            .Select(x => new BarItem(x.Id,
+        // La selección COMPLETA del usuario (lo que pide el combo "Mostrar"). De acá salen las
+        // filas de la tabla del PDF; `_barItems` (el gráfico) puede ser un recorte de esto —
+        // ver AplicarTopeBarras.
+        _pdfFilas = porChoferCat.Take(_topN)
+            .Select(x => new BarStackItem(x.Id,
                 nombresRepetidos.Contains(x.Nombre) ? $"{x.Nombre} ({x.Id})" : x.Nombre,
-                x.Total))
+                x.Empresa, x.Turismo, x.Nortur))
             .ToList();
-        _altoBarras = Math.Max(360, _barItems.Count * 30);
+        AplicarTopeBarras();
 
-        // ── Donut turismo/cabecera — filtrado por el foco ──
-        _donutOrigen = new()
-        {
-            new DonutItem("Turismo", _totalTurismo),
-            new DonutItem("Cabecera", _totalCabecera),
-        };
+        // ── Donut tipo de servicio — valores con el foco de CHOFER; las 3 porciones siempre
+        //    presentes y en orden fijo (Empresa/Turismo/Nortur), como pide el update en el
+        //    lugar. El foco de categoría acá RESALTA (por color), no filtra. ──
+        _donutOrigen = ReportService.CategoriasServicio
+            .Select(c => new DonutItem(c, datosCho.Where(f => f.Categoria == c).Sum(val)))
+            .ToList();
 
-        // Colores con el highlight del foco.
-        _optsBarCho.Colors = _barItems.Select(b => ColorFocoCho(b.IdChofer)).ToList();
+        // Colores de las barras: ahora son por CATEGORÍA (fijos, con el highlight del foco de
+        // tipo de servicio), no por chofer — mismo criterio que la torta.
+        _optsBarCho.Colors = ReportService.CategoriasServicio.Select(ColorFocoCat).ToList();
+        _optsPie.Colors = _donutOrigen.Select(d => ColorFocoCat(d.Label)).ToList();
+
+        // Tooltip de barras/torta en Horas: minutos → "Xh Ym", igual que la pantalla.
+        var formatterVal = _metrica == "Horas"
+            ? "function(val){ var h=Math.floor(val/60), m=Math.round(val%60); return h+'h'+(m>0?' '+m+'m':''); }"
+            : "function(val){ return val.toLocaleString('es-AR'); }";
+        _optsBarCho.Tooltip = new() { Y = new() { Formatter = formatterVal } };
+        _optsPie.Tooltip = new() { Y = new() { Formatter = formatterVal } };
     }
 
-    private PivCellData? PivCell(string cho, DateOnly d) => _pivMap.TryGetValue((cho, d), out var v) ? v : null;
+    private int? PivValor(string cho, string colKey) =>
+        _pivMap.TryGetValue((cho, colKey), out var v) ? v : null;
+    private bool EsFranco(string cho, string colKey) => _pivFrancos.Contains((cho, colKey));
     private int PivTotFila(string cho) => _pivTotFila.TryGetValue(cho, out var v) ? v : 0;
-    private int PivTotCol(DateOnly d) => _pivTotCol.TryGetValue(d, out var v) ? v : 0;
+    private int PivTotCol(string colKey) => _pivTotCol.TryGetValue(colKey, out var v) ? v : 0;
 
-    // ── Cross-filter ──
+    // ── Buscador de chofer (filtra la lista de la grilla en memoria) ──
+    private void RecalcularPivMostrados()
+    {
+        _pivChoferesMostrados = string.IsNullOrWhiteSpace(_buscarChofer)
+            ? _pivChoferes
+            : _pivChoferes.Where(id => NombreDe(id).Contains(_buscarChofer.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    private void OnBuscarChoferChanged(string? valor)
+    {
+        _buscarChofer = valor ?? "";
+        RecalcularPivMostrados();
+    }
+
+    // ── Cross-filter (2 dimensiones) ──
     private async Task ToggleFocoChofer(string id)
     {
         _choferFocus = _choferFocus == id ? null : id;
         Recalcular();
+        // El foco de chofer ya no toca el gráfico de barras (su color es por categoría, no por
+        // chofer): recalcula KPIs/torta/evolución. El chofer se resalta en la TABLA (fila
+        // atenuada), que es de donde sale este foco.
         await ActualizarGraficos();
     }
 
-    private Task LimpiarFoco() => ToggleFocoChofer(_choferFocus ?? "");
+    private Task ToggleFocoCategoria(string cat) =>
+        AplicarCategoriaFoco(_categoriaFocus == cat ? null : cat);
+
+    private Task LimpiarFocoChofer() => ToggleFocoChofer(_choferFocus ?? "");
+    private Task LimpiarFocoCategoria() => AplicarCategoriaFoco(null);
+
+    /// <summary>El combo de tipo de servicio de la grilla, el clic en la torta y el clic en un
+    /// tramo/leyenda de las barras mueven el MISMO estado (`_categoriaFocus`): son accesos a la
+    /// misma perilla.</summary>
+    private Task CambiarCategoriaFoco(string valor) =>
+        AplicarCategoriaFoco(string.IsNullOrEmpty(valor) ? null : valor);
+
+    private async Task AplicarCategoriaFoco(string? cat)
+    {
+        _categoriaFocus = cat;
+        Recalcular();
+        // Las barras se RE-ORDENAN con este foco → van por remonte (@key), no por update:
+        // actualizar en el lugar un chart cuyo eje cambió de categorías lo deja inconsistente.
+        _barsKey = Guid.NewGuid();
+        await ActualizarGraficos();
+    }
 
     private async Task ActualizarGraficos()
     {
+        // El foco cambia VALORES (no solo colores) en los charts de la otra dimensión →
+        // hace falta UpdateOptions + UpdateSeries, no alcanza con uno solo. Las barras NO se
+        // actualizan acá: el foco de categoría las remonta por @key y el de chofer no las toca.
         if (_evolChart is not null) { await _evolChart.UpdateSeriesAsync(true); }
-        if (_barChoChart is not null) { await _barChoChart.UpdateOptionsAsync(true, true, false); await _barChoChart.UpdateSeriesAsync(true); }
-        if (_pieChart is not null) { await _pieChart.UpdateSeriesAsync(true); }
+        if (_pieChart is not null) { await _pieChart.UpdateOptionsAsync(true, true, false); await _pieChart.UpdateSeriesAsync(true); }
     }
 
-    private async Task OnBarChoSelection(SelectedData<BarItem> e)
+    private async Task OnBarChoSelection(SelectedData<BarStackItem> e)
     {
-        var id = e.DataPoint?.Items?.FirstOrDefault()?.IdChofer;
-        if (id is not null) await ToggleFocoChofer(id);
+        // El color del tramo clickeado ES la categoría (Empresa/Turismo/Nortur): clic enfoca
+        // por tipo de servicio, igual que un clic en la torta. Enfocar por CHOFER se hace desde
+        // el nombre en la tabla de abajo.
+        var cat = e.Series?.Name;
+        if (cat is not null) await ToggleFocoCategoria(cat);
+    }
+
+    private Task OnBarLegendClicked(LegendClicked<BarStackItem> e) =>
+        e.Series?.Name is string cat ? ToggleFocoCategoria(cat) : Task.CompletedTask;
+
+    private async Task OnPieCatSelection(SelectedData<DonutItem> e)
+    {
+        var cat = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (cat is not null) await ToggleFocoCategoria(cat);
+    }
+
+    private async Task OnPieCatLegendClicked(LegendClicked<DonutItem> e)
+    {
+        var cat = e.Series?.Name ?? e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (cat is not null) await ToggleFocoCategoria(cat);
+    }
+
+    // ── Choferes sin actividad / documentación por vencer (listados) ──
+    private async Task VerInactivos()
+    {
+        if (_choferesInactivos.Count == 0) return;
+        var msg = string.Join("\n", _choferesInactivos.Select(c =>
+            string.IsNullOrEmpty(c.Localidad) ? $"• {c.Nombre}" : $"• {c.Nombre} ({c.Localidad})"));
+        await DialogService.ShowMessageBoxAsync(
+            $"Choferes sin actividad en el período ({_choferesInactivos.Count})",
+            msg, yesText: "Cerrar");
+    }
+
+    /// <summary>Abre la tabla semáforo de documentación. <paramref name="filtro"/> viene del
+    /// chip que se clickeó ("vencidos" / "porvencer") o "todos" desde el botón Ver detalle.</summary>
+    private async Task VerVencimientos(string filtro)
+    {
+        if (_choferesVencidos.Count == 0) return;
+        var parametros = new DialogParameters
+        {
+            { "Filas", _choferesVencidos },
+            { "DiasAviso", _diasAvisoChofer },
+            { "ConActividad", _choferesConActividad },
+            { "Periodo", $"{_fDesdeAp:dd/MM/yyyy} – {_fHastaAp:dd/MM/yyyy}" },
+            { "FiltroInicial", filtro }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large, FullWidth = true,
+            CloseButton = false, CloseOnEscapeKey = true, BackdropClick = true
+        };
+        await DialogService.ShowAsync<ChoferesVencimientosDialog>("Documentación de choferes", parametros, opciones);
     }
 
     // ── Drill-down ──
@@ -556,23 +1437,29 @@ else
         {
             _cargandoDet = true;
             StateHasChanged();
-            _detalle = await Reports.GetViajesPorChoferDetalleAsync(_fDesdeAp, _fHastaAp, _internosAp, _contratadosAp);
+            _detalle = await Reports.GetViajesPorChoferDetalleAsync(_fDesdeAp, _fHastaAp, _catAp, _choAp, _vehAp);
             _cargandoDet = false;
         }
         return _detalle;
     }
 
+    // El número que se ve en la grilla ya está recortado por el foco de tipo de servicio →
+    // el detalle tiene que filtrar igual, o el dialog mostraría más viajes que la celda.
+    private bool PasaFocoCat(ViajesChoferDetalleRow d) => _categoriaFocus is null || d.Categoria == _categoriaFocus;
     private bool PasaFocoChofer(ViajesChoferDetalleRow d) => _choferFocus is null || d.IdChofer == _choferFocus;
+    private string SufijoFoco => _categoriaFocus is null ? "" : $" · {_categoriaFocus}";
 
-    private Task AbrirDetalleCelda(string id, DateOnly dia) =>
-        AbrirDetalle(d => d.IdChofer == id && d.Fecha == dia, $"{NombreDe(id)} — {dia:dd/MM/yyyy}");
+    private Task AbrirDetalleCelda(string id, PivCol col) =>
+        AbrirDetalle(d => d.IdChofer == id && ColKeyDe(d.Fecha) == col.Key && PasaFocoCat(d),
+                     $"{NombreDe(id)} — {col.Title}{SufijoFoco}");
 
     private Task AbrirDetalleChofer(string id) =>
-        AbrirDetalle(d => d.IdChofer == id, $"{NombreDe(id)} — todo el período");
+        AbrirDetalle(d => d.IdChofer == id && PasaFocoCat(d),
+                     $"{NombreDe(id)} — todo el período{SufijoFoco}");
 
-    private Task AbrirDetalleDia(DateOnly dia) =>
-        AbrirDetalle(d => d.Fecha == dia && PasaFocoChofer(d),
-                     $"{(_choferFocus is null ? "Todos los choferes" : NombreDe(_choferFocus))} — {dia:dd/MM/yyyy}");
+    private Task AbrirDetalleCol(PivCol col) =>
+        AbrirDetalle(d => ColKeyDe(d.Fecha) == col.Key && PasaFocoCat(d) && PasaFocoChofer(d),
+                     $"{(_choferFocus is null ? "Todos los choferes" : NombreDe(_choferFocus))} — {col.Title}{SufijoFoco}");
 
     private async Task AbrirDetalle(Func<ViajesChoferDetalleRow, bool> filtro, string subtitulo)
     {
@@ -596,12 +1483,91 @@ else
     private async Task DescargarExcel()
     {
         var viajes = await GetDetalleAsync();
-        var bytes = Excel.ViajesPorChofer(_filas, _metrica, _fDesdeAp, _fHastaAp, viajes);
-        var nombre = $"viajes_por_chofer_{_fDesdeAp:yyyyMMdd}_{_fHastaAp:yyyyMMdd}.xlsx";
+        // El Excel sale con el mismo recorte que la pantalla (tipo de servicio y agrupación).
+        var viajesFiltrados = viajes.Where(PasaFocoCat).ToList();
+        var bytes = Excel.ViajesPorChofer(_filas, _metrica, _fDesdeAp, _fHastaAp,
+                                          _porMes, _categoriaFocus, viajesFiltrados);
+        var sufijo = _categoriaFocus is null ? "" : $"_{_categoriaFocus.ToLowerInvariant()}";
+        var nombre = $"viajes_por_chofer_{_fDesdeAp:yyyyMMdd}_{_fHastaAp:yyyyMMdd}{sufijo}.xlsx";
         using var stream = new MemoryStream(bytes);
         using var streamRef = new DotNetStreamReference(stream);
         await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
     }
 
+    /// <summary>Exporta el panel "… por chofer" a PDF (20/08/2026). Mismo patrón que el
+    /// comprobante de Liquidación a Clientes (<c>imprimirElemento</c>, ver descarga.js): abre
+    /// el bloque <c>#vpc-barras-print</c> en una ventana aislada y dispara la impresión — el
+    /// usuario elige "Guardar como PDF" del navegador. Cero dependencias de servidor.
+    /// Apaisado ("landscape"): el gráfico es más ancho que alto, a diferencia del comprobante
+    /// de Liquidación (vertical, tipo factura) que usa el default "portrait" de la función.
+    /// Margen 0: sin área de margen, Chrome no tiene dónde dibujar SU encabezado/pie
+    /// (fecha · about:blank · nº de hoja) — el respiro de la hoja lo pone `.pdf-hoja`.</summary>
+    private async Task ExportarBarrasPdf()
+    {
+        if (_exportando) return;
+        _exportando = true;
+        try
+        {
+            // Modo PDF: recorta el gráfico para que entre en una hoja (ver AplicarTopeBarras).
+            // Hay que esperar a que ApexCharts redibuje el SVG antes de mandar a imprimir —
+            // es un ida y vuelta por SignalR + el remonte que fuerza `_barsKey`.
+            _modoPdf = true;
+            AplicarTopeBarras();
+            _barsKey = Guid.NewGuid();
+            StateHasChanged();
+            await Task.Delay(900);
+
+            var titulo = $"{UnidadMetricaCap} por chofer - {_fDesdeAp:dd-MM-yyyy} a {_fHastaAp:dd-MM-yyyy}";
+            await JS.InvokeVoidAsync("imprimirElemento", "vpc-barras-print", titulo, "landscape", 0);
+            await Task.Delay(500);   // que la ventana termine de tomar el DOM antes de restaurar
+        }
+        finally
+        {
+            _modoPdf = false;
+            AplicarTopeBarras();
+            _barsKey = Guid.NewGuid();
+            _exportando = false;
+        }
+    }
+
+    /// <summary>Los filtros con los que se armó lo que se está viendo, en una línea, para el
+    /// encabezado del PDF. Sale del snapshot APLICADO (`_catAp` y compañía), no de lo que esté
+    /// en edición arriba: si no, el PDF diría un filtro y los números serían de otro.</summary>
+    private string FiltrosAplicadosTexto()
+    {
+        string Lista(List<string> aplicados, string todos) =>
+            aplicados.Count == 0 ? todos : string.Join(" + ", aplicados);
+
+        var vehiculos = _vehAp.Count == 0
+            ? "todos"
+            : string.Join(" + ", _vehAp.Select(id => _vehiculos.FirstOrDefault(v => v.Id == id)?.Nombre ?? id));
+
+        var partes = new List<string>
+        {
+            $"Período {_fDesdeAp:dd/MM/yyyy} – {_fHastaAp:dd/MM/yyyy}",
+            $"Métrica: {UnidadMetricaCap}",
+            $"Tipo de servicio: {Lista(_catAp, "todos")}",
+            $"Tipo de chofer: {Lista(_choAp, "todos")}",
+            $"Tipo de vehículo: {vehiculos}"
+        };
+
+        // El foco del cross-filter también recorta los números: si está puesto, va en el PDF.
+        if (_categoriaFocus is not null) partes.Add($"Enfocado en: {_categoriaFocus}");
+        if (_choferFocus is not null) partes.Add($"Chofer: {NombreDe(_choferFocus)}");
+
+        return string.Join("  ·  ", partes);
+    }
+
     private static string Fmt(int n) => n.ToString("#,0", System.Globalization.CultureInfo.GetCultureInfo("es-AR"));
+
+    // Formatea un valor de la métrica ACTIVA: en Horas convierte minutos → "Xh Ym" (el dato
+    // sigue siendo un int de minutos en todo el pivote/KPIs, ver el comentario en `val` de
+    // Recalcular); en las demás métricas es el Fmt de siempre (miles con separador).
+    private string FmtMetrica(int valor) => _metrica == "Horas" ? FmtHoras(valor) : Fmt(valor);
+    private static string FmtHoras(int minutos)
+    {
+        var h = minutos / 60;
+        var m = minutos % 60;
+        return m == 0 ? $"{h}h" : $"{h}h {m:00}m";
+    }
 }

@@ -1,0 +1,185 @@
+@page "/correos-destinatarios"
+@using MetroCarSysBlazor.Components.Shared
+@inject ReportService Reports
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@rendermode InteractiveServer
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   "Correos Electrónicos Parámetros" (Tráfico → Libro de Novedades → 3er ítem).
+   Réplica de libro_novedad_parametro.scx: la lista de distribución INTERNA de la empresa.
+   NO son los contactos del cliente (esos viven en la ficha `cliente`, contacto1..10).
+   Plano: docs/PlanoFoxPro/trafico/LIBRO_NOVEDADES.md
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<PageTitle>BusLink</PageTitle>
+
+<div class="page-header mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">Correos electrónicos · destinatarios</MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Tráfico · A quién le llegan los informes internos del libro de novedades — vista de solo lectura (lista para el ABM)
+    </MudText>
+</div>
+
+<MudPaper Class="pa-2 mb-3" Elevation="1" Style="border-radius:14px; border-top:4px solid #F99410;">
+    <div class="d-flex flex-wrap align-center" style="gap:14px;">
+        <MudChip T="string" Variant="Variant.Text" Color="Color.Default" Size="Size.Small">@_items.Count destinatarios</MudChip>
+        <span style="flex:1 1 auto;"></span>
+        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Send" Href="/envio-correos">Envío de correos</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh" OnClick="Refrescar" Disabled="_cargando">Actualizar</MudButton>
+    </div>
+</MudPaper>
+
+@* KPIs: cuántos reciben cada informe. Es lo que el form de Envío muestra arriba a la derecha
+   (text6..text9) y sirve para detectar un informe que quedó sin ningún destinatario. *@
+<div class="rfs-kpis mb-3">
+    <KpiCard Label="Novedades" Value="@_items.Count(d => d.Novedad).ToString("N0")" />
+    <KpiCard Label="Siniestros" Value="@_items.Count(d => d.Siniestro).ToString("N0")" />
+    <KpiCard Label="Combustible" Value="@_items.Count(d => d.Combustible).ToString("N0")" Color="@NorturColors.Naranja" />
+    <KpiCard Label="Auditoría" Value="@_items.Count(d => d.Auditoria).ToString("N0")" Color="@NorturColors.Naranja" />
+    <KpiCard Label="Taller" Value="@_items.Count(d => d.Taller).ToString("N0")" Color="@NorturColors.Naranja" />
+</div>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    @if (_items.Count > 0 && _items.All(d => d.Suscripciones == 0))
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+            Hay destinatarios cargados pero <b>ninguno tiene tildado un tipo de informe</b>: el
+            proceso de envío no manda nada.
+        </MudAlert>
+    }
+
+    <MudPaper Elevation="1" Style="border-radius:14px; overflow:hidden;">
+        <MudTable Items="_items" Dense="true" Hover="true" Striped="true"
+                  Bordered="false" Class="cli-grid grid-compacta"
+                  RowClass="cli-grid__row" RowClassFunc="@RowClass"
+                  OnRowClick="@OnRowClick" T="DestinatarioCorreoRow">
+            <HeaderContent>
+                <MudTh Style="width:230px;">Contacto</MudTh>
+                <MudTh>E-Mail</MudTh>
+                <MudTh Style="width:90px;">Novedad</MudTh>
+                <MudTh Style="width:90px;">Siniestro</MudTh>
+                <MudTh Style="width:100px;">Combustible</MudTh>
+                <MudTh Style="width:90px;">Auditoría</MudTh>
+                <MudTh Style="width:80px;">Taller</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Contacto" Style="font-weight:700; color:#003AA0;">@context.Contacto</MudTd>
+                <MudTd DataLabel="E-Mail">@context.Email</MudTd>
+                <MudTd DataLabel="Novedad" Style="text-align:center;">@Tilde(context.Novedad)</MudTd>
+                <MudTd DataLabel="Siniestro" Style="text-align:center;">@Tilde(context.Siniestro)</MudTd>
+                <MudTd DataLabel="Combustible" Style="text-align:center;">@Tilde(context.Combustible)</MudTd>
+                <MudTd DataLabel="Auditoría" Style="text-align:center;">@Tilde(context.Auditoria)</MudTd>
+                <MudTd DataLabel="Taller" Style="text-align:center;">@Tilde(context.Taller)</MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">
+                    No hay destinatarios cargados — el proceso de envío no puede mandar nada.
+                </MudText>
+            </NoRecordsContent>
+        </MudTable>
+
+        <div class="cli-toolbar usr-toolbar">
+            <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.Add"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Agregar" Disabled="!_abmActivo">Agregar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Eliminar" Disabled="!_abmActivo || _sel is null">Eliminar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Modificar" Disabled="!_abmActivo || _sel is null">Modificar</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Visibility"
+                       Size="Size.Medium" Class="usr-toolbar__btn" OnClick="Ver" Disabled="_sel is null">Ver ficha</MudButton>
+            <span style="flex:1;"></span>
+            <span class="cli-toolbar__hint">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                @(_abmActivo
+                    ? "ABM habilitado · doble clic para ver la ficha"
+                    : "Solo lectura · el ABM se activa el día del corte a Buslink · doble clic para ver la ficha")
+            </span>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private static bool _abmActivo => AbmFeatureFlags.DestinatariosCorreoAbmActivo;
+
+    private List<DestinatarioCorreoRow> _items = new();
+    private bool _cargando = true;
+    private DestinatarioCorreoRow? _sel;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        if (!Permisos.Tiene('T'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        StateHasChanged();
+        _items = await Reports.GetDestinatariosCorreoAsync();
+        if (_sel is not null)
+            _sel = _items.FirstOrDefault(d => d.Contacto == _sel.Contacto);
+        _cargando = false;
+    }
+
+    private async Task Refrescar()
+    {
+        Reports.InvalidarCacheAbm();
+        await CargarAsync();
+    }
+
+    private static string Tilde(bool v) => v ? "Sí" : "";
+
+    private string RowClass(DestinatarioCorreoRow d, int _) =>
+        (d.Suscripciones == 0 ? "cli-grid__row--egresado " : "")
+        + (_sel is not null && _sel.Contacto == d.Contacto ? "cli-grid__row--sel" : "");
+
+    private void OnRowClick(TableRowClickEventArgs<DestinatarioCorreoRow> args)
+    {
+        _sel = args.Item;
+        if (args.MouseEventArgs.Detail >= 2 && _sel is not null)
+            _ = AbrirDialog("ver", _sel);
+    }
+
+    private Task Agregar() => AbrirDialog("alta", null);
+    private Task Ver() => _sel is null ? Task.CompletedTask : AbrirDialog("ver", _sel);
+    private Task Modificar() => _sel is null ? Task.CompletedTask : AbrirDialog("modifica", _sel);
+    private Task Eliminar() => _sel is null ? Task.CompletedTask : AbrirDialog("baja", _sel);
+
+    private async Task AbrirDialog(string modo, DestinatarioCorreoRow? fila)
+    {
+        var parametros = new DialogParameters<DestinatarioCorreoEditorDialog>
+        {
+            { x => x.Modo, modo },
+            { x => x.Fila, fila },
+            { x => x.AbmActivo, _abmActivo }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = false,
+            CloseOnEscapeKey = true, BackdropClick = false
+        };
+        var dlg = await DialogService.ShowAsync<DestinatarioCorreoEditorDialog>("Destinatario", parametros, opciones);
+        var res = await dlg.Result;
+        if (res is not null && !res.Canceled && res.Data is bool grabo && grabo)
+            await Refrescar();
+    }
+}

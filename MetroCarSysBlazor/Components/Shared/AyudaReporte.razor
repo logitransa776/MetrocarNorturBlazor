@@ -1,0 +1,75 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   Disparador de la ayuda contextual de un informe (11/08/2026).
+
+   Dos modos, el mismo modal:
+
+     · <AyudaReporte Ruta="panel-tercerizacion" Titulo="Panel de Tercerización" />
+       → botón "?" redondo, para poner al lado del título de la pantalla.
+
+     · <AyudaReporte Ruta="panel-tercerizacion" Bloque="oportunidad" Chico="true" />
+       → ícono ⓘ discreto, para la cabecera de un panel. Abre el modal ya
+         posicionado en la explicación de ESE panel.
+
+   Si el informe todavía no tiene ayuda escrita en InformesAyuda, no renderiza
+   nada: nunca aparece un botón que abre un modal vacío.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+@inject IDialogService DialogService
+
+@if (InformesAyuda.Tiene(Ruta))
+{
+    @if (Chico)
+    {
+        <button type="button" class="ayuda-ico" @onclick="Abrir" @onclick:stopPropagation="true"
+                title="@($"Qué es esto — {TituloBloque}")" aria-label="Ayuda de este panel">
+            <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Size="Size.Small" />
+        </button>
+    }
+    else
+    {
+        <button type="button" class="ayuda-btn" @onclick="Abrir"
+                title="Cómo se lee este informe" aria-label="Ayuda del informe">
+            <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Size="Size.Small" />
+            <span>Ayuda</span>
+        </button>
+    }
+}
+
+@code {
+    /// <summary>Ruta del informe, sin barra (ej. "panel-tercerizacion").</summary>
+    [Parameter, EditorRequired] public string Ruta { get; set; } = "";
+
+    /// <summary>Título para la barra del modal. Si no se pasa, sale del catálogo de informes.</summary>
+    [Parameter] public string? Titulo { get; set; }
+
+    /// <summary>Bloque de ayuda en el que abrir (el Id de <see cref="AyudaBloque"/>).</summary>
+    [Parameter] public string? Bloque { get; set; }
+
+    /// <summary>true = ícono ⓘ chico para la cabecera de un panel; false = botón del título.</summary>
+    [Parameter] public bool Chico { get; set; }
+
+    private string TituloModal => Titulo
+        ?? InformesCatalogo.Todos.FirstOrDefault(i => i.Ruta == Ruta)?.Titulo
+        ?? "Ayuda del informe";
+
+    private string TituloBloque =>
+        InformesAyuda.De(Ruta)?.Bloques.FirstOrDefault(b => b.Id == Bloque)?.Titulo ?? "ayuda";
+
+    private Task Abrir()
+    {
+        var p = new DialogParameters
+        {
+            { nameof(AyudaReporteDialog.Ruta), Ruta },
+            { nameof(AyudaReporteDialog.Titulo), TituloModal },
+            { nameof(AyudaReporteDialog.Bloque), Bloque },
+        };
+        var opts = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = false,
+            BackdropClick = true,
+        };
+        return DialogService.ShowAsync<AyudaReporteDialog>("", p, opts);
+    }
+}

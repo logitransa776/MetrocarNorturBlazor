@@ -1,0 +1,313 @@
+@inject ReportService Reports
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Logonear / DesLogonear un conductor en una unidad — menú contextual del panel BUSES.
+   Réplica de `trafico_logonear.scx` y `trafico_deslogonear.scx` (un solo diálogo con dos
+   modos: son el mismo trámite con el signo cambiado, y comparten combo de zona y horario).
+
+   ⚠️ ANDAMIAJE: la escritura está construida completa y fiel al FoxPro, pero apagada por
+   AbmFeatureFlags.LogoneoAbmActivo hasta el día D (`vehiculo` es del circuito viaje).
+   Con el flag apagado el diálogo funciona igual —valida, arma el movimiento y muestra
+   exactamente qué se va a grabar— pero el botón Grabar queda deshabilitado.
+
+   Reglas migradas (ver el plano para el detalle):
+     · Logonear:   solo si estado = LIBERADO; el 2º exige que ya esté el 1º.
+     · DesLogonear: no si TALLER/GUARDIA, no si id_viaje ≠ 0, no el 1º con 2º logoneado.
+     · Combo de choferes: SOLO los del mismo fletero que NO estén logoneados en otra unidad.
+     · Si el chofer elegido está de franco → confirmación y se graba vehiculo.franco = .T.
+     · DesLogonear exige ZONA DE DETENCIÓN (obligatoria en el form original).
+   Plano: docs/PlanoFoxPro/trafico/TRAFICO_BUSES_MENU.md
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@(Deslogonear ? Icons.Material.Filled.Logout : Icons.Material.Filled.Login)"
+                     Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">
+                @(Deslogonear ? "DesLogonear" : "Logonear") @(Segundo ? "2º conductor" : "conductor")
+            </span>
+            @if (!_abmActivo)
+            {
+                <span class="zoom-title-bar__chip" style="margin-left:10px;">Escritura preparada</span>
+            }
+            <span class="zoom-title-bar__nro">Interno&nbsp;@Bus.Interno · @Bus.Vehiculo</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @* ── Bloqueo duro: las guardas del menú/método del FoxPro. Si no pasa, no hay form. ── *@
+        @if (_bloqueo is not null)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">@_bloqueo</MudAlert>
+        }
+        else
+        {
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">Unidad</span>
+                <div class="zoom-row">
+                    @F("Interno", Bus.Interno.ToString(), acento: true)
+                    @F("Dominio", Dato(Bus.Vehiculo), acento: true)
+                    @F("Fletero", Dato(Bus.Fletero))
+                    @F("Estado", Dato(Bus.Estado))
+                    @F("Zona actual", Dato(Bus.Zona))
+                    @F("Conductor actual", Dato(Bus.Chofer))
+                    @F("2º conductor", Dato(Bus.Chofer2))
+                </div>
+            </div>
+
+            @* Advertencia de vencimientos — controla_vencimiento() de trafico2.scx. El menú de
+               Buses del FoxPro NO la llama; acá se muestra como AVISO (no bloquea), porque es
+               información que el despachante necesita antes de poner la unidad en servicio. *@
+            @if (_vencimientos.Count > 0)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">
+                    <b>Vencimientos de la unidad:</b>
+                    <ul style="margin:4px 0 0 18px;">
+                        @foreach (var v in _vencimientos) { <li>@v</li> }
+                    </ul>
+                </MudAlert>
+            }
+
+            <div class="zoom-box zoom-box--sec">
+                <span class="zoom-box__label">@(Deslogonear ? "Movimiento de salida" : "Movimiento de entrada")</span>
+
+                @if (Deslogonear)
+                {
+                    <div class="zoom-row">
+                        @F("Conductor que sale", Dato(Segundo ? Bus.Chofer2 : Bus.Chofer), acento: true)
+                    </div>
+                    @* Zona de detención: obligatoria en el form original, y SOLO la escribe el 1º
+                       conductor (el 2º no toca zona). *@
+                    @if (!Segundo)
+                    {
+                        <MudSelect T="string" @bind-Value="_zona" Label="Zona de detención" Dense="true"
+                                   Margin="Margin.Dense" Variant="Variant.Outlined" Required="true"
+                                   Style="max-width:340px;">
+                            @foreach (var z in _zonas)
+                            {
+                                <MudSelectItem T="string" Value="@z.IdZona">@z.Nombre</MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                }
+                else
+                {
+                    @if (_choferes.Count == 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true">
+                            No hay conductores libres del fletero @Bus.Fletero — todos están
+                            logoneados en otra unidad.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudSelect T="string" @bind-Value="_chofer" Label="Conductor" Dense="true"
+                                   Margin="Margin.Dense" Variant="Variant.Outlined" Required="true"
+                                   Style="max-width:420px;">
+                            @foreach (var c in _choferes)
+                            {
+                                <MudSelectItem T="string" Value="@c.IdChofer">
+                                    @c.IdChofer — @c.Nombre@(c.TieneFrancoHoy ? "  ⚠ de franco hoy" : "")
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                    @* El 2º conductor no toca zona: se muestra la actual, deshabilitada. *@
+                    <MudSelect T="string" @bind-Value="_zona" Label="Zona de la unidad" Dense="true"
+                               Margin="Margin.Dense" Variant="Variant.Outlined" Disabled="@Segundo"
+                               Style="max-width:340px;">
+                        @foreach (var z in _zonas)
+                        {
+                            <MudSelectItem T="string" Value="@z.IdZona">@z.Nombre</MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    @if (ChoferElegidoDeFranco)
+                    {
+                        @* Réplica del "El chofer tiene franco .... ¿Lo asigna igualmente?" del
+                           FoxPro: acá es un check explícito en vez de un MessageBox, y es lo que
+                           termina en vehiculo.franco. *@
+                        <MudCheckBox T="bool" @bind-Value="_asignarConFranco" Dense="true" Color="Color.Warning">
+                            El conductor está de franco hoy — asignarlo igualmente
+                        </MudCheckBox>
+                    }
+                }
+
+                @* Fecha y hora son EDITABLES en los dos forms del FoxPro (no es GETDATE() forzado):
+                   el despachante suele cargar el movimiento un rato después de que pasó. *@
+                <div class="d-flex flex-wrap" style="gap:12px; margin-top:6px;">
+                    <MudDatePicker @bind-Date="_fecha" Label="Fecha" Margin="Margin.Dense"
+                                   Variant="Variant.Outlined" DateFormat="dd/MM/yyyy" Style="max-width:190px;" />
+                    <MudTimePicker @bind-Time="_hora" Label="Hora" Margin="Margin.Dense"
+                                   Variant="Variant.Outlined" Style="max-width:150px;" />
+                </div>
+            </div>
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+            @if (_aviso is not null)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true">@_aviso</MudAlert>
+            }
+        }
+    </DialogContent>
+
+    <DialogActions>
+        @if (_bloqueo is null)
+        {
+            <span class="nov-alta__hint">
+                <MudIcon Icon="@(_abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                @(_abmActivo
+                    ? "Se graba sobre la unidad y queda en la bitácora de logoneo"
+                    : "Escritura preparada · se habilita con el circuito de Tráfico (día D)")
+            </span>
+        }
+        <MudSpacer />
+        <MudButton Variant="Variant.Text" OnClick="Cerrar">Cancelar</MudButton>
+        @if (_bloqueo is null)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Success"
+                       StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar"
+                       Disabled="@(!_abmActivo || _grabando || !PuedeGrabar)">
+                @(_grabando ? "Guardando…" : Deslogonear ? "DesLogonear" : "Logonear")
+            </MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Fila del panel Buses sobre la que se abrió el menú.</summary>
+    [Parameter] public PanelBusRow Bus { get; set; } = default!;
+    /// <summary>false = Logonear, true = DesLogonear.</summary>
+    [Parameter] public bool Deslogonear { get; set; }
+    /// <summary>true = 2º conductor (ACOMPAÑANTE); false = conductor PRINCIPAL.</summary>
+    [Parameter] public bool Segundo { get; set; }
+    /// <summary>Usuario logueado — queda en <c>viaje_log_chofer.usuario</c>.</summary>
+    [Parameter] public string Usuario { get; set; } = "";
+
+    private static bool _abmActivo => AbmFeatureFlags.LogoneoAbmActivo;
+
+    private List<ChoferLogoneoRow> _choferes = new();
+    private List<ZonaRow> _zonas = new();
+    private List<string> _vencimientos = new();
+
+    private string _chofer = "", _zona = "";
+    private bool _asignarConFranco, _grabando;
+    private DateTime? _fecha = DateTime.Today;
+    private TimeSpan? _hora = DateTime.Now.TimeOfDay;
+    private string? _error, _aviso, _bloqueo;
+
+    private bool ChoferElegidoDeFranco =>
+        _choferes.FirstOrDefault(c => c.IdChofer == _chofer)?.TieneFrancoHoy == true;
+
+    private bool PuedeGrabar
+    {
+        get
+        {
+            if (_fecha is null || _hora is null) return false;
+            if (Deslogonear) return Segundo || !string.IsNullOrWhiteSpace(_zona);
+            if (string.IsNullOrWhiteSpace(_chofer)) return false;
+            if (!Segundo && string.IsNullOrWhiteSpace(_zona)) return false;
+            // Si está de franco, hay que tildar explícitamente (el "¿Lo asigna igualmente?").
+            return !ChoferElegidoDeFranco || _asignarConFranco;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _bloqueo = Validar();
+        if (_bloqueo is not null) return;
+
+        _zonas = await Reports.GetZonasAsync();
+        _zona = Bus.Zona;
+        // Si la zona guardada no está en el catálogo, no la inventamos: queda vacía y el
+        // operador tiene que elegir una (misma exigencia que el form del FoxPro).
+        if (!_zonas.Any(z => z.IdZona == _zona)) _zona = "";
+
+        if (!Deslogonear)
+            _choferes = await Reports.GetChoferesParaLogonearAsync(Bus.Fletero);
+
+        _vencimientos = await Reports.GetVencimientosUnidadAsync(
+            Bus.Vehiculo, Bus.Uso, Bus.Chofer, Bus.Chofer2);
+    }
+
+    /// <summary>
+    /// Las guardas literales del .mpr + de <c>logonea_conductor</c>/<c>deslogonea_conductor</c>.
+    /// Devuelve el texto del cartel que mostraba el FoxPro, o null si se puede seguir.
+    /// </summary>
+    private string? Validar()
+    {
+        var estado = (Bus.Estado ?? "").Trim();
+        var cho = (Bus.Chofer ?? "").Trim();
+        var cho2 = (Bus.Chofer2 ?? "").Trim();
+
+        if (estado == "TALLER")
+            return "La unidad se encuentra fuera de servicio (TALLER). Intentá con otra.";
+
+        if (!Deslogonear)
+        {
+            // El menú exige LIBERADO. OJO: "CURSO" es un estado de DISPLAY (ASIGNADO ya iniciado),
+            // así que cualquier cosa distinta de LIBERADO cuenta como "en servicio".
+            if (estado != "LIBERADO") return "La unidad se encuentra en servicio.";
+            if (!Segundo && cho.Length > 0) return $"Esa unidad ya tiene asignado un conductor ({cho}).";
+            if (Segundo && cho.Length == 0) return "No tiene asignado el primer conductor.";
+            if (Segundo && cho2.Length > 0) return "Esa unidad ya tiene un 2º conductor.";
+            return null;
+        }
+
+        if (estado == "GUARDIA") return "La unidad se encuentra en GUARDIA. Hay que liberarla.";
+        if (!Segundo && cho2.Length > 0) return "Deslogoneá primero al 2º conductor.";
+        if (!Segundo && cho.Length == 0) return "La unidad se encuentra sin logonear.";
+        if (Segundo && cho2.Length == 0) return "La unidad no tiene 2º conductor logoneado.";
+        if (Bus.IdViaje is > 0) return "La unidad se encuentra realizando un viaje.";
+        return null;
+    }
+
+    private async Task Grabar()
+    {
+        _error = null; _aviso = null;
+        _grabando = true;
+
+        var momento = _fecha!.Value.Date + (_hora ?? TimeSpan.Zero);
+        var nombre = _choferes.FirstOrDefault(c => c.IdChofer == _chofer)?.Nombre ?? "";
+
+        var r = Deslogonear
+            ? await Abm.DeslogonearAsync(Bus.Id, Segundo, _zona, momento, Usuario)
+            : await Abm.LogonearAsync(Bus.Id, _chofer, nombre, Segundo, _zona,
+                                      ChoferElegidoDeFranco && _asignarConFranco, momento, Usuario);
+        _grabando = false;
+
+        if (!r.Ok) { _error = r.Error; return; }
+        if (r.Aviso is not null) { _aviso = r.Aviso; StateHasChanged(); await Task.Delay(2500); }
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private static string Dato(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s.Trim();
+
+    private RenderFragment F(string label, string valor, string? cssValor = null, bool acento = false, int ancho = 1) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", $"zoom-field zoom-field--{ancho}");
+        b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label");
+        b.AddContent(4, label); b.CloseElement();
+        var cls = acento ? "zoom-field__value zoom-field__value--acento" : "zoom-field__value";
+        if (!string.IsNullOrEmpty(cssValor)) cls += " " + cssValor;
+        b.OpenElement(5, "div");
+        b.AddAttribute(6, "class", cls);
+        b.AddContent(7, valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+}

@@ -63,10 +63,11 @@
 </MudPaper>
 
 @* ── KPIs ── *@
-<div class="d-flex flex-wrap mb-3" style="gap:12px;">
-    <div style="flex:1 1 0; min-width:180px;"><KpiCard Label="Vouchers" Value="@_items.Count.ToString("N0")" /></div>
-    <div style="flex:1 1 0; min-width:180px;"><KpiCard Label="Recepcionados" Value="@_items.Count(v => v.Recepcionado).ToString("N0")" Color="@NorturColors.Verde" /></div>
-    <div style="flex:1 1 0; min-width:180px;"><KpiCard Label="Sin recepcionar" Value="@_items.Count(v => !v.Recepcionado).ToString("N0")" Color="@NorturColors.Naranja" /></div>
+@* rfs-kpis (grid): contrato de responsividad del proyecto — ver skill `responsive-nortur`. *@
+<div class="rfs-kpis mb-3">
+    <KpiCard Label="Vouchers" Value="@_items.Count.ToString("N0")" />
+    <KpiCard Label="Recepcionados" Value="@_items.Count(v => v.Recepcionado).ToString("N0")" Color="@NorturColors.Verde" />
+    <KpiCard Label="Sin recepcionar" Value="@_items.Count(v => !v.Recepcionado).ToString("N0")" Color="@NorturColors.Naranja" />
 </div>
 
 @if (_cargando)

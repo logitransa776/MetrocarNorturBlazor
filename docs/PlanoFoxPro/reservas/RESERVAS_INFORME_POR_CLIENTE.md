@@ -68,15 +68,38 @@ SET DELETED ON
    **no tiene ninguna fila `_deleted = 1` en `viaje`** (verificado: 521.230 filas, todas
    `_deleted = 0`) → desde SQL no se pueden reproducir esos borrados; gap asumido menor.
 
-## Clasificación `tipo` (regla de negocio del interno)
+## Clasificación `tipo` (regla de negocio del interno) — 🔴 ROTA, no reproducir
 
 | Condición | Tipo | Significado |
 |---|---|---|
 | `interno = 0` (o NULL en SQL) | **SIN REALIZAR** | viaje sin unidad asignada aún (típico futuro) |
-| `0 < interno < 1000` | **PROPIO** | flota propia (verificado: 373 vehículos con interno < 1000) |
-| `interno >= 1000` | **CONTRATADO** | fletero/contratado (verificado: 33 vehículos con interno ≥ 1000) |
+| `0 < interno < 1000` | **PROPIO** | flota propia |
+| `interno >= 1000` | **CONTRATADO** | fletero/contratado |
 
 `viaje.interno` es el número de interno desnormalizado en el viaje (bigint en la réplica).
+
+> 🔴 **Esta regla NO mide lo que dice** (verificado contra la réplica el 30/07/2026, al revisar
+> el informe con la clienta). La verificación original de este plano ("33 vehículos con interno
+> ≥ 1000 = contratados") miró el número de interno pero **no la ficha del vehículo**:
+>
+> - Los internos **3003-9999 son unidades PROPIAS de NORTUR** (`uso='PROPIO'`, `fletero='NORTUR'`)
+>   → la regla las llamaba CONTRATADO.
+> - Las unidades **realmente contratadas** (PANELLA, NUEVOS RUMBOS, TEB, VASCOTUR, NEUQUEN, MTL…)
+>   tienen internos **26, 35, 36, 129, 298, 326…** — o sea **< 1000** → la regla las llamaba PROPIO.
+> - Contratados reales vs. lo que mostraba la regla, por año: 2022 **743 vs 0** · 2023 **741 vs 1** ·
+>   2024 **423 vs 19** · 2025 **268 vs 235** · 2026 **64 vs 136**. Los conjuntos ni se superponen.
+>
+> **Clasificación correcta:** leer la ficha del vehículo con
+> `LEFT JOIN vehiculo veh ON veh.dominio = v.id_vehicu2 AND veh._deleted = 0`
+> (⚠ `viaje.id_vehicul` es el TIPO y `id_vehicu2` el DOMINIO — están cruzados en la réplica).
+> `vehiculo.dominio` es único (412/412) y resuelve el 100% de los viajes con unidad asignada
+> (2026: 8.496 con match, 0 sin match, 3.007 sin unidad = SIN REALIZAR). Sin match = SIN REALIZAR.
+>
+> **Quedan dos definiciones posibles de "contratado" y la carga de la flota no es consistente
+> entre ellas**, así que el informe deja elegir el criterio (y la definitiva la confirma la clienta):
+> `uso='CONTRATADO'` → 52 viajes en feb-jul 2026 (default: es el campo que el propio FoxPro usa
+> para su filtro "Ver Flota Propia") vs `fletero <> 'NORTUR'` → 208. Las 14 unidades de MVTRAVEL,
+> cargadas `uso='PROPIO'` con `fletero='MVTRAVEL'`, explican casi toda la diferencia.
 
 ## Motivos de cancelación (`viaje_motivo_cancela`, 6 filas)
 
@@ -152,3 +175,37 @@ viajes / 98 clientes / 65 contratados — SQL directo da exactamente lo mismo; c
 TRAVEL × 03/2026 = 335 verificada al dígito. Cross-filter probado con Playwright (foco
 GATE1 TRAVEL + PROPIO → 857 viajes, chips en los 3 paneles). Smoke test agregado a la suite
 (`smoke.spec.ts` → "Reservas por cliente — levanta con KPIs y pivote").
+
+---
+
+## 🔄 Rediseño 30/07/2026 — las 4 correcciones de la clienta (Paula)
+
+Paula (líder del proyecto del lado del cliente) usó el informe y devolvió 4 puntos. Todos
+resueltos; el alcance por defecto **no cambió** (los números que ella ya conoce se mantienen).
+
+| # | Lo que reportó | Diagnóstico | Solución |
+|---|---|---|---|
+| 1 | "Se pueden pedir los períodos anteriores pero solo muestra el total, sin variación ni composición X vs X-1" | La comparación se calculaba **en memoria sobre los meses ya cargados** → el interanual quedaba vacío salvo que el usuario ampliara el "Desde" un año entero | Selector **"Comparar con"** (Sin comparación / Mes anterior / Mismo mes del año anterior) que define un **período base traído con una 2ª consulta**. Alimenta KPIs (badge Δ%), gráfico mensual y tabla |
+| 2 | "El indicador Contratados no deja ver su detalle o composición" | Además de faltar el detalle, **el número estaba mal calculado** (ver el recuadro rojo de la clasificación, arriba) | KPI **clickeable** → `ComposicionTipoDialog`: desglose por unidad (interno · dominio · dueño · uso) y por cliente, con drill-down a los viajes. Y clasificación corregida |
+| 3 | "El botón Variación no realiza ninguna acción" | Sí actuaba, pero el switch estaba en la barra de filtros y su único efecto está en la tabla, tres pantallas abajo. Con "vs año pasado" (sin datos base) el efecto era literalmente nulo | Se eliminó el switch. Ahora es un selector **"Mostrar: Cantidad · Variación · Cantidad y variación" en la cabecera de la tabla**, donde se ve el efecto |
+| 4 | "En Canceladas no se ve la composición ni el motivo; en Metrocar se veían motivo y cliente" | El modo canceladas usaba las mismas dimensiones que activas | En modo Canceladas el tablero se reconfigura: **motivo reemplaza a tipo de unidad como 2ª dimensión** (apilado mes × motivo, donut por motivo, cross-filter), pivote con selector **Columnas: Por mes / Por motivo** (el cruce cliente × motivo del Metrocar) y KPIs de **tasa de cancelación**, motivo principal y cliente que más cancela |
+
+**Por qué motivo reemplaza a tipo de unidad en canceladas:** el **100% de las reservas
+canceladas está SIN REALIZAR** (5.948 de 5.948 en 2025-26, verificado) — el tipo de unidad ahí
+es una sola porción gris. No es un compromiso de diseño, lo dicta el dato.
+
+**Cambio de alcance (acordado con el usuario):** se agregó el filtro **Tipo de servicio**
+(Empresa / Turismo / Interno), igual que en Banda Horaria — el informe tenía fijo `origen='T'`,
+o sea **solo Turismo**. **Solo Turismo viene tildado por defecto**, así que el resultado es
+idéntico al anterior; tildando Empresa se ve la operación completa.
+
+**Otros ajustes:** el default de motivos pasó de "solo el 2" (hardcode del FoxPro) a **todos**
+— escondía las 371 cancelaciones "POR ERROR EN CARGA" de 2025-26. Se quitó el modo
+"vs N meses atrás" (no lo pidió nadie). El Excel suma hojas **Motivos de cancelación** y
+**Cliente x motivo**, columnas de período base en el pivote, y unidad/dueño/uso en la hoja Viajes.
+
+**Validado con dos señales (30/07/2026):** UI 01/02–30/07/2026, Turismo, activas = **4.845
+viajes / 111.926 pax / 101 clientes** — SQL directo da exactamente lo mismo, y coincide con el
+informe anterior (el alcance no se movió). Base interanual = 4.308 → Δ +537 = +12%, idéntico en
+pantalla. Canceladas = 1.304, tasa 21,2%, cliente × motivo suma 1.264 + 38 + 2. Contratados: 52
+(criterio uso) / 208 (criterio fletero) / 71 (regla vieja). Suite completa **49/49** en verde.

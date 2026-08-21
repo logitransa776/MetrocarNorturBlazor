@@ -1,0 +1,165 @@
+@inject IDialogService DialogService
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Composición de un tipo de unidad del informe "Reservas por cliente" — pedido de
+   la clienta (30/07/2026): el KPI "Contratados" daba un número sin forma de saber
+   de qué estaba hecho. Muestra el desglose por UNIDAD (interno · dominio · dueño)
+   y por CLIENTE, y desde cualquiera de las dos tablas se baja a los viajes.
+   Los datos llegan ya filtrados desde la página (sin query propia).
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.PieChart" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Composición de @Tipo</span>
+            <span class="zoom-title-bar__nro">@Subtitulo</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar"
+                           OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <div class="d-flex align-center flex-wrap mb-2" style="gap:16px;">
+            <MudText Typo="Typo.body2" Style="color:#5B7290;">
+                <b style="color:#112F5B;">@Items.Count.ToString("#,0", _ar)</b> viajes ·
+                <b style="color:#112F5B;">@Items.Sum(i => i.Reserva.Pax).ToString("#,0", _ar)</b> pax ·
+                <b style="color:#112F5B;">@_porUnidad.Count</b> @(_porUnidad.Count == 1 ? "unidad" : "unidades") ·
+                <b style="color:#112F5B;">@_porCliente.Count</b> @(_porCliente.Count == 1 ? "cliente" : "clientes")
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
+                Criterio: @CriterioTexto · click en una fila para ver sus viajes
+            </MudText>
+        </div>
+
+        <MudGrid Spacing="2">
+            <MudItem xs="12" md="7">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B; margin-bottom:4px;">
+                    Por unidad
+                </MudText>
+                <MudTable Items="@_porUnidad" Dense="true" Hover="true" Striped="true"
+                          FixedHeader="true" Height="46vh" T="FilaUnidad"
+                          OnRowClick="VerViajesUnidad" RowStyle="cursor:pointer;">
+                    <HeaderContent>
+                        <MudTh Style="text-align:right;">Interno</MudTh>
+                        <MudTh>Dominio</MudTh>
+                        <MudTh>Dueño / fletero</MudTh>
+                        <MudTh>Uso</MudTh>
+                        <MudTh Style="text-align:right;">Viajes</MudTh>
+                        <MudTh Style="text-align:right;">Pax</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd Style="text-align:right; white-space:nowrap;">@(context.Interno?.ToString() ?? "—")</MudTd>
+                        <MudTd Style="white-space:nowrap;">@(context.Dominio == "" ? "—" : context.Dominio)</MudTd>
+                        <MudTd Style="white-space:nowrap;">@(context.Fletero == "" ? "—" : context.Fletero)</MudTd>
+                        <MudTd Style="white-space:nowrap;">@(context.Uso == "" ? "—" : context.Uso)</MudTd>
+                        <MudTd Style="text-align:right;">@context.Viajes.ToString("#,0", _ar)</MudTd>
+                        <MudTd Style="text-align:right;">@context.Pax.ToString("#,0", _ar)</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudItem>
+
+            <MudItem xs="12" md="5">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B; margin-bottom:4px;">
+                    Por cliente
+                </MudText>
+                <MudTable Items="@_porCliente" Dense="true" Hover="true" Striped="true"
+                          FixedHeader="true" Height="46vh" T="FilaCliente"
+                          OnRowClick="VerViajesCliente" RowStyle="cursor:pointer;">
+                    <HeaderContent>
+                        <MudTh>Cliente</MudTh>
+                        <MudTh Style="text-align:right;">Viajes</MudTh>
+                        <MudTh Style="text-align:right;">Pax</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>@context.Cliente</MudTd>
+                        <MudTd Style="text-align:right;">@context.Viajes.ToString("#,0", _ar)</MudTd>
+                        <MudTd Style="text-align:right;">@context.Pax.ToString("#,0", _ar)</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudItem>
+        </MudGrid>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Subtitulo { get; set; } = "";
+    [Parameter] public string Tipo { get; set; } = "";
+    [Parameter] public string Criterio { get; set; } = ReportService.CriterioUso;
+    [Parameter] public string Metrica { get; set; } = "Reservas";
+    [Parameter] public List<ReservaClienteDetalleRow> Items { get; set; } = new();
+
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    public record FilaUnidad(int? Interno, string Dominio, string Fletero, string Uso, int Viajes, int Pax);
+    public record FilaCliente(string IdCliente, string Cliente, int Viajes, int Pax);
+
+    private List<FilaUnidad> _porUnidad = new();
+    private List<FilaCliente> _porCliente = new();
+
+    private string CriterioTexto => Criterio == ReportService.CriterioFletero
+        ? "por dueño de la unidad (fletero distinto de NORTUR = contratado)"
+        : "por uso de la ficha del vehículo (uso = CONTRATADO)";
+
+    protected override void OnParametersSet()
+    {
+        _porUnidad = Items
+            .GroupBy(d => (d.Reserva.Interno, d.Dominio, d.Fletero, d.Uso))
+            .Select(g => new FilaUnidad(g.Key.Interno, g.Key.Dominio, g.Key.Fletero, g.Key.Uso,
+                                        g.Count(), g.Sum(x => x.Reserva.Pax)))
+            .OrderByDescending(x => Metrica == "Pax" ? x.Pax : x.Viajes)
+            .ThenBy(x => x.Dominio)
+            .ToList();
+
+        _porCliente = Items
+            .GroupBy(d => d.IdCliente)
+            .Select(g => new FilaCliente(g.Key, g.First().Reserva.Cliente,
+                                         g.Count(), g.Sum(x => x.Reserva.Pax)))
+            .OrderByDescending(x => Metrica == "Pax" ? x.Pax : x.Viajes)
+            .ThenBy(x => x.Cliente)
+            .ToList();
+    }
+
+    private void VerViajesUnidad(TableRowClickEventArgs<FilaUnidad> args)
+    {
+        if (args.Item is null) return;
+        var u = args.Item;
+        var items = Items.Where(d => d.Reserva.Interno == u.Interno && d.Dominio == u.Dominio).ToList();
+        _ = AbrirViajes(items, $"{Tipo} · unidad {(u.Dominio == "" ? u.Interno?.ToString() ?? "—" : u.Dominio)}");
+    }
+
+    private void VerViajesCliente(TableRowClickEventArgs<FilaCliente> args)
+    {
+        if (args.Item is null) return;
+        var items = Items.Where(d => d.IdCliente == args.Item.IdCliente).ToList();
+        _ = AbrirViajes(items, $"{Tipo} · {args.Item.Cliente}");
+    }
+
+    private async Task AbrirViajes(List<ReservaClienteDetalleRow> items, string subtitulo)
+    {
+        if (items.Count == 0) return;
+        var parametros = new DialogParameters<ReservasFsDetalleDialog>
+        {
+            { x => x.Items, items.Select(d => d.Reserva).ToList() },
+            { x => x.Subtitulo, subtitulo }
+        };
+        var opciones = new DialogOptions
+        {
+            MaxWidth = MaxWidth.ExtraLarge,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        };
+        await DialogService.ShowAsync<ReservasFsDetalleDialog>("Detalle de viajes", parametros, opciones);
+    }
+
+    private void Cerrar() => MudDialog.Close();
+}

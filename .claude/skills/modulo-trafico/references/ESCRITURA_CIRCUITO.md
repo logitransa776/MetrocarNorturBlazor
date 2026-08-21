@@ -12,6 +12,11 @@
 | A1 | **Alta manual** (Reservas) | INSERT 35+ campos, `origen='T'`, estado SIN ASIGNAR, `cronograma='S/C'` | — | ALTA ("CARGA DE RESERVA") | `viaje_adicional`, `cliente_grupo` (crea/extiende+arrastre), `guia` (upsert), `parametro.id_viaje_int` (rutas) |
 | A2 | **Armar plantillas** (Reservas) | INSERT por fecha×fila, `origen='P'`, `lote` | — | ALTA ("CARGA DE PLANTILLA") | `viaje_adicional`, `parametro.lote_plant`, gps |
 | A3 | **Importa Excel** (Reservas) | INSERT transaccional, `origen='T'`, adicionales INLINE (slots `adi_*`) → **unificar a tabla en Buslink** | — | (FoxPro NO loguea — Buslink SÍ) | `parametro.lote_plant` |
+| T0 | **Aviso sobre el viaje** (tecla **F4**, `trafico_hs_aviso`) | `hs_aviso` (o NULL = vuelve al aviso automático de `parametro.aviso_tiem`) | — | (FoxPro NO loguea — Buslink SÍ: **AVISO**) | — |
+| TN | **Alta de novedad** (tecla **F2**, `libro_novedad_abm`) | — (tabla propia, fuera del circuito) | — | — | `libro_novedad`: INSERT de 5 campos (`f_carga`, `asunto`, `mensaje`, `usuario_cr`, `id_viaje`), `id` = MAX+1. `id_viaje` = 0 → novedad suelta. Correo al cliente NO migrado |
+| TC1 | **Cronograma — diagramador** (`D`; teclas F6-F9 / menú) | `cronogram2` + `cronograma` + `chequeo=0` | — | — (no loguea) | simple · ruta (todos los tramos) · **masivo** (mismo cronograma anterior + interno=0) |
+| TC2 | **Cronograma — operador** (`T`) | `cronograma` + `chequeo=0` | — | CBIO UNIDAD (comentario = motivo, **uno por tramo** en ruta) | simple · ruta |
+| TC3 | **Copia del diagramador** (Ctrl+F8) | `cronograma = cronogram2` + `chequeo=0` | — | CBIO UNIDAD solo en modo operador | fila actual |
 | T1 | **Chequeo** (toolbar) | `chequeo+1` (estado NO cambia) | — | CHEQUEO ("CHEQUEO UNIDAD") | — |
 | T2 | **Asignar** (toolbar, `trafico_asigna` SIN/CON) | estado ASIGNADO + odometro, id_chofer, nombre_cho, franco, tipo_chofer, id_vehicul, interno, id_chofer2, id_interno, fletero | ASIGNADO + hs_inicio + id_viaje | ASIGNO (comentario=motivo en modo CON) | `vehiculo_km` (1er odómetro del mes + cierre mes anterior), `chofer_franco` (Cbia/Trabaja franco), gps |
 | T3 | **Reasignar** (toolbar, `trafico_reasigna`) | ídem T2 + `chequeo=0` | nueva ASIGNADO / vieja LIBERADO+id_viaje=0 | RE-ASIGNO (interno_or/ne + cronograma/cronogram2) | gps |

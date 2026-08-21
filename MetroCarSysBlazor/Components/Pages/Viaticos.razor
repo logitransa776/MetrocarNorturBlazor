@@ -132,6 +132,14 @@ else
     private string _idChofer = "";
     private ViaticoRow? _sel;
 
+    /// <summary>
+    /// Chofer con el que abrir la pantalla ya filtrada (<c>/viaticos?chofer=XXX</c>).
+    /// Lo usa el ítem "Viático" del menú contextual del panel Buses, que en el FoxPro abría
+    /// <c>chofer_viatico_abm WITH "trafico", id_chofer</c> — o sea, con el conductor cargado.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "chofer")]
+    public string? ChoferQuery { get; set; }
+
     private string PeriodoTexto => $"{(_desde ?? DateTime.Today):dd/MM/yyyy} – {(_hasta ?? DateTime.Today):dd/MM/yyyy}";
 
     protected override async Task OnInitializedAsync()
@@ -147,6 +155,17 @@ else
             return;
         }
         _choferes = await Reports.GetChoferesComboAsync();
+
+        // Venir desde el menú de Buses con ?chofer=XXX abre la pantalla ya filtrada por él.
+        // Se valida contra el combo: un código que no está en la lista dejaría la grilla vacía
+        // sin que se vea por qué, así que en ese caso se ignora y se muestra todo.
+        if (!string.IsNullOrWhiteSpace(ChoferQuery))
+        {
+            var q = ChoferQuery.Trim();
+            if (_choferes.Any(c => string.Equals(c.IdChofer, q, StringComparison.OrdinalIgnoreCase)))
+                _idChofer = q;
+        }
+
         await CargarAsync();
     }
 

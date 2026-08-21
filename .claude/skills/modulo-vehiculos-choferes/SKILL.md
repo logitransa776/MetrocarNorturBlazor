@@ -156,6 +156,25 @@ Cada pantalla tiene su doc detallada (tablas, columnas, validaciones, reglas no 
 | Agenda de Vencimientos (informe) | `Components/Pages/AgendaVencimientos.razor` (`/agenda-vencimientos`) | — (2 grillas + KPIs) | `docs/PLANOFOXPRO/vehiculos-choferes/AGENDA_VENCIMIENTOS.md` |
 | Fleteros (solo lectura + andamiaje ABM) | `Components/Pages/Fleteros.razor` (`/fleteros`) | `FleteroEditorDialog.razor` (4 modos) | `docs/PLANOFOXPRO/vehiculos-choferes/FLETEROS.md` |
 | Tipo de Vehículos (solo lectura + andamiaje ABM) | `Components/Pages/TiposVehiculo.razor` (`/tipos-vehiculo`) | `TipoVehiculoEditorDialog.razor` (4 modos) | `docs/PLANOFOXPRO/vehiculos-choferes/TIPO_VEHICULOS.md` |
+| **Panel de Flota** (informe NUEVO, sin gemelo FoxPro) | `Components/Pages/PanelFlota.razor` (`/panel-flota`) | `FlotaUnidadesDialog.razor` (drill-down) | — (nació de la base, no de un form) |
+
+### Panel de Flota — informe nuevo (10/08/2026)
+
+Primer informe del proyecto que **no migra nada**: contesta preguntas que el Metrocar no
+contesta. Tres secciones en un tablero: composición (unidades/butacas/antigüedad/titular),
+**oferta vs demanda por tipo** (los `SIN ASIGNAR` como medida del faltante) y unidades
+**ociosas** (activas sin un viaje). 4 dimensiones intercambiables (tipo · titular · antigüedad ·
+capacidad), cross-filter, drill-down y Excel de 3 hojas. Dos queries
+(`GetFlotaUnidadesAsync` + `GetFlotaDemandaAsync`) y todo lo demás en memoria (~412 filas).
+
+Lo que se aprendió construyéndolo (además de las trampas 12-14 de abajo):
+- El **plantel no tiene historia**: `vehiculo` es una foto, así que el Desde–Hasta mide
+  actividad, no plantel. Va dicho en la pantalla y en el Excel — si no, el informe miente.
+- **Ordinal ≠ nominal**: antigüedad y capacidad se ordenan por su escala natural; tipo y
+  titular, por volumen. Las barras y la tabla tienen que usar el MISMO orden.
+- **`@key` obligatorio al cambiar de dimensión**: sin remontar, el gráfico de barras se queda
+  con las categorías anteriores (al pasar a "Antigüedad" seguía mostrando BUS/VAN). El foco NO
+  regenera el key (ahí se actualiza en el lugar, que es lo que evita el parpadeo).
 
 Patrón aplicado (copiar para las siguientes): lista MudTable con filtros + egresados en
 amarillo (`cli-grid__row--egresado`), ficha en `MudDialog` con tabs, estilos `cli-*`/`zoom-*`,
@@ -219,6 +238,21 @@ Por fricción creciente (criterio de `abm-metrocar`: catálogos chicos primero):
     sólo mira `f_delete`). El filtro "Ver Activos" del FoxPro arranca **tildado**.
 11. **Tacógrafo en `vehiculo`**: `tacografo_` = marca, `tacografo2` = nro (truncado, fácil
     de confundir). Dueños: nombre desde tabla `dueno`; Permisos: nombre desde tabla `permiso`.
+12. 🔴 **En `vehiculo` los campos están CRUZADOS al revés que en `viaje`** (verificado
+    10/08/2026): acá `id_vehicul` = **DOMINIO** y `id_vehicu2` = **TIPO**; en `viaje` es
+    `id_vehicul` = TIPO y `id_vehicu2` = DOMINIO. Agrupar la flota por `id_vehicul` devuelve
+    412 grupos de 1 fila (una por patente), no los 7 tipos. Cruce flota↔viajes: SIEMPRE
+    `vehiculo.dominio = viaje.id_vehicu2`. Complementa [[viaje-campos-vehiculo-cruzados]].
+13. **`TRAFIC` es un tipo huérfano**: 42 unidades (10 activas) lo usan, pero NO existe en el
+    catálogo `vehiculo_tipo` (que tiene BUS/MINI/VAN/KANGOO/AUTO/HIACE). Tienen `pax=19`, igual
+    que VAN, y ninguna reserva pide nunca "TRAFIC" aunque esas 10 unidades trabajen miles de
+    viajes → es el **nombre viejo de VAN**. Decisión del usuario (10/08/2026): en el Panel de
+    Flota se muestra **tal cual, como fila propia** (fiel a la base), no unificado a VAN.
+14. **`vehiculo_km` tiene errores de carga de varios órdenes de magnitud**: hay una unidad con
+    km_inicio 200.000.000 → km_fin 3.000.000.000 en un mes (2.800 millones de km). Cualquier
+    suma de km debe filtrar **por mes** (`km_fin > km_inicio AND km_fin - km_inicio <= 30.000`),
+    nunca por MIN/MAX del rango — un mes podrido envenena todo el período. La constante vive en
+    `ReportService.KmMaximoPorMes`. Además solo ~100 de las 202 unidades activas tienen lecturas.
 
 ## Estado
 

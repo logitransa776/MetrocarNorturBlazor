@@ -4,6 +4,18 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- ── Versionado Buslink ─────────────────────────────────────────────────
+         Pre-producción: 0.9.x. Se sube el último número en cada entrega
+         significativa al cliente (0.9.5 → 0.9.6 → …). El día D, cuando toda
+         la operación pasa a Buslink, esto se cambia a 1.0.0 a mano.
+         Es el único lugar donde se toca la versión: la pantalla Acerca de la
+         lee del assembly. -->
+    <Version>0.9.5</Version>
+
+    <!-- Sin esto, el SDK le pega "+<hash de git>" a la versión informacional
+         y en Acerca de se ve "1.0.0+39f0db6b1f80…" (ilegible). -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

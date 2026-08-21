@@ -1,0 +1,188 @@
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   Destinatario de los correos internos — réplica del form FoxPro
+   libro_novedad_parametro.scx (el panel de carga de abajo, con sus 4 modos).
+   Campos: contacto (PK lógica, mayúsculas, 30) · e-mail (70) · 5 tildes de suscripción.
+
+   ⚠ ANDAMIAJE (19/08/2026): la escritura está construida (AbmService.*DestinatarioCorreoAsync)
+   pero el botón Grabar está DESHABILITADO — `libro_novedad_parametro` sigue con dueño FoxPro.
+   Activar: AbmFeatureFlags.DestinatariosCorreoAbmActivo = true + bloquear el form en FoxPro +
+   apagar la sync de esa tabla. Baja FÍSICA (DELETE, sin f_delete).
+   Plano: docs/PlanoFoxPro/trafico/LIBRO_NOVEDADES.md
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog cli-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@_icono" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">@_titulo</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (!AbmActivo && Modo != "ver")
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                <b>Vista previa del ABM.</b> La lista de destinatarios todavía se mantiene en el
+                Metrocar; esta pantalla queda lista para activarse el día que la tabla pase a Buslink.
+            </MudAlert>
+        }
+        @if (Modo == "baja")
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                Se va a eliminar a <b>@_contacto</b> de la lista. Deja de recibir todos los
+                informes que tenga tildados.
+            </MudAlert>
+        }
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">@_error</MudAlert>
+        }
+
+        <div class="zoom-box zoom-box--sec">
+            <span class="zoom-box__label">Destinatario</span>
+            <div class="zoom-row pa-2">
+                <div class="zoom-field zoom-field--2">
+                    <div class="zoom-field__label">Contacto</div>
+                    @if (Modo == "alta")
+                    {
+                        @* Solo el alta puede escribirlo: es la PK lógica de la tabla (el FoxPro
+                           deshabilita el campo en modifica y en baja). *@
+                        <MudTextField T="string" @bind-Value="_contacto" Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" MaxLength="AbmService.ContactoMaxLen"
+                                      Immediate="true" Placeholder="NOMBRE Y APELLIDO" />
+                    }
+                    else
+                    {
+                        <div class="zoom-field__value zoom-field__value--acento">@_contacto</div>
+                    }
+                </div>
+                <div class="zoom-field zoom-field--3">
+                    <div class="zoom-field__label">E-Mail</div>
+                    @if (Editable)
+                    {
+                        <MudTextField T="string" @bind-Value="_email" Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" MaxLength="AbmService.EmailMaxLen"
+                                      Immediate="true" Placeholder="@("usuario@dominio.com.ar")" />
+                    }
+                    else
+                    {
+                        <div class="zoom-field__value" title="@_email">@_email</div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="zoom-box zoom-box--sec">
+            <span class="zoom-box__label">Qué informes recibe</span>
+            <div class="pa-2">
+                @* Los 5 tildes de la tabla. Hoy solo Novedades y Siniestros salen desde Buslink;
+                   Combustible, Auditoría y Taller siguen enviándose desde el Metrocar. *@
+                <div class="d-flex flex-wrap" style="gap:4px 22px;">
+                    <MudCheckBox T="bool" @bind-Value="_novedad" Label="Novedades" Dense="true"
+                                 Size="Size.Small" Color="Color.Primary" Disabled="!Editable" />
+                    <MudCheckBox T="bool" @bind-Value="_siniestro" Label="Siniestros" Dense="true"
+                                 Size="Size.Small" Color="Color.Primary" Disabled="!Editable" />
+                    <MudCheckBox T="bool" @bind-Value="_combustible" Label="Combustible" Dense="true"
+                                 Size="Size.Small" Color="Color.Primary" Disabled="!Editable" />
+                    <MudCheckBox T="bool" @bind-Value="_auditoria" Label="Auditoría" Dense="true"
+                                 Size="Size.Small" Color="Color.Primary" Disabled="!Editable" />
+                    <MudCheckBox T="bool" @bind-Value="_taller" Label="Taller" Dense="true"
+                                 Size="Size.Small" Color="Color.Primary" Disabled="!Editable" />
+                </div>
+                <MudText Typo="Typo.caption" Style="color:#7A90AD; display:block; margin-top:6px;">
+                    Novedades y Siniestros son los que hoy arma Buslink. Combustible, Auditoría y
+                    Taller se siguen enviando desde el Metrocar.
+                </MudText>
+            </div>
+        </div>
+    </DialogContent>
+
+    <DialogActions>
+        <span class="cli-toolbar__hint" style="margin-right:auto;">
+            <MudIcon Icon="@(AbmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+            @(AbmActivo ? "Se graba en la lista de distribución"
+                        : "Escritura preparada · se habilita cuando la tabla pase a Buslink")
+        </span>
+        <MudButton Variant="Variant.Text" OnClick="Cerrar">Cancelar</MudButton>
+        @if (Modo != "ver")
+        {
+            <MudButton Variant="Variant.Filled" Color="@(Modo == "baja" ? Color.Error : Color.Success)"
+                       StartIcon="@(Modo == "baja" ? Icons.Material.Filled.Delete : Icons.Material.Filled.Save)"
+                       OnClick="Grabar" Disabled="@(!AbmActivo || _grabando)">
+                @(_grabando ? "Guardando…" : Modo == "baja" ? "Eliminar" : "Grabar")
+            </MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>"alta" · "modifica" · "baja" · "ver".</summary>
+    [Parameter] public string Modo { get; set; } = "ver";
+    [Parameter] public DestinatarioCorreoRow? Fila { get; set; }
+    [Parameter] public bool AbmActivo { get; set; }
+
+    private bool Editable => Modo is "alta" or "modifica";
+
+    private string _contacto = "", _email = "";
+    private bool _novedad, _siniestro, _combustible, _auditoria, _taller;
+    private bool _grabando;
+    private string? _error;
+
+    private string _titulo => Modo switch
+    {
+        "alta" => "Nuevo destinatario",
+        "modifica" => "Modificar destinatario",
+        "baja" => "Eliminar destinatario",
+        _ => "Destinatario",
+    };
+
+    private string _icono => Modo switch
+    {
+        "alta" => Icons.Material.Filled.PersonAdd,
+        "baja" => Icons.Material.Filled.PersonRemove,
+        _ => Icons.Material.Filled.MarkEmailRead,
+    };
+
+    protected override void OnInitialized()
+    {
+        if (Fila is null) return;
+        _contacto = Fila.Contacto;
+        _email = Fila.Email;
+        _novedad = Fila.Novedad;
+        _siniestro = Fila.Siniestro;
+        _combustible = Fila.Combustible;
+        _auditoria = Fila.Auditoria;
+        _taller = Fila.Taller;
+    }
+
+    private async Task Grabar()
+    {
+        _error = null;
+        _grabando = true;
+
+        var input = new AbmService.DestinatarioCorreoInput(
+            _contacto, _email, _novedad, _siniestro, _combustible, _auditoria, _taller);
+
+        var r = Modo switch
+        {
+            "alta" => await Abm.AltaDestinatarioCorreoAsync(input),
+            "modifica" => await Abm.ModificarDestinatarioCorreoAsync(input),
+            "baja" => await Abm.BajaDestinatarioCorreoAsync(_contacto),
+            _ => AbmService.AbmResult.Fallo("Modo no soportado."),
+        };
+
+        _grabando = false;
+        if (!r.Ok) { _error = r.Error; return; }
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cerrar() => MudDialog.Close();
+}

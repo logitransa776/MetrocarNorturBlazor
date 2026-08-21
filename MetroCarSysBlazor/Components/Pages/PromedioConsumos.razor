@@ -385,12 +385,11 @@ else
     {
         if (_focoDominio is null) return;
         builder.OpenComponent<MudChip<string>>(0);
-        builder.AddAttribute(1, "T", "string");
-        builder.AddAttribute(2, "Color", MudColor.Primary);
-        builder.AddAttribute(3, "Size", MudSize.Small);
-        builder.AddAttribute(4, "OnClose", EventCallback.Factory.Create<MudChip<string>>(this, _ => LimpiarFoco()));
-        builder.AddAttribute(5, "Label", true);
-        builder.AddAttribute(6, "ChildContent", (RenderFragment)(b => b.AddContent(0, $"Unidad: {_focoDominio}")));
+        builder.AddAttribute(1, "Color", MudColor.Primary);
+        builder.AddAttribute(2, "Size", MudSize.Small);
+        builder.AddAttribute(3, "OnClose", EventCallback.Factory.Create<MudChip<string>>(this, _ => LimpiarFoco()));
+        builder.AddAttribute(4, "Label", true);
+        builder.AddAttribute(5, "ChildContent", (RenderFragment)(b => b.AddContent(0, $"Unidad: {_focoDominio}")));
         builder.CloseComponent();
     };
 

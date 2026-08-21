@@ -17,7 +17,7 @@ namespace MetroCarSysBlazor.Services;
 ///  - Una transacción por operación; el chequeo de PK duplicada va dentro de la misma conexión.
 ///  - Tras cada escritura, invalidar el caché de la grilla (<see cref="ReportService.InvalidarCacheAbm"/>).
 /// </summary>
-public class AbmService
+public partial class AbmService
 {
     private readonly IDbContextFactory<NorturDbContext> _dbFactory;
     private readonly ReportService _reports;
@@ -31,8 +31,14 @@ public class AbmService
     /// <summary>Resultado de una operación de escritura: éxito + mensaje de error (si falló).</summary>
     public record AbmResult(bool Ok, string? Error, int? Id = null)
     {
+        /// <summary>Operación exitosa PERO con una salvedad para mostrarle al operador (p. ej.
+        /// se grabó el dato principal pero no su bitácora porque falta replicar la tabla).
+        /// No es un error: <see cref="Ok"/> sigue en true.</summary>
+        public string? Aviso { get; init; }
+
         public static AbmResult Fallo(string error) => new(false, error);
         public static AbmResult Exito(int? id = null) => new(true, null, id);
+        public static AbmResult Exito(int? id, string aviso) => new(true, null, id) { Aviso = aviso };
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -40,10 +46,51 @@ public class AbmService
     //  Espeja usuario_abm.scx (alta/baja/modifica) y cambio_password.scx.
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// <summary>Caracteres especiales admitidos en una contraseña (set acotado y ASCII).</summary>
+    public const string PasswordEspeciales = "!@#$%&*-_.?";
+
+    /// <summary>
+    /// Política de contraseñas NUEVAS (24/07/2026, pedida por el usuario): 8–15 caracteres
+    /// (el tope 15 es el límite de la columna <c>usuario.password nvarchar(15)</c>), con al menos
+    /// UNA mayúscula, UNA minúscula, UN dígito y UN carácter especial del set <see cref="PasswordEspeciales"/>.
+    /// No se admiten otros símbolos, espacios ni letras acentuadas (evita problemas de codepage/teclado
+    /// en el login de texto plano). Solo se aplica a claves nuevas — las existentes que no se cambian
+    /// no se validan ni se reescriben. Devuelve <c>null</c> si es válida, o el mensaje de error a mostrar.
+    /// </summary>
+    public static string? ValidarPasswordFuerte(string? password)
+    {
+        password = (password ?? "").Trim();
+        if (password.Length < 8)
+            return "La contraseña debe tener al menos 8 caracteres.";
+        if (password.Length > 15)
+            return "La contraseña no puede superar 15 caracteres.";
+
+        bool mayus = false, minus = false, digito = false, especial = false;
+        foreach (var c in password)
+        {
+            if (c >= 'A' && c <= 'Z') mayus = true;
+            else if (c >= 'a' && c <= 'z') minus = true;
+            else if (c >= '0' && c <= '9') digito = true;
+            else if (PasswordEspeciales.Contains(c)) especial = true;
+            else return $"El carácter «{c}» no está permitido. Usá letras (sin acentos), números y estos símbolos: {PasswordEspeciales}";
+        }
+
+        var faltan = new List<string>();
+        if (!mayus)    faltan.Add("una mayúscula");
+        if (!minus)    faltan.Add("una minúscula");
+        if (!digito)   faltan.Add("un número");
+        if (!especial) faltan.Add($"un carácter especial ({PasswordEspeciales})");
+        if (faltan.Count > 0)
+            return "La contraseña debe incluir " + string.Join(", ", faltan) + ".";
+
+        return null;
+    }
+
     /// <summary>
     /// Alta de un usuario (usuario_abm.scx modo "alta"). Valida nombre no vacío, contraseña,
     /// y unicidad del nombre. El <c>id</c> se calcula como MAX(id)+1 (la PK física NO es identity,
     /// así lo hace el FoxPro). Graba <c>nivel="12345"</c> fijo, <c>f_create=hoy</c>, <c>_deleted=0</c>.
+    /// El acceso por Internet viaja dentro del string <c>acceso</c> (letra 'I') — sin columna aparte.
     /// </summary>
     public async Task<AbmResult> AltaUsuarioAsync(string usuario, string password, string acceso, bool operador)
     {
@@ -54,8 +101,9 @@ public class AbmService
             return AbmResult.Fallo("No se cargó el nombre del Usuario.");
         if (usuario.Length > 15)
             return AbmResult.Fallo("El nombre de usuario no puede superar 15 caracteres.");
-        if (password.Length > 15)
-            return AbmResult.Fallo("La contraseña no puede superar 15 caracteres.");
+        var errPass = ValidarPasswordFuerte(password);
+        if (errPass is not null)
+            return AbmResult.Fallo(errPass);
         if ((acceso ?? "").Length > 15)
             return AbmResult.Fallo("Demasiados permisos seleccionados para este usuario.");
 
@@ -124,8 +172,15 @@ public class AbmService
         int id, string password, string acceso, bool operador, bool rehabilitar, string usuarioEditorLogueado)
     {
         password = (password ?? "").Trim();
-        if (password.Length > 15)
-            return AbmResult.Fallo("La contraseña no puede superar 15 caracteres.");
+        // Password en blanco = no cambiar → no se toca la columna ni se valida (regla del FoxPro).
+        // Si viene una clave nueva, debe cumplir la política de contraseñas.
+        bool cambiaPassword = password.Length > 0;
+        if (cambiaPassword)
+        {
+            var errPass = ValidarPasswordFuerte(password);
+            if (errPass is not null)
+                return AbmResult.Fallo(errPass);
+        }
         if ((acceso ?? "").Length > 15)
             return AbmResult.Fallo("Demasiados permisos seleccionados para este usuario.");
 
@@ -161,14 +216,15 @@ public class AbmService
                 upd.Transaction = tx;
                 upd.CommandText = $"""
                     UPDATE usuario
-                    SET password = @password,
+                    SET {(cambiaPassword ? "password = @password," : "")}
                         acceso   = @acceso,
                         operador = @operador,
                         f_modify = CAST(GETDATE() AS date)
                         {(rehabilitar ? ", f_delete = NULL" : "")}
                     WHERE id = @id AND _deleted = 0
                     """;
-                upd.Parameters.Add(new SqlParameter("@password", password));
+                if (cambiaPassword)
+                    upd.Parameters.Add(new SqlParameter("@password", password));
                 upd.Parameters.Add(new SqlParameter("@acceso", acceso ?? ""));
                 upd.Parameters.Add(new SqlParameter("@operador", operador));
                 upd.Parameters.Add(new SqlParameter("@id", id));
@@ -253,8 +309,9 @@ public class AbmService
     public async Task<AbmResult> CambiarPasswordAsync(int id, string nuevaPassword)
     {
         nuevaPassword = (nuevaPassword ?? "").Trim();
-        if (nuevaPassword.Length > 15)
-            return AbmResult.Fallo("La contraseña no puede superar 15 caracteres.");
+        var errPass = ValidarPasswordFuerte(nuevaPassword);
+        if (errPass is not null)
+            return AbmResult.Fallo(errPass);
 
         await using var db = await _dbFactory.CreateDbContextAsync();
         await using var conn = (SqlConnection)db.Database.GetDbConnection();
@@ -2179,6 +2236,446 @@ public class AbmService
         }
     }
 
+    // ── F2 · Alta de Novedades (libro_novedad_abm.scx modo "alta") ────────────
+    //  trafico2.scx → libro_novedad_alta. Plano: docs/PlanoFoxPro/trafico/TRAFICO_F2_NOVEDADES.md
+    //
+    //  El libro de guardia de la mesa de tráfico: 1.594 novedades en 2026 (~5 por día), las
+    //  cargan los mismos operadores que mueven el cronograma (DAMIAN, MAURO, PSTELE, RICARDO).
+    //
+    //  ⚠ La tabla tiene 20 columnas pero la operación real usa CINCO. Verificado contra
+    //  producción (04/08/2026): prioridad, f_aviso, avisar_en, telefono, radio y usuario_de
+    //  están vacíos en las 1.594 filas de 2026 — son campos muertos de una versión anterior.
+    //  El INSERT del FoxPro es exactamente:
+    //      INSERT INTO libro_novedad (f_carga, asunto, mensaje, usuario_create, id_viaje)
+    //  (usuario_create → truncado a `usuario_cr` en la réplica).
+    //
+    //  Lo que NO se migra (decisión del usuario, 04/08/2026):
+    //   · El ENVÍO DE CORREO al cliente. El FoxPro puede mandarle la novedad a hasta 10
+    //     contactos de la ficha del cliente al grabar. Es una acción hacia afuera de la empresa
+    //     y se queda en FoxPro por ahora. Ojo: `f_envio` NO lo escribe el alta — lo llena
+    //     después otro proceso (libro_novedad_envia_correo.scx), todavía sin relevar.
+    //   · Modificar y dar de baja. 🐛 En el fuente la BAJA está ROTA: el DELETE está comentado
+    //     y encima apunta a la tabla `agenda` (copy-paste de otro ABM), así que el botón
+    //     "Eliminar" no borra nada. El Modificar solo cambia el mensaje.
+
+    /// <summary>
+    /// Alta de una novedad en el libro de guardia (F2). <paramref name="idViaje"/> en 0 = novedad
+    /// SUELTA, sin reserva asociada (son 752 de las 1.594 de 2026, casi la mitad). Abortada por
+    /// el flag.
+    /// </summary>
+    public async Task<AbmResult> AltaNovedadAsync(int idViaje, string asunto, string mensaje, string usuario)
+    {
+        if (!AbmFeatureFlags.NovedadesAbmActivo)
+            return AbmResult.Fallo("La carga de novedades todavía no está habilitada (sigue en FoxPro).");
+
+        // Las dos únicas validaciones del FoxPro (audita_carga).
+        asunto = (asunto ?? "").Trim();
+        mensaje = (mensaje ?? "").Trim();
+        if (asunto.Length == 0) return AbmResult.Fallo("Falta cargar el asunto de la novedad.");
+        if (mensaje.Length == 0) return AbmResult.Fallo("Falta cargar el mensaje de la novedad.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = (SqlConnection)db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            // id NO es identity (viene del DBF) → MAX(id)+1 dentro de la transacción, que es el
+            // patrón del proyecto. El último de producción al 04/08/2026 era 50154.
+            int nuevoId;
+            await using (var mx = conn.CreateCommand())
+            {
+                mx.Transaction = tx;
+                mx.CommandText = "SELECT ISNULL(MAX(id), 0) + 1 FROM libro_novedad";
+                nuevoId = (int)(await mx.ExecuteScalarAsync() ?? 1);
+            }
+
+            await using (var ins = conn.CreateCommand())
+            {
+                ins.Transaction = tx;
+                ins.CommandText = """
+                    INSERT INTO libro_novedad (id, f_carga, asunto, mensaje, usuario_cr, id_viaje, finalizo, _deleted)
+                    VALUES (@id, GETDATE(), @asunto, @mensaje, @usr, @viaje, 0, 0)
+                    """;
+                ins.Parameters.Add(new SqlParameter("@id", nuevoId));
+                ins.Parameters.Add(new SqlParameter("@asunto", asunto));
+                ins.Parameters.Add(new SqlParameter("@mensaje", mensaje));
+                ins.Parameters.Add(new SqlParameter("@usr", usuario ?? ""));
+                // El FoxPro guarda 0 en las novedades sueltas, no NULL.
+                ins.Parameters.Add(new SqlParameter("@viaje", (long)idViaje));
+                await ins.ExecuteNonQueryAsync();
+            }
+
+            await tx.CommitAsync();
+            _reports.InvalidarCacheAbm();
+            return AbmResult.Exito(nuevoId);
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return AbmResult.Fallo($"No se pudo cargar la novedad: {ex.Message}");
+        }
+    }
+
+    // ── F6-F9 · Cambio de CRONOGRAMA (diagramación) ───────────────────────────
+    //  trafico2.scx → viaje_cambia_cronograma + trafico_cambia_cronograma.scx
+    //  Plano: docs/PlanoFoxPro/trafico/TRAFICO_CRONOGRAMA.md
+    //
+    //  Es la operación MÁS FRECUENTE del circuito: 29.467 cambios en 191 días de 2026 (154/día).
+    //  Hay TRES unidades por viaje y esta capa mueve las dos primeras:
+    //    U/Pr = cronogram2  (unidad PROGRAMADA por el diagramador)
+    //    U/Cb = cronograma  (unidad prevista VIGENTE)
+    //    U/As = interno     (la real que sale — la escribe Asignar, no esto)
+    //
+    //  Dos modos, ruteados por permiso (D gana sobre T, como el Do Case del FoxPro):
+    //    diagramador (D) → escribe cronogram2 Y cronograma, SIN log, puede ser masivo
+    //    operador    (T) → escribe SOLO cronograma, motivo OBLIGATORIO, deja log CBIO UNIDAD
+    //  Los dos resetean chequeo = 0 (si cambió la unidad prevista, el chequeo anterior no vale).
+    //
+    //  Mejoras deliberadas sobre el FoxPro:
+    //    · transacción única (el FoxPro hace UPDATE + INSERT sueltos)
+    //    · relectura con UPDLOCK: la web es multiusuario, el FoxPro era efectivamente mono
+    //    · WHERE anclado en f_reserva (no hay índice por id_viaje)
+    //    · 🐛 NO se copia el bug del masivo: el "Todas las Reservas" del fuente graba
+    //      `cCronogramaNuevo = thisform.cronograma.Value` — el interno PELADO, sin prefijo de
+    //      fletero ni pad de ceros ("49" en vez de "NT0049") — e ignora los radios S/C y NORTUR.
+    //      En la base no hay ni un cronograma numérico en 512k filas (o el .exe ya lo corrigió,
+    //      o nadie usó nunca ese botón). Acá el masivo arma el código igual que el simple.
+
+    /// <summary>Modo de cambio de cronograma. Lo decide el permiso del usuario, no la pantalla.</summary>
+    public enum ModoCronograma { Diagramador, Operador }
+
+    /// <summary>
+    /// Cambia el cronograma de UN viaje (botón "Reserva Actual"). Si el viaje es una ruta
+    /// (<c>id_viaje_i</c> &gt; 0) el cambio pega a TODOS sus tramos, y en modo operador deja un
+    /// renglón de log por tramo — igual que el FoxPro. Abortada por el flag.
+    /// </summary>
+    /// <param name="motivo">Obligatorio en modo operador; ignorado en diagramador.</param>
+    public async Task<AbmResult> CambiarCronogramaAsync(
+        int idViaje, DateOnly fReserva, string cronogramaNuevo,
+        ModoCronograma modo, string motivo, string usuario)
+    {
+        if (!AbmFeatureFlags.CronogramaAbmActivo)
+            return AbmResult.Fallo("El cambio de cronograma se habilita con el circuito de Tráfico (día D).");
+        if (string.IsNullOrWhiteSpace(cronogramaNuevo))
+            return AbmResult.Fallo("No se cargó el cronograma o no existe la unidad.");
+        // Validación del bAceptar del FoxPro: en modo operador el motivo es obligatorio.
+        if (modo == ModoCronograma.Operador && string.IsNullOrWhiteSpace(motivo))
+            return AbmResult.Fallo("Debe cargar un motivo de cambio de unidad.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = (SqlConnection)db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            // ¿Es una ruta? El dato se lee ACÁ y no se recibe de la pantalla: la grilla no lo
+            // trae, y además así se lee fresco dentro de la transacción. id_viaje_i es BIGINT
+            // (regla del proyecto: castear, no leer con GetInt32).
+            long idViajeInt;
+            await using (var q = conn.CreateCommand())
+            {
+                q.Transaction = tx;
+                q.CommandText = "SELECT TOP 1 CAST(ISNULL(id_viaje_i, 0) AS bigint) FROM viaje WITH (UPDLOCK) WHERE f_reserva = @fr AND id_viaje = @id AND _deleted = 0";
+                q.Parameters.Add(new SqlParameter("@fr", fReserva.ToDateTime(TimeOnly.MinValue)));
+                q.Parameters.Add(new SqlParameter("@id", idViaje));
+                var v = await q.ExecuteScalarAsync();
+                if (v is null) { await tx.RollbackAsync(); return AbmResult.Fallo("El viaje ya no existe."); }
+                idViajeInt = Convert.ToInt64(v);
+            }
+
+            // Los tramos afectados: el viaje solo, o toda la ruta. En modo operador el log
+            // necesita un renglón por tramo, igual que el FoxPro.
+            var tramos = new List<int>();
+            if (idViajeInt > 0)
+            {
+                await using var sel = conn.CreateCommand();
+                sel.Transaction = tx;
+                sel.CommandText = "SELECT id_viaje FROM viaje WITH (UPDLOCK) WHERE f_reserva = @fr AND id_viaje_i = @int AND _deleted = 0 ORDER BY id_viaje";
+                sel.Parameters.Add(new SqlParameter("@fr", fReserva.ToDateTime(TimeOnly.MinValue)));
+                sel.Parameters.Add(new SqlParameter("@int", idViajeInt));
+                await using var rd = await sel.ExecuteReaderAsync();
+                while (await rd.ReadAsync()) tramos.Add(rd.GetInt32(0));
+            }
+            else
+            {
+                tramos.Add(idViaje);
+            }
+            if (tramos.Count == 0)
+            {
+                await tx.RollbackAsync();
+                return AbmResult.Fallo("El viaje ya no existe.");
+            }
+
+            var n = await AplicarCronogramaAsync(conn, tx, tramos, fReserva, cronogramaNuevo, modo, motivo, usuario);
+            await tx.CommitAsync();
+            _reports.InvalidarCacheAbm();
+            return AbmResult.Exito(n);
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return AbmResult.Fallo($"No se pudo cambiar el cronograma: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Cambio MASIVO ("Todas las Reservas", solo diagramador): les pone el cronograma nuevo a
+    /// todos los viajes de <paramref name="idsViaje"/>. El llamador arma esa lista con la misma
+    /// regla del FoxPro — las filas A LA VISTA cuyo <c>cronograma</c> es el anterior Y que
+    /// todavía NO tienen interno asignado — y se la muestra al usuario antes de grabar.
+    /// Abortada por el flag.
+    /// </summary>
+    public async Task<AbmResult> CambiarCronogramaMasivoAsync(
+        IReadOnlyList<(int IdViaje, DateOnly FReserva)> viajes, string cronogramaNuevo, string usuario)
+    {
+        if (!AbmFeatureFlags.CronogramaAbmActivo)
+            return AbmResult.Fallo("El cambio de cronograma se habilita con el circuito de Tráfico (día D).");
+        if (string.IsNullOrWhiteSpace(cronogramaNuevo))
+            return AbmResult.Fallo("No se cargó el cronograma o no existe la unidad.");
+        if (viajes.Count == 0)
+            return AbmResult.Fallo("No hay reservas para cambiar.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = (SqlConnection)db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            int total = 0;
+            // Una transacción para todo el lote: o entra el tablero entero o no entra nada.
+            // El FoxPro va fila por fila sin transacción y puede dejarlo a medio aplicar.
+            foreach (var grupo in viajes.GroupBy(v => v.FReserva))
+            {
+                var ids = grupo.Select(v => v.IdViaje).ToList();
+                total += await AplicarCronogramaAsync(
+                    conn, tx, ids, grupo.Key, cronogramaNuevo, ModoCronograma.Diagramador, "", usuario);
+            }
+            await tx.CommitAsync();
+            _reports.InvalidarCacheAbm();
+            return AbmResult.Exito(total);
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return AbmResult.Fallo($"No se pudo aplicar el cambio masivo: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Ctrl+F8 — "Copia Cronograma del Diagramador": pisa la unidad vigente (U/Cb) con la que
+    /// planificó el diagramador (U/Pr). Abortada por el flag.
+    /// ⚠️ Este atajo NO está en el fuente en disco (ahí Ctrl+F8 togglea los cancelados); viene
+    /// del .exe productivo, así que el mecanismo está deducido del resto de la capa: mismo
+    /// UPDATE + reset de chequeo, y log solo en modo operador. Confirmar contra el .exe.
+    /// </summary>
+    public async Task<AbmResult> CopiarCronogramaDiagramadorAsync(
+        int idViaje, DateOnly fReserva, ModoCronograma modo, string usuario)
+    {
+        if (!AbmFeatureFlags.CronogramaAbmActivo)
+            return AbmResult.Fallo("El cambio de cronograma se habilita con el circuito de Tráfico (día D).");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = (SqlConnection)db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            string programada;
+            await using (var sel = conn.CreateCommand())
+            {
+                sel.Transaction = tx;
+                sel.CommandText = "SELECT TOP 1 cronogram2 FROM viaje WITH (UPDLOCK) WHERE f_reserva = @fr AND id_viaje = @id AND _deleted = 0";
+                sel.Parameters.Add(new SqlParameter("@fr", fReserva.ToDateTime(TimeOnly.MinValue)));
+                sel.Parameters.Add(new SqlParameter("@id", idViaje));
+                var v = await sel.ExecuteScalarAsync();
+                if (v is null) { await tx.RollbackAsync(); return AbmResult.Fallo("El viaje ya no existe."); }
+                programada = v is DBNull ? "" : v.ToString()!.Trim();
+            }
+            if (string.IsNullOrWhiteSpace(programada))
+            {
+                await tx.RollbackAsync();
+                return AbmResult.Fallo("El viaje no tiene unidad programada (U/Pr) para copiar.");
+            }
+
+            await AplicarCronogramaAsync(conn, tx, new List<int> { idViaje }, fReserva, programada,
+                                         modo, "COPIA DEL DIAGRAMADOR", usuario);
+            await tx.CommitAsync();
+            _reports.InvalidarCacheAbm();
+            return AbmResult.Exito(idViaje);
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return AbmResult.Fallo($"No se pudo copiar el cronograma: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// El núcleo compartido: aplica el cronograma a una lista de viajes del MISMO día, dentro de
+    /// una transacción ya abierta. Acá vive la única diferencia real entre los dos modos.
+    /// </summary>
+    private static async Task<int> AplicarCronogramaAsync(
+        SqlConnection conn, SqlTransaction tx, IReadOnlyList<int> idsViaje, DateOnly fReserva,
+        string cronogramaNuevo, ModoCronograma modo, string motivo, string usuario)
+    {
+        int n = 0;
+        foreach (var id in idsViaje)
+        {
+            await using (var upd = conn.CreateCommand())
+            {
+                upd.Transaction = tx;
+                // Diagramador: planifica → escribe las DOS columnas (U/Pr y U/Cb).
+                // Operador: ajusta → toca solo U/Cb y respeta lo que planeó el diagramador.
+                upd.CommandText = modo == ModoCronograma.Diagramador
+                    ? "UPDATE viaje SET cronogram2 = @cr, cronograma = @cr, chequeo = 0 WHERE f_reserva = @fr AND id_viaje = @id AND _deleted = 0"
+                    : "UPDATE viaje SET cronograma = @cr, chequeo = 0 WHERE f_reserva = @fr AND id_viaje = @id AND _deleted = 0";
+                upd.Parameters.Add(new SqlParameter("@cr", cronogramaNuevo));
+                upd.Parameters.Add(new SqlParameter("@fr", fReserva.ToDateTime(TimeOnly.MinValue)));
+                upd.Parameters.Add(new SqlParameter("@id", id));
+                n += await upd.ExecuteNonQueryAsync();
+            }
+
+            // Solo el operador deja auditoría: el diagramador arma el tablero y no loguea.
+            if (modo != ModoCronograma.Operador) continue;
+            await using var log = conn.CreateCommand();
+            log.Transaction = tx;
+            log.CommandText = """
+                INSERT INTO viaje_log (id_viaje, usuario, motivo, hora, cronograma, id_chofer,
+                                       interno_or, interno_ne, comentario)
+                VALUES (@id, @usr, 'CBIO UNIDAD', GETDATE(), @cr, '', 0, 0, @com)
+                """;
+            log.Parameters.Add(new SqlParameter("@id", id));
+            log.Parameters.Add(new SqlParameter("@usr", usuario ?? ""));
+            log.Parameters.Add(new SqlParameter("@cr", cronogramaNuevo));
+            log.Parameters.Add(new SqlParameter("@com", motivo ?? ""));
+            await log.ExecuteNonQueryAsync();
+        }
+        return n;
+    }
+
+    // ── F4 · Aviso sobre el viaje (trafico_hs_aviso.scx) ──────────────────────
+    //  UPDATE viaje SET hs_aviso. Plano: docs/PlanoFoxPro/trafico/TRAFICO_F4_AVISO.md
+    //
+    //  Es la escritura de MENOR superficie de todo el circuito `viaje`: una sola columna, sin
+    //  máquina de estados, sin odómetro, sin cascadas, sin importes, sin GPS. Aun así toca
+    //  `viaje` → apagada por el flag hasta el día D (si Blazor escribiera hoy, la próxima
+    //  replicación DBF→SQL de esa fila lo pisaría sin aviso).
+    //
+    //  Fiel al FoxPro:
+    //    · el aviso debe ser ESTRICTAMENTE anterior a hs_inicio (el `<=` del fuente rechaza
+    //      también el igual)
+    //    · la fecha no puede ser anterior a hoy (Valid del textbox f_reserva)
+    //    · hs_aviso NULL = vuelve al aviso automático (el "No Avisar" del FoxPro graba un
+    //      datetime vacío, que NO apaga el aviso: lo devuelve al default de parametro)
+    //  Mejoras deliberadas sobre el FoxPro:
+    //    · transacción + relectura del viaje adentro (FoxPro era mono-usuario; la web no)
+    //    · deja rastro en viaje_log (motivo AVISO) — el FoxPro no audita este cambio
+    //    · NO se copia la regla del fuente `IF hs_inicio - 2100 = aviso THEN aviso - 150`
+    //      (correr 2,5 min un aviso que quedó a 35 min exactos): no tiene explicación en el
+    //      código ni en los datos. Ver pregunta 4 del plano.
+
+    /// <summary>Graba la hora de aviso de un viaje (F4). <paramref name="hsAviso"/> null = volver
+    /// al aviso automático de <c>parametro.aviso_tiem</c>. Abortada por el flag.</summary>
+    public async Task<AbmResult> GrabarAvisoViajeAsync(
+        int idViaje, DateOnly fReserva, DateTime? hsAviso, string usuario)
+    {
+        if (!AbmFeatureFlags.AvisoViajeActivo)
+            return AbmResult.Fallo("El aviso sobre el viaje se habilita con el circuito de Tráfico (día D).");
+
+        // Validación de fecha pasada (Valid de f_reserva en trafico_hs_aviso.scx). Se chequea
+        // antes de abrir conexión: no depende de la base.
+        if (hsAviso is DateTime v && DateOnly.FromDateTime(v) < DateOnly.FromDateTime(DateTime.Today))
+            return AbmResult.Fallo("El aviso no puede quedar en una fecha anterior a hoy.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = (SqlConnection)db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            // Relectura con UPDLOCK dentro de la transacción: la hora de salida pudo cambiar
+            // entre que se abrió el diálogo y se apretó Grabar (Zoom de otro operador, o el
+            // FoxPro). Validamos contra el dato de AHORA, no contra el que vio la pantalla.
+            DateTime? hsInicio = null;
+            string estado = "";
+            await using (var sel = conn.CreateCommand())
+            {
+                sel.Transaction = tx;
+                sel.CommandText = """
+                    SELECT TOP 1 hs_inicio, estado_via
+                    FROM viaje WITH (UPDLOCK)
+                    WHERE f_reserva = @fr AND id_viaje = @id AND _deleted = 0
+                    """;
+                sel.Parameters.Add(new SqlParameter("@fr", fReserva.ToDateTime(TimeOnly.MinValue)));
+                sel.Parameters.Add(new SqlParameter("@id", idViaje));
+                await using var rd = await sel.ExecuteReaderAsync();
+                if (!await rd.ReadAsync())
+                {
+                    await tx.RollbackAsync();
+                    return AbmResult.Fallo("El viaje ya no existe.");
+                }
+                if (!rd.IsDBNull(0)) hsInicio = rd.GetDateTime(0);
+                if (!rd.IsDBNull(1)) estado = rd.GetString(1).Trim();
+            }
+
+            if (estado is "CANCELADO" or "FINALIZADO" or "FACTURADO")
+            {
+                await tx.RollbackAsync();
+                return AbmResult.Fallo($"El viaje está {estado} — no tiene sentido programarle un aviso.");
+            }
+
+            // La validación del FoxPro: hs_inicio <= aviso → error. O sea el aviso tiene que
+            // ser estrictamente anterior a la salida del servicio.
+            if (hsAviso is DateTime a && hsInicio is DateTime ini && ini <= a)
+            {
+                await tx.RollbackAsync();
+                return AbmResult.Fallo("El aviso tiene que ser anterior a la hora del servicio.");
+            }
+
+            await using (var upd = conn.CreateCommand())
+            {
+                upd.Transaction = tx;
+                upd.CommandText = "UPDATE viaje SET hs_aviso = @av WHERE f_reserva = @fr AND id_viaje = @id AND _deleted = 0";
+                upd.Parameters.Add(new SqlParameter("@av", hsAviso ?? (object)DBNull.Value));
+                upd.Parameters.Add(new SqlParameter("@fr", fReserva.ToDateTime(TimeOnly.MinValue)));
+                upd.Parameters.Add(new SqlParameter("@id", idViaje));
+                if (await upd.ExecuteNonQueryAsync() == 0)
+                {
+                    await tx.RollbackAsync();
+                    return AbmResult.Fallo("El viaje ya no existe.");
+                }
+            }
+
+            // Auditoría (mejora sobre el FoxPro). Mismas columnas que usa el resto del
+            // circuito; ojo con los nombres truncados por la réplica: interno_or / interno_ne.
+            await using (var log = conn.CreateCommand())
+            {
+                log.Transaction = tx;
+                log.CommandText = """
+                    INSERT INTO viaje_log (id_viaje, usuario, motivo, hora, cronograma, id_chofer,
+                                           interno_or, interno_ne, comentario)
+                    VALUES (@id, @usr, 'AVISO', GETDATE(), '', '', 0, 0, @com)
+                    """;
+                log.Parameters.Add(new SqlParameter("@id", idViaje));
+                log.Parameters.Add(new SqlParameter("@usr", usuario ?? ""));
+                log.Parameters.Add(new SqlParameter("@com", hsAviso is DateTime h
+                    ? $"AVISO A LAS {h:dd/MM/yyyy HH:mm}"
+                    : "AVISO AUTOMATICO (SE BORRO LA HORA MANUAL)"));
+                await log.ExecuteNonQueryAsync();
+            }
+
+            await tx.CommitAsync();
+            _reports.InvalidarCacheAbm();
+            return AbmResult.Exito(idViaje);
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return AbmResult.Fallo($"No se pudo grabar el aviso: {ex.Message}");
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     //  COMBUSTIBLE — Conciliación de cargas por lote (andamiaje, 07/07/2026)
     //  vehiculo_combustible_mant_sobre_lote: el "sobre" físico de tickets se numera con el
@@ -3611,6 +4108,71 @@ public class AbmService
     }
 
     /// <summary>
+    /// Cierra la sesión de un usuario que CERRÓ EL NAVEGADOR (lo detecta
+    /// <see cref="SesionCircuitoTracker"/> cuando cae el último circuito y no vuelve):
+    /// <c>f_fin</c>, <c>activa=0</c>, <c>motivo_fin='DESCONECTADO'</c> + evento DESCONECTADO.
+    ///
+    /// Solo actúa si la sesión sigue <c>activa=1</c>: si el usuario ya había apretado Cerrar
+    /// sesión (o el barrido la venció), el UPDATE no toca ninguna fila y NO se registra el
+    /// evento — así nunca aparecen dos egresos para la misma sesión.
+    /// Devuelve true si efectivamente cerró la sesión. No tira si algo falla.
+    /// </summary>
+    public async Task<bool> RegistrarCierrePorNavegadorAsync(string usuario, Guid sessionId)
+    {
+        usuario = (usuario ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(usuario) || sessionId == Guid.Empty) return false;
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var conn = (SqlConnection)db.Database.GetDbConnection();
+            await conn.OpenAsync();
+            await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+            try
+            {
+                int filas;
+                await using (var cmd = conn.CreateCommand())
+                {
+                    cmd.Transaction = tx;
+                    cmd.CommandText = """
+                        UPDATE usuario_sesion
+                        SET f_fin = SYSDATETIME(), activa = 0,
+                            motivo_fin = 'DESCONECTADO', _updated_at = SYSDATETIME()
+                        WHERE session_id = @sid AND activa = 1
+                        """;
+                    cmd.Parameters.Add(new SqlParameter("@sid", sessionId));
+                    filas = await cmd.ExecuteNonQueryAsync();
+                }
+
+                if (filas == 0) { await tx.RollbackAsync(); return false; }
+
+                // Datos del usuario para la copia autocontenida del evento.
+                int? idUsuario = null; string password = "", nivel = "", acceso = "";
+                await using (var q = conn.CreateCommand())
+                {
+                    q.Transaction = tx;
+                    q.CommandText = """
+                        SELECT TOP 1 id, RTRIM(ISNULL(password,'')), RTRIM(ISNULL(nivel,'')), RTRIM(ISNULL(acceso,''))
+                        FROM usuario WHERE usuario = @u AND _deleted = 0
+                        """;
+                    q.Parameters.Add(new SqlParameter("@u", usuario));
+                    await using var rd = await q.ExecuteReaderAsync();
+                    if (await rd.ReadAsync())
+                    { idUsuario = rd.GetInt32(0); password = rd.GetString(1); nivel = rd.GetString(2); acceso = rd.GetString(3); }
+                }
+
+                await LogEventoAsync(conn, tx, sessionId, "DESCONECTADO", idUsuario, usuario,
+                    password, nivel, acceso, null, null, "Navegador cerrado / conexión perdida");
+
+                await tx.CommitAsync();
+                _reports.InvalidarCacheAbm();
+                return true;
+            }
+            catch { await tx.RollbackAsync(); return false; }
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
     /// Registra un intento de login RECHAZADO (LOGIN_FALLIDO) en la bitácora, con el motivo del
     /// rechazo (ej. "Contraseña incorrecta"). No hay sesión (session_id NULL). Copia lo que se
     /// sepa del usuario si existe. No tira si falla.
@@ -3742,6 +4304,687 @@ public class AbmService
             return vencidas.Count;
         }
         catch { return 0; }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Menú contextual del panel BUSES — escritura sobre la UNIDAD
+    // Plano: docs/PlanoFoxPro/trafico/TRAFICO_BUSES_MENU.md
+    //
+    // ⚠️ ANDAMIAJE. `vehiculo` es tabla del circuito viaje (la pisa la asignación de
+    // Tráfico y la réplica DBF→SQL), así que los tres métodos de acá abortan por flag
+    // hasta el DÍA D. El código está escrito completo y fiel al FoxPro a propósito:
+    // se prueba contra el server local y se enciende con el resto del circuito.
+    //
+    // Mejora obligatoria sobre el original: el FoxPro NO usa transacciones en ninguna de
+    // estas operaciones (hace el UPDATE de `vehiculo` y el INSERT del log sueltos). Acá
+    // van en una transacción única, como manda la regla del proyecto.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>Logonear</b> un conductor en una unidad — réplica de <c>trafico_logonear.scx</c> (botón Graba).
+    /// </summary>
+    /// <param name="idVehiculoRow">PK física <c>vehiculo.id</c> (el FoxPro hace <c>Where Id = nId</c>).</param>
+    /// <param name="segundoConductor">false = conductor PRINCIPAL, true = ACOMPAÑANTE.</param>
+    /// <param name="zona">Zona en la que queda la unidad (solo la escribe el 1º conductor).</param>
+    /// <param name="hora">Fecha y hora del movimiento — en el form son EDITABLES, no es GETDATE() forzado.</param>
+    /// <remarks>
+    /// El FoxPro escribe distinto según el conductor:
+    /// <code>
+    /// primero → Update vehiculo Set id_chofer=, nombre_chofer=, franco=, id_zona=  Where Id = nId
+    /// segundo → Update vehiculo Set id_chofer2=                                    Where Id = nId
+    /// </code>
+    /// (el 2º conductor NO toca zona ni el flag de franco), y en los dos casos inserta una fila
+    /// en <c>viaje_log_chofer</c> con <c>operacion = 'LOGONEO'</c>.
+    ///
+    /// ⛔ <b><c>viaje_log_chofer</c> no está replicada en SQL</b> (75.001 filas en el DBF).
+    /// Mientras falte, el INSERT del log se saltea y se deja constancia en el resultado: el
+    /// UPDATE de <c>vehiculo</c> sin su bitácora sería una pérdida de auditoría, así que al
+    /// activar el flag hay que tener la tabla replicada. Ver el plano.
+    /// </remarks>
+    public async Task<AbmResult> LogonearAsync(
+        int idVehiculoRow, string idChofer, string nombreChofer, bool segundoConductor,
+        string zona, bool tieneFranco, DateTime hora, string usuario)
+    {
+        if (!AbmFeatureFlags.LogoneoAbmActivo)
+            return AbmResult.Fallo("El logoneo de conductores se habilita con el circuito de Tráfico (día D).");
+        if (idVehiculoRow <= 0) return AbmResult.Fallo("No se identificó la unidad.");
+        if (string.IsNullOrWhiteSpace(idChofer)) return AbmResult.Fallo("Elegí el conductor a logonear.");
+        if (!segundoConductor && string.IsNullOrWhiteSpace(zona))
+            return AbmResult.Fallo("Cargá la zona de la unidad.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = (SqlConnection)db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            // Anti-doble-logoneo: se relee la unidad DENTRO de la transacción con UPDLOCK. El
+            // FoxPro valida contra el cursor en memoria, que puede estar viejo si otro operador
+            // logoneó primero (mismo criterio que el anti-doble-asignación del circuito).
+            string choferActual, chofer2Actual, estado, idVehiculo;
+            await using (var q = conn.CreateCommand())
+            {
+                q.Transaction = tx;
+                q.CommandText = """
+                    SELECT TOP 1
+                        RTRIM(ISNULL(id_chofer, '')), RTRIM(ISNULL(id_chofer2, '')),
+                        RTRIM(ISNULL(estado, '')),   RTRIM(ISNULL(id_vehicul, ''))
+                    FROM vehiculo WITH (UPDLOCK) WHERE id = @id AND _deleted = 0
+                    """;
+                q.Parameters.Add(new SqlParameter("@id", idVehiculoRow));
+                await using var rd = await q.ExecuteReaderAsync();
+                if (!await rd.ReadAsync()) { await tx.RollbackAsync(); return AbmResult.Fallo("La unidad ya no existe."); }
+                choferActual = rd.GetString(0); chofer2Actual = rd.GetString(1);
+                estado = rd.GetString(2); idVehiculo = rd.GetString(3);
+            }
+
+            // Las guardas del menú + logonea_conductor(), revalidadas sobre el dato fresco.
+            if (estado == "TALLER")
+                { await tx.RollbackAsync(); return AbmResult.Fallo("La unidad se encuentra fuera de servicio (TALLER)."); }
+            if (estado != "LIBERADO")
+                { await tx.RollbackAsync(); return AbmResult.Fallo("La unidad se encuentra en servicio."); }
+            if (!segundoConductor && choferActual.Length > 0)
+                { await tx.RollbackAsync(); return AbmResult.Fallo($"Esa unidad ya tiene asignado un conductor ({choferActual})."); }
+            if (segundoConductor && choferActual.Length == 0)
+                { await tx.RollbackAsync(); return AbmResult.Fallo("No tiene asignado el primer conductor."); }
+            if (segundoConductor && chofer2Actual.Length > 0)
+                { await tx.RollbackAsync(); return AbmResult.Fallo("Esa unidad ya tiene un 2º conductor."); }
+
+            await using (var upd = conn.CreateCommand())
+            {
+                upd.Transaction = tx;
+                upd.CommandText = segundoConductor
+                    ? "UPDATE vehiculo SET id_chofer2 = @cho WHERE id = @id"
+                    : """
+                      UPDATE vehiculo
+                         SET id_chofer = @cho, nombre_cho = @nom, franco = @fra, id_zona = @zona
+                       WHERE id = @id
+                      """;
+                upd.Parameters.Add(new SqlParameter("@cho", idChofer.Trim()));
+                upd.Parameters.Add(new SqlParameter("@id", idVehiculoRow));
+                if (!segundoConductor)
+                {
+                    upd.Parameters.Add(new SqlParameter("@nom", nombreChofer ?? ""));
+                    upd.Parameters.Add(new SqlParameter("@fra", tieneFranco));
+                    upd.Parameters.Add(new SqlParameter("@zona", zona.Trim()));
+                }
+                await upd.ExecuteNonQueryAsync();
+            }
+
+            var logueado = await LogChoferAsync(conn, tx, "LOGONEO", idChofer, idVehiculo, tieneFranco,
+                                                zona, segundoConductor, hora, usuario);
+
+            await tx.CommitAsync();
+            _reports.InvalidarCacheTrafico(DateOnly.FromDateTime(DateTime.Today));
+            return logueado
+                ? AbmResult.Exito(idVehiculoRow)
+                : AbmResult.Exito(idVehiculoRow, "Logoneo grabado, pero SIN bitácora: falta replicar viaje_log_chofer.");
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return AbmResult.Fallo("No se pudo logonear: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// <b>DesLogonear</b> un conductor — réplica de <c>trafico_deslogonear.scx</c> (botón Graba).
+    /// </summary>
+    /// <param name="zonaNueva">Zona de DETENCIÓN, obligatoria en el form. Solo la escribe el 1º.</param>
+    /// <remarks>
+    /// <code>
+    /// primero → Update vehiculo Set id_chofer = "", franco = .F., id_zona = cZona_New Where Id = nId
+    /// segundo → Update vehiculo Set id_chofer2 = ""                                   Where Id = nId
+    /// </code>
+    /// 🔴 Detalle no obvio: en el log de DESLOGONEO el FoxPro graba <c>zona = cZona</c>, la zona
+    /// <b>VIEJA</b>, mientras que <c>vehiculo.id_zona</c> queda con la nueva. Se respeta.
+    /// </remarks>
+    public async Task<AbmResult> DeslogonearAsync(
+        int idVehiculoRow, bool segundoConductor, string zonaNueva, DateTime hora, string usuario)
+    {
+        if (!AbmFeatureFlags.LogoneoAbmActivo)
+            return AbmResult.Fallo("El deslogoneo de conductores se habilita con el circuito de Tráfico (día D).");
+        if (idVehiculoRow <= 0) return AbmResult.Fallo("No se identificó la unidad.");
+        if (!segundoConductor && string.IsNullOrWhiteSpace(zonaNueva))
+            return AbmResult.Fallo("No se cargó la zona de detención.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = (SqlConnection)db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            string choferActual, chofer2Actual, estado, idVehiculo, zonaVieja;
+            long idViaje;
+            await using (var q = conn.CreateCommand())
+            {
+                q.Transaction = tx;
+                q.CommandText = """
+                    SELECT TOP 1
+                        RTRIM(ISNULL(id_chofer, '')), RTRIM(ISNULL(id_chofer2, '')),
+                        RTRIM(ISNULL(estado, '')),   RTRIM(ISNULL(id_vehicul, '')),
+                        RTRIM(ISNULL(id_zona, '')),  CAST(ISNULL(id_viaje, 0) AS bigint)
+                    FROM vehiculo WITH (UPDLOCK) WHERE id = @id AND _deleted = 0
+                    """;
+                q.Parameters.Add(new SqlParameter("@id", idVehiculoRow));
+                await using var rd = await q.ExecuteReaderAsync();
+                if (!await rd.ReadAsync()) { await tx.RollbackAsync(); return AbmResult.Fallo("La unidad ya no existe."); }
+                choferActual = rd.GetString(0); chofer2Actual = rd.GetString(1);
+                estado = rd.GetString(2); idVehiculo = rd.GetString(3);
+                zonaVieja = rd.GetString(4); idViaje = rd.GetInt64(5);
+            }
+
+            // Las 5 guardas de deslogonea_conductor() + la del menú (bar 11).
+            if (estado == "TALLER")
+                { await tx.RollbackAsync(); return AbmResult.Fallo("La unidad se encuentra fuera de servicio (TALLER)."); }
+            if (estado == "GUARDIA")
+                { await tx.RollbackAsync(); return AbmResult.Fallo("La unidad se encuentra en GUARDIA. Hay que liberarla."); }
+            if (!segundoConductor && chofer2Actual.Length > 0)
+                { await tx.RollbackAsync(); return AbmResult.Fallo("Deslogoneá primero al 2º conductor."); }
+            if (!segundoConductor && choferActual.Length == 0)
+                { await tx.RollbackAsync(); return AbmResult.Fallo("La unidad se encuentra sin logonear."); }
+            if (segundoConductor && chofer2Actual.Length == 0)
+                { await tx.RollbackAsync(); return AbmResult.Fallo("La unidad no tiene 2º conductor logoneado."); }
+            if (idViaje != 0)
+                { await tx.RollbackAsync(); return AbmResult.Fallo("La unidad se encuentra realizando un viaje."); }
+
+            var choferSaliente = segundoConductor ? chofer2Actual : choferActual;
+
+            await using (var upd = conn.CreateCommand())
+            {
+                upd.Transaction = tx;
+                upd.CommandText = segundoConductor
+                    ? "UPDATE vehiculo SET id_chofer2 = '' WHERE id = @id"
+                    : "UPDATE vehiculo SET id_chofer = '', nombre_cho = '', franco = 0, id_zona = @zona WHERE id = @id";
+                upd.Parameters.Add(new SqlParameter("@id", idVehiculoRow));
+                if (!segundoConductor) upd.Parameters.Add(new SqlParameter("@zona", zonaNueva.Trim()));
+                await upd.ExecuteNonQueryAsync();
+            }
+
+            // zonaVieja, no la nueva — es lo que hace el FoxPro (ver remarks).
+            var logueado = await LogChoferAsync(conn, tx, "DESLOGONEO", choferSaliente, idVehiculo, false,
+                                                zonaVieja, segundoConductor, hora, usuario);
+
+            await tx.CommitAsync();
+            _reports.InvalidarCacheTrafico(DateOnly.FromDateTime(DateTime.Today));
+            return logueado
+                ? AbmResult.Exito(idVehiculoRow)
+                : AbmResult.Exito(idVehiculoRow, "Deslogoneo grabado, pero SIN bitácora: falta replicar viaje_log_chofer.");
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return AbmResult.Fallo("No se pudo deslogonear: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// INSERT en <c>viaje_log_chofer</c> (la bitácora de logoneo). Devuelve <c>false</c> —sin
+    /// romper la transacción— si la tabla todavía no está replicada en SQL.
+    /// </summary>
+    private static async Task<bool> LogChoferAsync(
+        SqlConnection conn, SqlTransaction tx, string operacion, string idChofer, string idVehiculo,
+        bool franco, string zona, bool segundoConductor, DateTime hora, string usuario)
+    {
+        await using (var chk = conn.CreateCommand())
+        {
+            chk.Transaction = tx;
+            chk.CommandText = "SELECT COUNT(*) FROM sys.tables WHERE name = 'viaje_log_chofer'";
+            if ((int)(await chk.ExecuteScalarAsync() ?? 0) == 0) return false;
+        }
+
+        await using var ins = conn.CreateCommand();
+        ins.Transaction = tx;
+        // Nombres SQL previstos según el DBF (id_vehiculo → id_vehicul, tipo_chofer → tipo_chofe,
+        // truncados a 10 chars por la réplica). Verificar contra sys.columns cuando exista.
+        ins.CommandText = """
+            INSERT INTO viaje_log_chofer
+                (id_chofer, id_vehicul, franco, interno, fecha, zona, usuario, hora, operacion, tipo_chofe)
+            SELECT @cho, @veh, @fra, ISNULL(v.interno, 0), CAST(@hora AS date), @zona, @usr, @hora, @op, @tipo
+            FROM vehiculo v WHERE v.id_vehicul = @veh AND v._deleted = 0
+            """;
+        ins.Parameters.Add(new SqlParameter("@cho", idChofer ?? ""));
+        ins.Parameters.Add(new SqlParameter("@veh", idVehiculo ?? ""));
+        ins.Parameters.Add(new SqlParameter("@fra", franco));
+        ins.Parameters.Add(new SqlParameter("@zona", zona ?? ""));
+        ins.Parameters.Add(new SqlParameter("@usr", usuario ?? ""));
+        ins.Parameters.Add(new SqlParameter("@hora", hora));
+        ins.Parameters.Add(new SqlParameter("@op", operacion));
+        // tipo_chofer del FoxPro: el texto del cuadro, no un código.
+        ins.Parameters.Add(new SqlParameter("@tipo", segundoConductor ? "ACOMPAÑANTE" : "PRINCIPAL"));
+        await ins.ExecuteNonQueryAsync();
+        return true;
+    }
+
+    /// <summary>
+    /// <b>Toma Franco</b> — la única escritura INLINE del menú de Buses (bar 18 del .mpr).
+    /// Da de alta el franco de HOY del conductor logoneado en la unidad.
+    /// </summary>
+    /// <remarks>
+    /// El FoxPro no ofrece elegir nada: fecha = <c>Date()</c>, <c>codigo = 'F'</c>,
+    /// <c>motivo = 'FRANCO'</c>, <c>trabajo = .F.</c>, <c>valido = .T.</c>. Antes chequea que
+    /// el chofer no tenga ya un franco ese día ("Ese Franco ya esta cargado en ese chofer").
+    ///
+    /// ⚠️ Se agrega una validación que el original NO tiene: si la unidad no está logoneada,
+    /// <c>id_chofer</c> viene vacío y el FoxPro insertaría un franco con <c>id_chofer = ''</c>.
+    /// Acá se rechaza — es un bug del original, no una regla de negocio.
+    ///
+    /// <c>chofer_franco</c> NO es del circuito viaje (es autocontenida y ya tiene su ABM en
+    /// <c>/francos</c>), pero se deja apagada por consistencia con el resto del menú
+    /// (decisión del usuario, 04/08/2026).
+    /// </remarks>
+    public async Task<AbmResult> TomarFrancoAsync(string idChofer, string usuario)
+    {
+        if (!AbmFeatureFlags.TomaFrancoActivo)
+            return AbmResult.Fallo("La toma de franco desde Tráfico se habilita con el circuito (día D).");
+        if (string.IsNullOrWhiteSpace(idChofer))
+            return AbmResult.Fallo("La unidad no tiene conductor logoneado — no hay a quién darle el franco.");
+
+        var hoy = DateOnly.FromDateTime(DateTime.Today);
+        // Reusa el alta masiva de Francos, que ya hace el chequeo de duplicado por chofer+fecha,
+        // el MAX(id)+1 y la transacción. Un chofer, una fecha, con el código/motivo fijos del menú.
+        var r = await AltaFrancosAsync(new[] { idChofer.Trim() }, new[] { hoy }, "F", "FRANCO");
+        if (r.Ok) _reports.InvalidarCacheTrafico(hoy);
+        return r;
+    }
+
+    /// <summary>
+    /// <b>Liberar unidad</b> (bar 22) — réplica de <c>trafico_vehiculo_libera.scx</c>.
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>El nombre del ítem miente.</b> "pasa a Sin Asignar" sugiere que cambia
+    /// <c>viaje.estado_via</c>, pero en el fuente TODO el bloque que tocaba <c>viaje</c>,
+    /// <c>viaje_log</c> y <c>vehiculo_km</c> está COMENTADO (<c>*!*</c>). Lo único vivo es:
+    /// <code>Update vehiculo Set estado = "LIBERADO", hs_inicio = {//::}, id_viaje = 0 Where Id = nId</code>
+    /// Es una liberación de emergencia de la UNIDAD (la despega del viaje para poder
+    /// reasignarla); el viaje queda como estaba. Se replica fiel — corregirlo sería cambiar
+    /// el comportamiento del sistema, no migrarlo.
+    ///
+    /// No confundir con "Libe" de la toolbar (= FINALIZAR el viaje) ni con el "Sin Asignar"
+    /// del Zoom (ese sí revierte el estado del viaje).
+    ///
+    /// El FoxPro busca la unidad por <c>cronograma</c> y aborta si no encuentra exactamente 1
+    /// fila ("se encontro un problema con los vehiculos"). Se respeta esa guarda.
+    /// </remarks>
+    public async Task<AbmResult> LiberarUnidadAsync(string cronograma, string usuario)
+    {
+        if (!AbmFeatureFlags.LiberarUnidadActivo)
+            return AbmResult.Fallo("La liberación de unidades se habilita con el circuito de Tráfico (día D).");
+        if (string.IsNullOrWhiteSpace(cronograma))
+            return AbmResult.Fallo("La unidad no tiene cronograma — no se puede identificar.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = (SqlConnection)db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            int id; string estado;
+            await using (var q = conn.CreateCommand())
+            {
+                q.Transaction = tx;
+                // La guarda del FoxPro es "_Tally = 1": si el cronograma matchea 0 o >1 unidades
+                // activas, aborta. TOP 2 alcanza para distinguir los tres casos.
+                q.CommandText = """
+                    SELECT TOP 2 id, RTRIM(ISNULL(estado, ''))
+                    FROM vehiculo WITH (UPDLOCK)
+                    WHERE cronograma = @cro AND activo = 1 AND _deleted = 0
+                    """;
+                q.Parameters.Add(new SqlParameter("@cro", cronograma.Trim()));
+                await using var rd = await q.ExecuteReaderAsync();
+                if (!await rd.ReadAsync())
+                    { await tx.RollbackAsync(); return AbmResult.Fallo("Se encontró un problema con los vehículos: ninguna unidad activa con ese cronograma."); }
+                id = rd.GetInt32(0); estado = rd.GetString(1);
+                if (await rd.ReadAsync())
+                    { await tx.RollbackAsync(); return AbmResult.Fallo("Se encontró un problema con los vehículos: hay más de una unidad activa con ese cronograma."); }
+            }
+
+            // El form no hace nada si la unidad ya está liberada (If estado # "LIBERADO").
+            if (estado == "LIBERADO")
+                { await tx.RollbackAsync(); return AbmResult.Fallo("La unidad ya está LIBERADA."); }
+
+            await using (var upd = conn.CreateCommand())
+            {
+                upd.Transaction = tx;
+                // hs_inicio = {//::} del FoxPro = datetime vacío → NULL en SQL.
+                upd.CommandText = "UPDATE vehiculo SET estado = 'LIBERADO', hs_inicio = NULL, id_viaje = 0 WHERE id = @id";
+                upd.Parameters.Add(new SqlParameter("@id", id));
+                await upd.ExecuteNonQueryAsync();
+            }
+
+            await tx.CommitAsync();
+            _reports.InvalidarCacheTrafico(DateOnly.FromDateTime(DateTime.Today));
+            return AbmResult.Exito(id);
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return AbmResult.Fallo("No se pudo liberar la unidad: " + ex.Message);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  SISTEMA — Parámetros Empresa y Generales (parametro_empresa.scx + parametro.scx)
+    //  Plano: docs/PlanoFoxPro/sistema/PARAMETROS.md · skill modulo-sistema.
+    //
+    //  🔴 REGLA DE ORO: se escriben SOLO las columnas de la pantalla, una por una, con
+    //     SqlParameter. NUNCA una reescritura de fila completa: en la MISMA fila viven
+    //     los contadores vivos del circuito (id_viaje_i, lote_plant, lote_sobre,
+    //     stock_movi) que FoxPro incrementa todo el día.
+    //  El UPDATE va sin WHERE, igual que el FoxPro (la tabla tiene 1 sola fila).
+    //
+    //  Correcciones sobre el FoxPro (decisión 12/08/2026, §3.4 del plano):
+    //   ① `aviso_mat` SÍ se graba (en el FoxPro se edita y se pierde).
+    //   ② `dir_mdb` e `intranet` NO se tocan (el FoxPro los blanquea en cada Aceptar
+    //      porque los escribe sin haberlos cargado).
+    //   ③ `lote_plant` y `lote_sobre` NO se graban (contadores vivos: solo lectura).
+    //   ④ El interruptor del GPS (`xml_envia`/`dir_xml`) y las rutas de red del FoxPro
+    //      tampoco se graban — son solo lectura hasta la decisión de Fase 0.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Validación de CUIT del FoxPro (<c>_ValidaCUIT</c>, funcion.prg:339 + el Valid del
+    /// textbox): exige la máscara de 13 caracteres <c>30-12345678-1</c> y verifica el dígito
+    /// verificador módulo 11 con los pesos 5,4,3,2,7,6,5,4,3,2. Vacío se considera VÁLIDO
+    /// (igual que el FoxPro). Devuelve <c>null</c> si está bien, o el mensaje de error.
+    /// </summary>
+    public static string? ValidarCuit(string? cuit)
+    {
+        cuit = (cuit ?? "").Trim();
+        if (cuit.Length == 0) return null;
+
+        // El FoxPro admite 11 dígitos sin máscara y la arma; el Valid del form igual exige 13.
+        if (cuit.Length == 11 && cuit.All(char.IsDigit))
+            cuit = $"{cuit[..2]}-{cuit.Substring(2, 8)}-{cuit[10]}";
+
+        if (cuit.Length != 13)
+            return "Problemas en la carga de CUIT. Ej.: 30-12345678-1";
+
+        // Posiciones (1-based) 1,2,4..11,13 son dígitos; 3 y 12 son los guiones.
+        if (cuit[2] != '-' || cuit[11] != '-')
+            return "Problemas en la carga de CUIT. Ej.: 30-12345678-1";
+        for (int i = 0; i < 13; i++)
+            if (i != 2 && i != 11 && !char.IsDigit(cuit[i]))
+                return "Problemas en la carga de CUIT. Ej.: 30-12345678-1";
+
+        // Suma ponderada tal cual el FoxPro (índices 1-based sobre la cadena CON máscara).
+        int D(int pos1Based) => cuit[pos1Based - 1] - '0';
+        var suma = D(11) * 2 + D(10) * 3 + D(9) * 4 + D(8) * 5 + D(7) * 6
+                 + D(6) * 7 + D(5) * 2 + D(4) * 3 + D(2) * 4 + D(1) * 5;
+        var resto = suma % 11;
+        var verificador = resto == 0 ? 0 : 11 - resto;
+
+        return D(13) == verificador
+            ? null
+            : "No se cargó correctamente el Nro. de CUIT. Intente nuevamente.";
+    }
+
+    /// <summary>
+    /// Graba los 15 campos de Parámetros Empresa. Valida el CUIT (única validación del form
+    /// FoxPro) y fuerza MAYÚSCULAS en Nombre y Dirección (los dos controles con <c>Format="!"</c>).
+    /// ⛔ Deshabilitado por <see cref="AbmFeatureFlags.ParametrosAbmActivo"/> hasta el día D:
+    /// hasta entonces la réplica DBF→SQL pisaría lo que escriba Buslink.
+    /// </summary>
+    public async Task<AbmResult> GrabarParametrosEmpresaAsync(ParametrosEmpresaEdit p)
+    {
+        if (!AbmFeatureFlags.ParametrosAbmActivo)
+            return AbmResult.Fallo(
+                "La edición de Parámetros todavía no está habilitada en Buslink. " +
+                "La tabla `parametro` sigue siendo del Metrocar (FoxPro) hasta el día D.");
+
+        var errCuit = ValidarCuit(p.Cuit);
+        if (errCuit is not null) return AbmResult.Fallo(errCuit);
+
+        if (p.SmtpPuerto is < 0 or > 65535)
+            return AbmResult.Fallo("El puerto de correo debe estar entre 0 y 65535.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = (SqlConnection)db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            // Solo las 15 columnas de esta pantalla. Sin WHERE: la tabla tiene 1 fila.
+            cmd.CommandText = """
+                UPDATE parametro SET
+                    empresa_no = @nombre,
+                    empresa_di = @direccion,
+                    empresa_cu = @cuit,
+                    piva       = @piva,
+                    empresa_te = @telefono,
+                    empresa_ha = @regnac,
+                    empresa_vt = @vto,
+                    empresa_ci = @circuito,
+                    logo       = @logo,
+                    smtp_nombr = @smtpNombre,
+                    smtp_serve = @smtpServidor,
+                    smtp_usuar = @smtpUsuario,
+                    smtp_passw = @smtpPassword,
+                    smtp_puert = @smtpPuerto,
+                    smtp_firma = @smtpFirma
+                """;
+            cmd.Parameters.Add(new SqlParameter("@nombre", (p.Nombre ?? "").Trim().ToUpperInvariant()));
+            cmd.Parameters.Add(new SqlParameter("@direccion", (p.Direccion ?? "").Trim().ToUpperInvariant()));
+            cmd.Parameters.Add(new SqlParameter("@cuit", (p.Cuit ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@piva", p.Piva));
+            cmd.Parameters.Add(new SqlParameter("@telefono", (p.Telefono ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@regnac", p.RegNac));
+            cmd.Parameters.Add(new SqlParameter("@vto", (object?)p.VtoCircuito ?? DBNull.Value));
+            cmd.Parameters.Add(new SqlParameter("@circuito", (p.CircuitoCerrado ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@logo", (p.Logo ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@smtpNombre", (p.SmtpNombre ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@smtpServidor", (p.SmtpServidor ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@smtpUsuario", (p.SmtpUsuario ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@smtpPassword", p.SmtpPassword ?? ""));
+            cmd.Parameters.Add(new SqlParameter("@smtpPuerto", (long)p.SmtpPuerto));
+            cmd.Parameters.Add(new SqlParameter("@smtpFirma", p.SmtpFirma ?? ""));
+            await cmd.ExecuteNonQueryAsync();
+
+            await tx.CommitAsync();
+            _reports.InvalidarCacheParametros();
+            return AbmResult.Exito();
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return AbmResult.Fallo("No se pudieron grabar los parámetros de la empresa: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Graba los campos EDITABLES de Parámetros Generales. Valida que el cliente de
+    /// movimientos internos exista (Valid de <c>id_cliente_prueba</c>).
+    /// Corrige los 3 bugs del fuente FoxPro (ver el bloque de comentario de arriba).
+    /// ⛔ Deshabilitado por <see cref="AbmFeatureFlags.ParametrosAbmActivo"/> hasta el día D.
+    /// </summary>
+    public async Task<AbmResult> GrabarParametrosGeneralesAsync(ParametrosGeneralesEdit p)
+    {
+        if (!AbmFeatureFlags.ParametrosAbmActivo)
+            return AbmResult.Fallo(
+                "La edición de Parámetros todavía no está habilitada en Buslink. " +
+                "La tabla `parametro` sigue siendo del Metrocar (FoxPro) hasta el día D.");
+
+        if (p.ChequeoHora is < 0 or > 23 || p.ChequeoMinuto is < 0 or > 59)
+            return AbmResult.Fallo("La hora de chequeo debe estar entre 00:00 y 23:59.");
+        if (p.BackupMinutos < 0)
+            return AbmResult.Fallo("El tiempo entre back-ups no puede ser negativo.");
+        if (!await _reports.ExisteClienteAsync(p.ClienteMovInternos))
+            return AbmResult.Fallo($"Cliente Inexistente: «{p.ClienteMovInternos}».");
+
+        // El FoxPro arma aviso_tiempo como DATETIME(1999,12,1, hh, mm): la fecha es basura,
+        // solo se usa la hora. Se respeta el mismo literal para no confundir al FoxPro.
+        var avisoTiempo = new DateTime(1999, 12, 1, p.ChequeoHora, p.ChequeoMinuto, 0);
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = (SqlConnection)db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            // Único que sigue SIN figurar: dir_mdb / intranet — es el bug ② del FoxPro
+            // (los escribía sin haberlos cargado, blanqueándolos en cada Aceptar).
+            // Los contadores (lote_plant/lote_sobre), empresa_ca/lista_prec y las rutas SÍ se
+            // graban desde el 12/08/2026, por decisión del usuario tras apagar el watcher.
+            cmd.CommandText = """
+                UPDATE parametro SET
+                    empresa_ca = @empresaFact,
+                    lista_prec = @listaPrecio,
+                    lote_plant = @lotePlant,
+                    lote_sobre = @loteSobre,
+                    dir_audito = @dirAuditoria,
+                    dir_ex_aud = @dirAuditoriaExt,
+                    dir_factur = @dirFacturacion,
+                    dir_sonido = @dirSonido,
+                    backup_dir = @backupDir,
+                    cliente_ad = @srvExcedente,
+                    chofer_adi = @srvChofer,
+                    fraccion_h = @fraccionFact,
+                    fraccion_2 = @fraccionChofer,
+                    porc_franc = @porcFranco,
+                    imp_franco = @impFranco,
+                    aviso_cho  = @avisoCho,
+                    aviso_veh  = @avisoVeh,
+                    aviso_mat  = @avisoMat,
+                    aviso_cheq = @avisoCheq,
+                    aviso_tiem = @avisoTiem,
+                    bruto      = @bruto,
+                    hs_extra_b = @hsExtraBus,
+                    hs_extra_m = @hsExtraMb,
+                    franco_mes = @francoMes,
+                    porc_vacio = @porcVacio,
+                    dcombsaldo = @dCombSaldo,
+                    rubro_comb = @rubroComb,
+                    id_cliente = @clienteInt,
+                    adic_agua  = @adicAgua,
+                    adic_malet = @adicMaleta,
+                    ley_liq_1  = @leyLiq1,
+                    ley_liq_2  = @leyLiq2,
+                    backup_tim = @backupSeg
+                """;
+            cmd.Parameters.Add(new SqlParameter("@empresaFact", (p.EmpresaFacturacion ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@listaPrecio", (p.ListaPrecioComun ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@lotePlant", p.LotePlantillas));
+            cmd.Parameters.Add(new SqlParameter("@loteSobre", p.LoteSobre));
+            cmd.Parameters.Add(new SqlParameter("@dirAuditoria", (p.DirAuditoria ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@dirAuditoriaExt", (p.DirAuditoriaExterna ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@dirFacturacion", (p.DirFacturacion ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@dirSonido", (p.DirSonidoTrafico ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@backupDir", (p.BackupDir ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@srvExcedente", (p.SrvHoraExcedente ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@srvChofer", (p.SrvHorasChofer ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@fraccionFact", (long)p.FraccionFacturacion));
+            cmd.Parameters.Add(new SqlParameter("@fraccionChofer", (long)p.FraccionChofer));
+            cmd.Parameters.Add(new SqlParameter("@porcFranco", p.PorcFrancoTrabajado));
+            cmd.Parameters.Add(new SqlParameter("@impFranco", p.ImpFrancoTrabajado));
+            cmd.Parameters.Add(new SqlParameter("@avisoCho", (long)p.AvisoChoferes));
+            cmd.Parameters.Add(new SqlParameter("@avisoVeh", (long)p.AvisoTecnica));
+            cmd.Parameters.Add(new SqlParameter("@avisoMat", (long)p.AvisoMatafuego));   // ① corregido
+            cmd.Parameters.Add(new SqlParameter("@avisoCheq", p.AvisosOperadores ? "S" : "N"));
+            cmd.Parameters.Add(new SqlParameter("@avisoTiem", avisoTiempo));
+            cmd.Parameters.Add(new SqlParameter("@bruto", p.SueldoBruto));
+            cmd.Parameters.Add(new SqlParameter("@hsExtraBus", p.HsExtraBus));
+            cmd.Parameters.Add(new SqlParameter("@hsExtraMb", p.HsExtraMinibus));
+            cmd.Parameters.Add(new SqlParameter("@francoMes", (long)p.FrancosAlMes));
+            cmd.Parameters.Add(new SqlParameter("@porcVacio", p.PorcVacio));
+            cmd.Parameters.Add(new SqlParameter("@dCombSaldo", (object?)p.FechaSaldoComb ?? DBNull.Value));
+            cmd.Parameters.Add(new SqlParameter("@rubroComb", (long)p.RubroCombustible));
+            cmd.Parameters.Add(new SqlParameter("@clienteInt", (p.ClienteMovInternos ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@adicAgua", (p.AdicionalAgua ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@adicMaleta", (p.AdicionalMaleta ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@leyLiq1", (p.LeyendaLiq1 ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@leyLiq2", (p.LeyendaLiq2 ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@backupSeg", (long)p.BackupMinutos * 60));
+            await cmd.ExecuteNonQueryAsync();
+
+            await tx.CommitAsync();
+            _reports.InvalidarCacheParametros();
+            return AbmResult.Exito();
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return AbmResult.Fallo("No se pudieron grabar los parámetros generales: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Graba la configuración del SQL externo del GPS (<c>parametro_sql_server.scx</c>) y la de
+    /// la vía XML. Editable desde el 12/08/2026 por decisión del usuario.
+    ///
+    /// 🔴 <b>Apagar <c>sql_gps</c> corta el feed de seguimiento de 136 clientes</b> (AEROLINEAS
+    /// incluida, 93 % de los viajes) <b>sin que nadie reciba un error</b>: simplemente dejan de
+    /// entrar filas en la tabla del proveedor. La pantalla pide confirmación explícita antes de
+    /// grabar ese cambio. Ver <c>docs/PlanoFoxPro/trafico/GPS_XLM.md</c>.
+    ///
+    /// ⚠ <b>No se replica el parseo Maquina/Instancia del FoxPro</b>, que tiene un bug que borra
+    /// la dirección cuando el servidor es una IP sin instancia (§4.3 del plano): acá el servidor
+    /// se edita como un solo campo.
+    /// </summary>
+    public async Task<AbmResult> GrabarParametrosGpsAsync(ParametrosGpsEdit p)
+    {
+        if (!AbmFeatureFlags.ParametrosAbmActivo)
+            return AbmResult.Fallo(
+                "La edición de Parámetros todavía no está habilitada en Buslink.");
+
+        // Si el envío queda encendido, los datos de conexión tienen que ser utilizables:
+        // guardar sql_gps = 1 con el servidor vacío es la receta del fallo silencioso.
+        if (p.Activo)
+        {
+            if (string.IsNullOrWhiteSpace(p.Servidor))
+                return AbmResult.Fallo("Con el envío a GPS activo, el servidor no puede quedar vacío.");
+            if (string.IsNullOrWhiteSpace(p.Base))
+                return AbmResult.Fallo("Con el envío a GPS activo, la base no puede quedar vacía.");
+            if (string.IsNullOrWhiteSpace(p.Tabla))
+                return AbmResult.Fallo("Con el envío a GPS activo, la tabla destino no puede quedar vacía.");
+        }
+        var tabla = (p.Tabla ?? "").Trim();
+        if (tabla.Length > 0 && !tabla.All(c => char.IsLetterOrDigit(c) || c == '_'))
+            return AbmResult.Fallo($"El nombre de tabla «{tabla}» no es un identificador válido.");
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        await using var conn = (SqlConnection)db.Database.GetDbConnection();
+        await conn.OpenAsync();
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                UPDATE parametro SET
+                    sql_gps    = @activo,
+                    sql_server = @servidor,
+                    sql_base   = @base,
+                    sql_usuari = @usuario,
+                    sql_passwo = @password,
+                    sql_tabla  = @tabla,
+                    url_gps    = @url,
+                    xml_envia  = @xmlEnvia,
+                    dir_xml    = @dirXml
+                """;
+            cmd.Parameters.Add(new SqlParameter("@activo", p.Activo));
+            cmd.Parameters.Add(new SqlParameter("@servidor", (p.Servidor ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@base", (p.Base ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@usuario", (p.Usuario ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@password", p.Password ?? ""));
+            cmd.Parameters.Add(new SqlParameter("@tabla", tabla));
+            cmd.Parameters.Add(new SqlParameter("@url", (p.UrlGps ?? "").Trim()));
+            cmd.Parameters.Add(new SqlParameter("@xmlEnvia", p.XmlEnvia));
+            cmd.Parameters.Add(new SqlParameter("@dirXml", (p.DirXml ?? "").Trim()));
+            await cmd.ExecuteNonQueryAsync();
+
+            await tx.CommitAsync();
+            _reports.InvalidarCacheParametros();
+            return AbmResult.Exito();
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return AbmResult.Fallo("No se pudo grabar la configuración de GPS: " + ex.Message);
+        }
     }
 }
 

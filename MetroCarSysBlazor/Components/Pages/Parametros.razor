@@ -1,0 +1,761 @@
+@page "/parametros"
+@inject ReportService Reports
+@inject AbmService Abm
+@inject LogoEmpresaService LogoSvc
+@inject CorreoPruebaService CorreoSvc
+@inject GpsSqlService GpsSvc
+@inject IDialogService DialogSvc
+@inject NorturAuthStateProvider AuthState
+@inject IPermissionService Permisos
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@rendermode InteractiveServer
+
+@* ─────────────────────────────────────────────────────────────────────────────
+   Parámetros del sistema — migración de parametro_empresa.scx + parametro.scx.
+
+   UNA sola página con 2 solapas a propósito: las dos pantallas del FoxPro escriben
+   la MISMA fila de la MISMA tabla (`parametro`, 1 fila / 72 columnas), así que dos
+   páginas separadas se pisarían entre sí.
+
+   🔴 La escritura está APAGADA (AbmFeatureFlags.ParametrosAbmActivo) y no por alcance:
+      en esa misma fila viven los contadores vivos del circuito, y la réplica DBF→SQL
+      pisa la fila entera → `parametro` cambia de dueño recién el día D.
+
+   Plano: docs/PlanoFoxPro/sistema/PARAMETROS.md · skill modulo-sistema.
+   ───────────────────────────────────────────────────────────────────────────── *@
+
+<PageTitle>BusLink</PageTitle>
+
+<div class="page-header mb-3">
+    <MudText Typo="Typo.h5" Style="font-weight:800; color:#112F5B;">
+        Parámetros del sistema
+    </MudText>
+    <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
+        Sistema · Configuración de la empresa y del sistema — la fila única de <code>parametro</code>
+    </MudText>
+</div>
+
+@if (_cargando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" Style="border-radius:4px;" />
+}
+else
+{
+    @if (SoloLectura)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Icon="@Icons.Material.Filled.Lock">
+            <b>Solo lectura.</b> No tenés permiso de modificación sobre esta pantalla.
+        </MudAlert>
+    }
+    else
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3" Icon="@Icons.Material.Filled.EditNote">
+            <b>Esta pantalla escribe en la base.</b> <code>parametro</code> ya es de Buslink (el
+            Metrocar quedó desconectado del watcher para esta tabla), así que lo que grabes acá
+            <b>no vuelve al FoxPro</b>. Varios de estos valores gobiernan pantallas ya en uso:
+            Vencimientos, avisos de Tráfico, Facturación, Combustible y el envío al GPS.
+        </MudAlert>
+    }
+
+    <MudTabs Elevation="1" Rounded="true" ApplyEffectsToContainer="true" 
+             Class="param-tabs" @bind-ActivePanelIndex="_solapa">
+
+        @* ══════════════════════ SOLAPA EMPRESA ══════════════════════ *@
+        <MudTabPanel Text="Empresa" Icon="@Icons.Material.Filled.Business">
+
+            <MudText Typo="Typo.subtitle2" Class="param-grupo">Datos de la empresa</MudText>
+            <div class="param-grid">
+                <MudTextField @bind-Value="_emp.Nombre" Label="Nombre" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="60"
+                              HelperText="Se guarda en MAYÚSCULAS (el FoxPro fuerza el formato)" />
+                <MudTextField @bind-Value="_emp.Direccion" Label="Dirección" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="60"
+                              HelperText="Se guarda en MAYÚSCULAS" />
+                <MudTextField @bind-Value="_emp.Cuit" Label="Nº de CUIT" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="13"
+                              Error="@(_errorCuit is not null)" ErrorText="@_errorCuit"
+                              OnBlur="ValidarCuit"
+                              HelperText="Con máscara: 30-12345678-1" />
+                <MudTextField @bind-Value="_emp.Telefono" Label="Teléfono" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="50" />
+                <MudNumericField @bind-Value="_emp.Piva" Label="Tasa de IVA" Variant="Variant.Outlined"
+                                 Margin="Margin.Dense" ReadOnly="SoloLectura" Format="N2" Min="0" Max="100"
+                                 HelperText="La usan Facturación y Liquidación a fleteros" />
+                <MudNumericField @bind-Value="_emp.RegNac" Label="Inscripción Reg. Nac" Variant="Variant.Outlined"
+                                 Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0" />
+                <MudDatePicker @bind-Date="_emp.VtoCircuito" Label="Vencimiento Circuito"
+                               DateFormat="dd/MM/yyyy" PickerVariant="PickerVariant.Dialog"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" />
+                <MudTextField @bind-Value="_emp.CircuitoCerrado" Label="Circuito Cerrado" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="20" />
+            </div>
+
+            <MudText Typo="Typo.subtitle2" Class="param-grupo">Logo</MudText>
+            <div class="param-logo">
+                <div class="param-logo__datos">
+                    <MudTextField Value="_emp.Logo" T="string" Label="Archivo del logo" ReadOnly="true"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  HelperText="Ruta del Metrocar (unidad de red). Se edita en FoxPro para no romperle el login ni los reportes." />
+                </div>
+                <div class="param-logo__preview">
+                    @if (_logoOk)
+                    {
+                        <img src="/logo-empresa" alt="Logo de la empresa" />
+                    }
+                    else
+                    {
+                        <div class="param-logo__vacio">
+                            <MudIcon Icon="@Icons.Material.Filled.ImageNotSupported" Size="Size.Large" />
+                            <MudText Typo="Typo.caption">@_logoError</MudText>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <MudText Typo="Typo.subtitle2" Class="param-grupo">Correo electrónico (SMTP)</MudText>
+            <div class="param-grid">
+                <MudTextField @bind-Value="_emp.SmtpNombre" Label="Nombre (remitente)" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="200"
+                              Class="param-col2"
+                              HelperText="Formato: Nombre &lt;casilla@dominio&gt;" />
+                <MudTextField @bind-Value="_emp.SmtpServidor" Label="Servidor" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="100" />
+                <MudTextField @bind-Value="_emp.SmtpUsuario" Label="Usuario" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="200" />
+                @* Sin ojo de "mostrar": la contraseña NUNCA se muestra en pantalla (16/08/2026).
+                   Se puede reescribir, pero no leer — es la credencial de la casilla de la empresa
+                   y esta pantalla se abre con gente alrededor. *@
+                <MudTextField @bind-Value="_emp.SmtpPassword" Label="Password" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="30"
+                              InputType="InputType.Password"
+                              HelperText="⚠ Se guarda en texto plano en la base (así lo dejó el Metrocar)" />
+                <MudNumericField @bind-Value="_emp.SmtpPuerto" Label="Puerto" Variant="Variant.Outlined"
+                                 Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0" Max="65535" />
+            </div>
+
+            <div class="param-grid param-grid--ancho mt-2">
+                <MudTextField @bind-Value="_emp.SmtpFirma" Label="Firma del correo" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" ReadOnly="SoloLectura" Lines="4" MaxLength="508" />
+            </div>
+
+            @* Probar envío — NO graba nada (a diferencia del FoxPro), así que funciona
+               aunque la escritura esté apagada: es una herramienta de diagnóstico. *@
+            <MudPaper Elevation="0" Class="param-probar mt-3">
+                <MudTextField @bind-Value="_mailPrueba" Label="Enviar la prueba a" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" Style="max-width:320px;"
+                              HelperText="No se graba nada: prueba la configuración de arriba tal como está" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.ForwardToInbox"
+                           OnClick="ProbarCorreo" Disabled="_probando">
+                    @(_probando ? "Enviando…" : "Probar envío de correo")
+                </MudButton>
+                @if (_probando)
+                {
+                    <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Primary" />
+                }
+            </MudPaper>
+            @if (_resultadoCorreo is not null)
+            {
+                <MudAlert Severity="@(_correoOk ? Severity.Success : Severity.Error)" Dense="true" Class="mt-2">
+                    <div style="white-space:pre-wrap;">@_resultadoCorreo</div>
+                </MudAlert>
+            }
+        </MudTabPanel>
+
+        @* ══════════════════════ SOLAPA GENERALES ══════════════════════ *@
+        <MudTabPanel Text="Generales" Icon="@Icons.Material.Filled.Tune">
+
+            <MudText Typo="Typo.subtitle2" Class="param-grupo">Facturación y liquidación</MudText>
+            <div class="param-grid">
+                <MudSelect T="string" @bind-Value="_gen.SrvHoraExcedente" Label="Servicio Hora Excedente"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Dense="true"
+                           HelperText="Lo usa el motor de valorización de Liquidación">
+                    @foreach (var s in _combos.Servicios)
+                    {
+                        <MudSelectItem T="string" Value="@s.Id">@s.Etiqueta</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudSelect T="string" @bind-Value="_gen.SrvHorasChofer" Label="Servicios Horas Adicionales (Chofer)"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Dense="true">
+                    @foreach (var s in _combos.Servicios)
+                    {
+                        <MudSelectItem T="string" Value="@s.Id">@s.Etiqueta</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudNumericField @bind-Value="_gen.FraccionFacturacion" Label="Fracción de Hora Facturación"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0"
+                                 HelperText="En minutos. Lo usa el motor de valorización" />
+                <MudNumericField @bind-Value="_gen.FraccionChofer" Label="Fracción de Hora (Chofer)"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0" />
+            </div>
+            <div class="param-grid param-grid--ancho mt-2">
+                <MudTextField @bind-Value="_gen.LeyendaLiq1" Label="Leyenda en las liquidaciones · Renglón 1"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="200" />
+                <MudTextField @bind-Value="_gen.LeyendaLiq2" Label="Leyenda en las liquidaciones · Renglón 2"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="200" />
+            </div>
+
+            <MudText Typo="Typo.subtitle2" Class="param-grupo">Choferes · francos y haberes</MudText>
+            <div class="param-grid">
+                <MudNumericField @bind-Value="_gen.PorcFrancoTrabajado" Label="Porcentaje trabajo día franco"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura"
+                                 Format="N2" Min="0" Max="999" />
+                <MudNumericField @bind-Value="_gen.ImpFrancoTrabajado" Label="Importe franco trabajado"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura"
+                                 Format="N2" Min="0" />
+                <MudNumericField @bind-Value="_gen.FrancosAlMes" Label="Francos al mes"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0" />
+                <MudNumericField @bind-Value="_gen.SueldoBruto" Label="Sueldo bruto + Presentismo"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura"
+                                 Format="N2" Min="0" />
+                <MudNumericField @bind-Value="_gen.HsExtraBus" Label="Importe Horas Extras en Bus"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura"
+                                 Format="N2" Min="0" />
+                <MudNumericField @bind-Value="_gen.HsExtraMinibus" Label="Importe Horas Extras en Minibus"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura"
+                                 Format="N2" Min="0" />
+            </div>
+
+            <MudText Typo="Typo.subtitle2" Class="param-grupo">
+                Avisos de vencimientos y de tráfico
+                <MudTooltip Text="Estos valores gobiernan el chip de Vencimientos de la barra y el motor de avisos F4 de la Planilla de Tráfico.">
+                    <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" Class="param-info" />
+                </MudTooltip>
+            </MudText>
+            <div class="param-grid">
+                <MudNumericField @bind-Value="_gen.AvisoChoferes" Label="Avisar · Choferes (días)"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0" />
+                <MudNumericField @bind-Value="_gen.AvisoTecnica" Label="Avisar · Técnica/VTV (días)"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0" />
+                <MudNumericField @bind-Value="_gen.AvisoMatafuego" Label="Avisar · Matafuego (días)"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0"
+                                 HelperText="🐛 En el Metrocar este campo se edita pero NO se graba. Buslink lo corrige." />
+                <MudNumericField @bind-Value="_gen.ChequeoHora" Label="Chequear · hora antes"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0" Max="23" />
+                <MudNumericField @bind-Value="_gen.ChequeoMinuto" Label="Chequear · minutos antes"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0" Max="59"
+                                 HelperText="@($"Antelación total: {_gen.ChequeoTexto}")" />
+            </div>
+            <MudCheckBox T="bool" @bind-Value="_gen.AvisosOperadores" Dense="true" Color="Color.Primary"
+                         ReadOnly="SoloLectura" Class="mt-1"
+                         Label="Activación de avisos a los operadores de tráfico" />
+
+            <MudText Typo="Typo.subtitle2" Class="param-grupo">Combustible</MudText>
+            <div class="param-grid">
+                <MudSelect T="int" @bind-Value="_gen.RubroCombustible" Label="Rubro de Combustible"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Dense="true"
+                           HelperText="Define qué proveedores son estaciones de servicio">
+                    @foreach (var r in _combos.Rubros)
+                    {
+                        <MudSelectItem T="int" Value="@r.Id">@($"{r.Id} — {r.Nombre}")</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudDatePicker @bind-Date="_gen.FechaSaldoComb" Label="Fecha desde control saldo combustible"
+                               DateFormat="dd/MM/yyyy" PickerVariant="PickerVariant.Dialog"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" />
+                <MudNumericField @bind-Value="_gen.PorcVacio" Label="Auditoría de comb. · % de Vacío"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura"
+                                 Format="N2" Min="0" Max="100" />
+            </div>
+
+            <MudText Typo="Typo.subtitle2" Class="param-grupo">Operación</MudText>
+            <div class="param-grid">
+                <MudTextField @bind-Value="_gen.ClienteMovInternos" Label="Id. de Clientes para Mov. Internos"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="30"
+                              Error="@(_errorCliente is not null)" ErrorText="@_errorCliente"
+                              OnBlur="ValidarCliente"
+                              HelperText="Define qué viajes son internos en 5 informes" />
+                <MudSelect T="string" @bind-Value="_gen.AdicionalAgua" Label="Servicios Adicionales (Aguas)"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Dense="true"
+                           ToStringFunc="@(id => id)">
+                    @foreach (var a in _combos.Adicionales)
+                    {
+                        <MudSelectItem T="string" Value="@a.Id">@a.Etiqueta</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudSelect T="string" @bind-Value="_gen.AdicionalMaleta" Label="Servicios Adicionales (Maletas)"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Dense="true"
+                           ToStringFunc="@(id => id)">
+                    @foreach (var a in _combos.Adicionales)
+                    {
+                        <MudSelectItem T="string" Value="@a.Id">@a.Etiqueta</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudNumericField @bind-Value="_gen.BackupMinutos" Label="Tiempo entre back-ups (minutos)"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0"
+                                 HelperText="Lo respeta el back-up del Metrocar (se guarda en segundos)" />
+            </div>
+
+            @* ── Bloque sensible: editable desde el 12/08/2026, con aviso ── *@
+            <MudText Typo="Typo.subtitle2" Class="param-grupo">
+                Contadores y rutas del Metrocar
+                <MudTooltip Text="Cambiar un contador acá NO lo cambia en el FoxPro: con el watcher apagado las dos copias son independientes.">
+                    <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" Class="param-info" />
+                </MudTooltip>
+            </MudText>
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">
+                Los <b>contadores</b> los sigue incrementando el Metrocar en su DBF, y desde que se
+                apagó el watcher esos incrementos <b>ya no llegan acá</b>: las dos copias divergen.
+                Editarlos a mano agranda esa diferencia — hay que resincronizarlos en el día D.
+                Las <b>rutas</b> son unidades de red del Metrocar que este servidor no ve y que
+                Buslink no usa.
+            </MudAlert>
+            <div class="param-grid">
+                <MudSelect T="string" @bind-Value="_gen.EmpresaFacturacion" Label="Empresa de Facturación General"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Dense="true">
+                    @foreach (var e in ParametrosCombos.ConValorActual(_combos.Empresas, _gen.EmpresaFacturacion))
+                    {
+                        <MudSelectItem T="string" Value="@e.Id">@e.Etiqueta</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudSelect T="string" @bind-Value="_gen.ListaPrecioComun" Label="Lista de Precio Común (migración)"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Dense="true"
+                           ToStringFunc="@(id => id)">
+                    @foreach (var l in ParametrosCombos.ConValorActual(_combos.ListasPrecio, _gen.ListaPrecioComun))
+                    {
+                        <MudSelectItem T="string" Value="@l.Id">@l.Etiqueta</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudNumericField @bind-Value="_gen.LotePlantillas" T="long" Label="Último Lote de Plantillas"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0"
+                                 HelperText="⚠ Contador vivo del armado de reservas" />
+                <MudNumericField @bind-Value="_gen.LoteSobre" T="long" Label="Último lote de auditoría de combustible"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" Min="0"
+                                 HelperText="⚠ Contador vivo de la conciliación" />
+                @* xml_envia y dir_xml se editan en la solapa GPS: son la «vía 1» de la misma
+                   integración que gobierna sql_gps. *@
+                <MudTextField @bind-Value="_gen.DirAuditoria" Label="Directorio de Auditoría"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="140" />
+                <MudTextField @bind-Value="_gen.DirAuditoriaExterna" Label="Directorio de Auditoría (externo)"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="140" />
+                <MudTextField @bind-Value="_gen.DirFacturacion" Label="Directorio Intercambio Sist. Contable"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="140" />
+                <MudTextField @bind-Value="_gen.DirSonidoTrafico" Label="Sonido alarma aviso tráfico"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="140" />
+                <MudTextField @bind-Value="_gen.BackupDir" Label="Directorio de Back-Up"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="140" />
+            </div>
+        </MudTabPanel>
+
+        @* ══════════════════════ SOLAPA GPS ══════════════════════
+           Migración de parametro_sql_server.scx. TODO en solo lectura: es el interruptor de
+           una integración VIVA que Buslink todavía no replica. Los 3 botones del FoxPro sí
+           se migran (Conexión y Ver filas son diagnóstico puro; Vaciar tabla va con su
+           propio flag apagado). *@
+        <MudTabPanel Text="GPS" Icon="@Icons.Material.Filled.GpsFixed">
+
+            @if (_gps.Activo)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3" Icon="@Icons.Material.Filled.Podcasts">
+                    <b>El envío al sistema de GPS está ACTIVO en el Metrocar.</b> Por cada asignación,
+                    reasignación, finalización y cancelación, FoxPro escribe el viaje en
+                    <code>@_gps.Servidor</code> · <code>@_gps.Base</code> · tabla <code>@_gps.Tabla</code>.
+                    Alcanza a <b>@_alcance.ClientesConGps clientes</b>
+                    (@_alcance.ViajesConGps.ToString("N0") de @_alcance.ViajesTotales.ToString("N0") viajes
+                    de los últimos @_alcance.Dias días = <b>@_alcance.PorcentajeViajes.ToString("0.#") %</b>).
+                    <b>Buslink todavía no replica este envío</b>: hay que implementarlo antes del día D
+                    o el seguimiento de esos clientes se corta sin aviso.
+                </MudAlert>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    El envío al sistema de GPS está <b>apagado</b> en esta base.
+                    Ojo: en los servidores productivos figura <b>ACTIVO</b> — si estás viendo esto en
+                    la réplica local, no es el estado real de producción.
+                </MudAlert>
+            }
+
+            <MudText Typo="Typo.subtitle2" Class="param-grupo">Conexión al SQL del GPS</MudText>
+            <MudCheckBox T="bool" @bind-Value="_gps.Activo" Dense="true" Color="Color.Primary"
+                         ReadOnly="SoloLectura" Class="mb-1"
+                         Label="Envía datos al SQL SERVER para servicios de GPS" />
+            <div class="param-grid">
+                <MudTextField @bind-Value="_gps.Servidor" Label="Servidor"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="100"
+                              HelperText="Máquina\Instancia, o IP pelada si no tiene instancia nombrada" />
+                <MudTextField @bind-Value="_gps.Base" Label="Base"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="50" />
+                <MudTextField @bind-Value="_gps.Tabla" Label="Tabla Servicio"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="50" />
+                <MudTextField @bind-Value="_gps.Usuario" Label="Usuario"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="50" />
+                @* Sin ojo de "mostrar" — misma regla que la password del SMTP. *@
+                <MudTextField @bind-Value="_gps.Password" Label="Password"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="50"
+                              InputType="InputType.Password"
+                              HelperText="⚠ En texto plano en la base. El Metrocar la corta a 13 caracteres" />
+            </div>
+
+            <MudAlert Severity="Severity.Normal" Dense="true" Class="mt-2" Icon="@Icons.Material.Outlined.Info">
+                El servidor se edita como <b>un solo campo</b>, a propósito: la pantalla del Metrocar
+                lo parte en Máquina + Instancia y tiene un bug que <b>borra la dirección</b> cuando
+                no hay instancia nombrada (el caso actual). Después de cambiar algo, conviene usar
+                <b>Probar conexión</b> antes de irse.
+            </MudAlert>
+
+            <MudText Typo="Typo.subtitle2" Class="param-grupo">Vía XML (alternativa, hoy apagada)</MudText>
+            <MudCheckBox T="bool" @bind-Value="_gps.XmlEnvia" Dense="true" Color="Color.Primary"
+                         ReadOnly="SoloLectura" Class="mb-1"
+                         Label="Envía los XML para subir a la Intranet (la otra vía de gps_xlm)" />
+            <div class="param-grid">
+                <MudTextField @bind-Value="_gps.DirXml" Label="Directorio XML"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="140"
+                              HelperText="Carpeta donde deja un XML por viaje" />
+                <MudTextField @bind-Value="_gps.UrlGps" Label="URL del sistema de GPS"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="SoloLectura" MaxLength="200"
+                              HelperText="La usa la pantalla del mapa, no el envío" />
+            </div>
+
+            @* ── Diagnóstico: los 3 botones del form FoxPro ── *@
+            <MudText Typo="Typo.subtitle2" Class="param-grupo">Diagnóstico</MudText>
+            <MudPaper Elevation="0" Class="param-probar">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Cable"
+                           OnClick="ProbarGps" Disabled="_gpsOcupado">
+                    Probar conexión
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.TableRows"
+                           OnClick="VerFilasGps" Disabled="_gpsOcupado">
+                    Ver últimas filas
+                </MudButton>
+                <span style="flex:1 1 auto;"></span>
+                <MudTooltip Text="Vacía la tabla del sistema de GPS. Deshabilitado: es destructivo y sobre un servidor de terceros.">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.DeleteSweep"
+                               OnClick="VaciarGps" Disabled="_gpsOcupado || !AbmFeatureFlags.GpsTruncateActivo">
+                        Vaciar tabla
+                    </MudButton>
+                </MudTooltip>
+                @if (_gpsOcupado)
+                {
+                    <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Primary" />
+                }
+            </MudPaper>
+
+            @if (_resultadoGps is not null)
+            {
+                <MudAlert Severity="@(_gpsOk ? Severity.Success : Severity.Error)" Dense="true" Class="mt-2">
+                    <div style="white-space:pre-wrap;">@_resultadoGps</div>
+                </MudAlert>
+            }
+
+            @if (_previewGps is { Ok: true, Filas.Count: > 0 })
+            {
+                <div class="param-gps-preview mt-2">
+                    <table>
+                        <thead>
+                            <tr>@foreach (var c in _previewGps.Columnas) { <th>@c</th> }</tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var f in _previewGps.Filas)
+                            {
+                                <tr>@foreach (var v in f) { <td>@v</td> }</tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </MudTabPanel>
+    </MudTabs>
+
+    @* ── Botonera ── *@
+    <MudPaper Elevation="1" Class="param-acciones mt-3">
+        <MudText Typo="Typo.caption" Style="color:#7A90AD;">
+            @if (SoloLectura)
+            {
+                <span>Sin permiso de modificación (dígito 3 del <code>nivel</code>).</span>
+            }
+            else
+            {
+                <span>Un solo Grabar para las tres solapas: escriben la misma fila de <code>parametro</code>.</span>
+            }
+        </MudText>
+        <span style="flex:1 1 auto;"></span>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh" OnClick="CargarAsync" Disabled="_grabando">
+            Descartar cambios
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Save" OnClick="Grabar"
+                   Disabled="SoloLectura || _grabando">
+            Grabar
+        </MudButton>
+    </MudPaper>
+}
+
+@code {
+    private bool _cargando = true;
+    private bool _grabando;
+    private int _solapa;
+
+    private ParametrosEmpresaEdit _emp = new();
+    private ParametrosGeneralesEdit _gen = new();
+    private ParametrosGpsEdit _gps = new();
+    private GpsAlcance _alcance = new(0, 0, 0, 30);
+    private ParametrosCombos _combos = new(new(), new(), new(), new(), new());
+
+    private bool _gpsOcupado;
+    private bool _gpsOk;
+    private string? _resultadoGps;
+    private GpsSqlService.Preview? _previewGps;
+
+    private bool _logoOk;
+    private string _logoError = "";
+
+    private string _mailPrueba = "";
+    private bool _probando;
+    private bool _correoOk;
+    private string? _resultadoCorreo;
+
+    private string? _errorCuit;
+    private string? _errorCliente;
+
+    /// <summary>Copias de lo cargado, para detectar los cambios SENSIBLES al grabar.</summary>
+    private ParametrosGeneralesEdit _genOriginal = new();
+    private ParametrosGpsEdit _gpsOriginal = new();
+
+    /// <summary>
+    /// Solo lectura si la escritura está apagada (<see cref="AbmFeatureFlags.ParametrosAbmActivo"/>)
+    /// o si el usuario no tiene el dígito de MODIFICA (<c>3</c>) en su <c>nivel</c> — el
+    /// <c>"3" $ cNivel</c> del Metrocar. Hoy todos los usuarios tienen "12345", así que en la
+    /// práctica manda el permiso 'S' del módulo, pero el chequeo va igual por corrección.
+    /// </summary>
+    private bool SoloLectura => !AbmFeatureFlags.ParametrosAbmActivo || !Permisos.TieneABM(3);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await AuthState.EstaAutenticadoAsync())
+        {
+            Nav.NavigateTo($"/login?destino={Uri.EscapeDataString("/" + Nav.ToBaseRelativePath(Nav.Uri))}", forceLoad: false);
+            return;
+        }
+        // Permiso 'S' (Usuarios y Password / Sistema). En el FoxPro esta pantalla cuelga de
+        // 'A' (ABM del sistema), pero acá expone CUIT, tasa de IVA y la password del correo
+        // → se restringe al círculo chico. Decisión 12/08/2026.
+        if (!Permisos.Tiene('S'))
+        {
+            Nav.NavigateTo("/", forceLoad: false);
+            return;
+        }
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        _cargando = true;
+        _errorCuit = _errorCliente = null;
+        _resultadoCorreo = null;
+        StateHasChanged();
+
+        _emp = await Reports.GetParametrosEmpresaAsync();
+        _gen = await Reports.GetParametrosGeneralesAsync();
+        _combos = await Reports.GetParametrosCombosAsync();
+        _gps = await Reports.GetParametrosGpsAsync();
+        _alcance = await Reports.GetGpsAlcanceAsync();
+        _resultadoGps = null;
+        _previewGps = null;
+
+        // Snapshot para poder avisar de los cambios sensibles al grabar.
+        _genOriginal = _gen.Clonar();
+        _gpsOriginal = _gps.Clonar();
+
+        // El logo vive en una unidad de red del FoxPro: se resuelve por el prefijo configurado.
+        var res = LogoSvc.Resolver(_emp.Logo);
+        _logoOk = res.Ok;
+        _logoError = res.Error ?? "";
+
+        // Destino por defecto de la prueba de correo: la casilla configurada como remitente
+        // (el FoxPro mandaba a la casilla del desarrollador, hardcodeada).
+        if (string.IsNullOrWhiteSpace(_mailPrueba))
+            _mailPrueba = CorreoPruebaService.ExtraerDireccion(_emp.SmtpUsuario)
+                       ?? CorreoPruebaService.ExtraerDireccion(_emp.SmtpNombre)
+                       ?? "";
+
+        _cargando = false;
+        StateHasChanged();
+    }
+
+    /// <summary>Valid del CUIT del FoxPro, al salir del campo.</summary>
+    private void ValidarCuit()
+    {
+        _errorCuit = AbmService.ValidarCuit(_emp.Cuit);
+    }
+
+    /// <summary>Valid de id_cliente_prueba: el código tiene que existir en `cliente`.</summary>
+    private async Task ValidarCliente()
+    {
+        _errorCliente = await Reports.ExisteClienteAsync(_gen.ClienteMovInternos)
+            ? null
+            : $"Cliente Inexistente: «{_gen.ClienteMovInternos}».";
+    }
+
+    private async Task ProbarCorreo()
+    {
+        _probando = true;
+        _resultadoCorreo = null;
+        StateHasChanged();
+
+        var usuario = AuthState.UsuarioActual ?? "(desconocido)";
+        var cfg = new CorreoPruebaService.Config(
+            _emp.SmtpServidor, _emp.SmtpPuerto, _emp.SmtpUsuario, _emp.SmtpPassword, _emp.SmtpNombre);
+
+        var res = await CorreoSvc.ProbarAsync(cfg, _mailPrueba, usuario);
+        _correoOk = res.Ok;
+        _resultadoCorreo = res.Mensaje;
+
+        _probando = false;
+        StateHasChanged();
+    }
+
+    // ── Diagnóstico del SQL externo del GPS (los 3 botones de parametro_sql_server.scx) ──
+    // Ninguno toca `parametro`: van contra el server del GPS. Por eso Probar y Ver filas
+    // funcionan aunque la escritura de Parámetros esté apagada — son solo lectura.
+
+    private GpsSqlService.Config CfgGps() =>
+        new(_gps.Servidor, _gps.Base, _gps.Usuario, _gps.Password, _gps.Tabla);
+
+    private async Task ProbarGps()
+    {
+        _gpsOcupado = true; _resultadoGps = null; _previewGps = null;
+        StateHasChanged();
+
+        var r = await GpsSvc.ProbarConexionAsync(CfgGps());
+        _gpsOk = r.Ok;
+        _resultadoGps = r.Mensaje;
+
+        _gpsOcupado = false;
+        StateHasChanged();
+    }
+
+    private async Task VerFilasGps()
+    {
+        _gpsOcupado = true; _resultadoGps = null; _previewGps = null;
+        StateHasChanged();
+
+        var p = await GpsSvc.UltimasFilasAsync(CfgGps());
+        _previewGps = p;
+        _gpsOk = p.Ok;
+        _resultadoGps = p.Mensaje;
+
+        _gpsOcupado = false;
+        StateHasChanged();
+    }
+
+    private async Task VaciarGps()
+    {
+        // Destructivo y sobre un servidor de terceros → confirmación explícita antes de nada.
+        var ok = await DialogSvc.ShowMessageBoxAsync(
+            "Vaciar la tabla del sistema de GPS",
+            $"Se va a BORRAR todo el contenido de «{_gps.Tabla}» en {_gps.Servidor}. " +
+            "Esa tabla alimenta el seguimiento de los clientes con GPS y NO es de Buslink. " +
+            "Esta acción no se puede deshacer. ¿Confirmás?",
+            yesText: "Sí, vaciar", cancelText: "Cancelar");
+        if (ok != true) return;
+
+        _gpsOcupado = true; _resultadoGps = null; _previewGps = null;
+        StateHasChanged();
+
+        var r = await GpsSvc.VaciarTablaAsync(CfgGps());
+        _gpsOk = r.Ok;
+        _resultadoGps = r.Mensaje;
+
+        _gpsOcupado = false;
+        StateHasChanged();
+    }
+
+    private async Task Grabar()
+    {
+        ValidarCuit();
+        await ValidarCliente();
+        if (_errorCuit is not null) { _solapa = 0; Snackbar.Add(_errorCuit, MudBlazor.Severity.Error); return; }
+        if (_errorCliente is not null) { _solapa = 1; Snackbar.Add(_errorCliente, MudBlazor.Severity.Error); return; }
+
+        // Confirmación SOLO si hay cambios de los que fallan callados o son difíciles de deshacer.
+        // No es un candado: el usuario decidió que todo sea editable. Es hacerlos visibles justo
+        // en el momento del commit, que es cuando importa.
+        var sensibles = CambiosSensibles();
+        if (sensibles.Count > 0)
+        {
+            var ok = await DialogSvc.ShowMessageBoxAsync(
+                "Revisá estos cambios antes de grabar",
+                string.Join("\n\n", sensibles),
+                yesText: "Grabar igual", cancelText: "Volver");
+            if (ok != true) return;
+        }
+
+        _grabando = true;
+        StateHasChanged();
+
+        // Las tres solapas escriben columnas distintas de la MISMA fila.
+        var r1 = await Abm.GrabarParametrosEmpresaAsync(_emp);
+        if (!r1.Ok)
+        {
+            Snackbar.Add(r1.Error!, MudBlazor.Severity.Error);
+            _grabando = false;
+            return;
+        }
+        var r2 = await Abm.GrabarParametrosGeneralesAsync(_gen);
+        if (!r2.Ok)
+        {
+            Snackbar.Add(r2.Error!, MudBlazor.Severity.Error);
+            _grabando = false;
+            return;
+        }
+        var r3 = await Abm.GrabarParametrosGpsAsync(_gps);
+        if (!r3.Ok)
+        {
+            _solapa = 2;
+            Snackbar.Add(r3.Error!, MudBlazor.Severity.Error);
+            _grabando = false;
+            return;
+        }
+
+        Snackbar.Add("Parámetros grabados.", MudBlazor.Severity.Success);
+        _grabando = false;
+        await CargarAsync();
+    }
+
+    /// <summary>
+    /// Cambios que conviene mirar dos veces: los que fallan en silencio (apagar el GPS) o los
+    /// que no se pueden deshacer mirando la pantalla (contadores del circuito).
+    /// </summary>
+    private List<string> CambiosSensibles()
+    {
+        var avisos = new List<string>();
+
+        if (_gpsOriginal.Activo && !_gps.Activo)
+            avisos.Add(
+                "⛔ Estás APAGANDO el envío al sistema de GPS.\n" +
+                $"Eso corta el seguimiento de {_alcance.ClientesConGps} clientes " +
+                $"({_alcance.PorcentajeViajes:0.#} % de los viajes) y NO genera ningún error: " +
+                "simplemente dejan de entrar filas en la tabla del proveedor.");
+
+        if (!_gpsOriginal.Activo && _gps.Activo)
+            avisos.Add(
+                "⚠ Estás ENCENDIENDO el envío al sistema de GPS. " +
+                "Verificá con «Probar conexión» que el servidor y la tabla respondan.");
+
+        if (_gps.Activo &&
+            (_gps.Servidor != _gpsOriginal.Servidor || _gps.Base != _gpsOriginal.Base ||
+             _gps.Tabla != _gpsOriginal.Tabla || _gps.Usuario != _gpsOriginal.Usuario ||
+             _gps.Password != _gpsOriginal.Password))
+            avisos.Add(
+                "⚠ Cambiaste los datos de conexión del GPS con el envío ENCENDIDO. " +
+                "Si quedan mal, el envío falla sin avisar. Probá la conexión antes de grabar.");
+
+        if (_gen.LotePlantillas != _genOriginal.LotePlantillas)
+            avisos.Add(
+                $"⚠ Último Lote de Plantillas: {_genOriginal.LotePlantillas:N0} → {_gen.LotePlantillas:N0}.\n" +
+                "Es un contador vivo del circuito. Bajarlo puede hacer que se repitan números de lote.");
+
+        if (_gen.LoteSobre != _genOriginal.LoteSobre)
+            avisos.Add(
+                $"⚠ Último lote de auditoría de combustible: {_genOriginal.LoteSobre:N0} → {_gen.LoteSobre:N0}.\n" +
+                "Es un contador vivo de la conciliación.");
+
+        return avisos;
+    }
+}

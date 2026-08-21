@@ -1,0 +1,113 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   Modal de Vencimientos (11/08/2026) — el contenido de la vieja franja azul
+   oscura, ahora con lugar para leerse: dos bloques (flota y choferes) con una
+   tarjeta por documento en vez de 7 chips apretados en un renglón.
+
+   Los datos llegan por parámetro desde <VencimientosMenu /> (ya los tiene para el
+   badge) — no hay consulta nueva acá. Cada tarjeta desglosa el total en VENCIDOS
+   y POR VENCER, que es información que la franja escondía en un tooltip.
+
+   El detalle de QUÉ vence (dominio, chofer, fecha) sigue viviendo en la Agenda de
+   Vencimientos; el pie del modal lleva ahí.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+@inject NavigationManager Nav
+
+<MudDialog Class="zoom-viaje-dialog vto-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.NotificationsActive" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Vencimientos</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+
+        @* ── FLOTA ── *@
+        <div class="vto-sec">
+            <div class="vto-sec__head">
+                <MudIcon Icon="@Icons.Material.Filled.AirportShuttle" Size="Size.Small" />
+                <span class="vto-sec__tit">Vehículos</span>
+                <span class="vto-sec__tot">@Datos.Vehiculos unidades propias</span>
+            </div>
+            <div class="vto-cards">
+                @Tarjeta("VTV", Datos.VtvVencidos, Datos.VtvProxVencer, Datos.AvisoVeh)
+                @Tarjeta("Matafuegos", Datos.MatVencidos, Datos.MatProxVencer, Datos.AvisoMat)
+            </div>
+        </div>
+
+        @* ── CHOFERES ── *@
+        <div class="vto-sec">
+            <div class="vto-sec__head">
+                <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                <span class="vto-sec__tit">Choferes</span>
+                <span class="vto-sec__tot">@Datos.Choferes activos</span>
+            </div>
+            <div class="vto-cards">
+                @Tarjeta("Registro", Datos.RegVencidos, Datos.RegProxVencer, Datos.AvisoCho)
+                @Tarjeta("CNRT", Datos.CnrtVencidos, Datos.CnrtProxVencer, Datos.AvisoCho)
+                @Tarjeta("AEP", Datos.AepVencidos, Datos.AepProxVencer, Datos.AvisoCho)
+            </div>
+        </div>
+
+        @* Regla heredada del FoxPro (aviso_agenda.prg): un documento SIN fecha cargada
+           cuenta como vencido. Vale decirlo o el número no cierra con lo que se ve. *@
+        <div class="vto-nota">
+            <MudIcon Icon="@Icons.Material.Outlined.Info" Style="font-size:14px;" />
+            <span>
+                Un documento <b>sin fecha cargada</b> cuenta como vencido, igual que en el Metrocar.
+                La ventana de aviso sale de los parámetros del sistema y es distinta por documento.
+            </span>
+        </div>
+
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.EventNote" OnClick="VerAgenda">
+            Ver agenda de vencimientos
+        </MudButton>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public TableroDto Datos { get; set; } = new();
+
+    private void Cerrar() => MudDialog.Close();
+
+    private void VerAgenda()
+    {
+        MudDialog.Close();
+        Nav.NavigateTo("/agenda-vencimientos");
+    }
+
+    /// <summary>Una tarjeta por documento. `vencidos` y `porVencer` son excluyentes;
+    /// el número grande es la suma (el mismo total que muestra el FoxPro).</summary>
+    private RenderFragment Tarjeta(string label, int vencidos, int porVencer, int diasAviso) => @<div
+        class="vto-card @(vencidos > 0 ? "vto-card--danger" : porVencer > 0 ? "vto-card--warn" : "vto-card--ok")">
+        <span class="vto-card__lbl">@label</span>
+        <span class="vto-card__num">@(vencidos + porVencer)</span>
+        <div class="vto-card__det">
+            @if (vencidos > 0)
+            {
+                <span class="vto-card__det-l vto-card__det-l--danger">@vencidos vencido@(vencidos == 1 ? "" : "s")</span>
+            }
+            @if (porVencer > 0)
+            {
+                <span class="vto-card__det-l vto-card__det-l--warn">@porVencer vence@(porVencer == 1 ? "" : "n") en @diasAviso días</span>
+            }
+            @if (vencidos == 0 && porVencer == 0)
+            {
+                <span class="vto-card__det-l">Todo en orden</span>
+            }
+        </div>
+    </div>;
+}

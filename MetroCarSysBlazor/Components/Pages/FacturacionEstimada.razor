@@ -49,7 +49,8 @@
 else
 {
     @* ── KPIs ── *@
-    <div class="d-flex flex-wrap mb-2" style="gap:10px;">
+    @* rfs-kpis (grid): contrato de responsividad del proyecto — ver skill `responsive-nortur`. *@
+    <div class="rfs-kpis mb-2">
         <KpiCard Label="Total estimado" Value="@($"$ {Money(_porMes.Sum(m => m.TotalEstimado))}")" Color="@NorturColors.Naranja" />
         <KpiCard Label="Liquidaciones" Value="@Fmt(_porMes.Sum(m => m.Liquidaciones))" />
         <KpiCard Label="Servicios" Value="@Fmt(_porMes.Sum(m => m.Servicios))" />

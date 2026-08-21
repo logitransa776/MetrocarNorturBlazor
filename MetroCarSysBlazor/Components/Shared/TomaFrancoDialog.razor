@@ -1,0 +1,149 @@
+@inject AbmService Abm
+
+@* ───────────────────────────────────────────────────────────────────────────────
+   "Toma Franco" del menú contextual del panel BUSES (bar 18 del menu_viaje_vehiculo.mpr).
+   Es la ÚNICA escritura inline del menú: no abre un form, hace el INSERT ahí mismo
+   después de un MessageBox de confirmación.
+
+   El FoxPro no deja elegir nada — franco de HOY, codigo='F', motivo='FRANCO',
+   trabajo=.F., valido=.T. — así que este diálogo es solo la confirmación.
+
+   ⚠️ ANDAMIAJE: escritura apagada por AbmFeatureFlags.TomaFrancoActivo.
+   Plano: docs/PlanoFoxPro/trafico/TRAFICO_BUSES_MENU.md
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog nortur-ficha">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.EventBusy" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Toma Franco</span>
+            @if (!_abmActivo)
+            {
+                <span class="zoom-title-bar__chip" style="margin-left:10px;">Escritura preparada</span>
+            }
+            <span class="zoom-title-bar__nro">Interno&nbsp;@Bus.Interno</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_bloqueo is not null)
+        {
+            <MudAlert Severity="Severity.Warning" Class="my-2">@_bloqueo</MudAlert>
+        }
+        else
+        {
+            @* Texto del MessageBox del FoxPro: "Esta totalmente seguro de procesar el franco
+               para: Conductor : <nombre> / Fecha: <hoy>". *@
+            <MudText Typo="Typo.body1" Class="mb-3">
+                ¿Confirmás el franco para este conductor?
+            </MudText>
+            <div class="zoom-box zoom-box--sec">
+                <div class="zoom-row">
+                    @F("Conductor", Dato(Bus.NombreChofer), acento: true, ancho: 2)
+                    @F("Legajo", Dato(Bus.Chofer))
+                    @F("Fecha", DateTime.Today.ToString("dd/MM/yyyy", _ar), acento: true)
+                    @F("Código", "F")
+                    @F("Motivo", "FRANCO")
+                    @F("Unidad", $"Interno {Bus.Interno} · {Dato(Bus.Vehiculo)}", ancho: 2)
+                </div>
+            </div>
+            <MudText Typo="Typo.caption" Style="color:#5A6B82;">
+                El franco es siempre del día de hoy y con motivo FRANCO — el Metrocar no permite
+                elegir otra fecha ni otro motivo desde acá. Para francos con fecha o motivo
+                distintos está la pantalla de Francos.
+            </MudText>
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+            }
+        }
+    </DialogContent>
+
+    <DialogActions>
+        @if (_bloqueo is null)
+        {
+            <span class="nov-alta__hint">
+                <MudIcon Icon="@(_abmActivo ? Icons.Material.Filled.Edit : Icons.Material.Filled.Lock)" Size="Size.Small" />
+                @(_abmActivo
+                    ? "Se da de alta en el registro de francos"
+                    : "Escritura preparada · se habilita con el circuito de Tráfico (día D)")
+            </span>
+        }
+        <MudSpacer />
+        <MudButton Variant="Variant.Text" OnClick="Cerrar">Cancelar</MudButton>
+        @if (_bloqueo is null)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Success"
+                       StartIcon="@Icons.Material.Filled.EventBusy" OnClick="Grabar"
+                       Disabled="@(!_abmActivo || _grabando)">
+                @(_grabando ? "Guardando…" : "Generar franco")
+            </MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public PanelBusRow Bus { get; set; } = default!;
+    [Parameter] public string Usuario { get; set; } = "";
+
+    private static bool _abmActivo => AbmFeatureFlags.TomaFrancoActivo;
+
+    private bool _grabando;
+    private string? _error;
+    private string? _bloqueo;
+    private readonly System.Globalization.CultureInfo _ar =
+        System.Globalization.CultureInfo.GetCultureInfo("es-AR");
+
+    protected override void OnInitialized() => _bloqueo = Validar();
+
+    /// <summary>
+    /// La guarda del FoxPro: <c>If estado = "LIBERADO" .or. !EMPTY(trabaja)</c> — o sea, deja
+    /// pasar también a los que YA están de franco, y ahí corta el chequeo de duplicado.
+    /// Se agrega la validación que el original NO tiene: sin conductor logoneado el FoxPro
+    /// insertaría un franco con id_chofer vacío (bug del original, no regla de negocio).
+    /// </summary>
+    private string? Validar()
+    {
+        if (string.IsNullOrWhiteSpace(Bus.Chofer))
+            return "La unidad no tiene conductor logoneado — no hay a quién darle el franco.";
+        if ((Bus.Estado ?? "").Trim() != "LIBERADO" && string.IsNullOrWhiteSpace(Bus.Franco))
+            return "El chofer no se encuentra en estado LIBERADO o ya está de franco.";
+        return null;
+    }
+
+    private async Task Grabar()
+    {
+        _error = null;
+        _grabando = true;
+        var r = await Abm.TomarFrancoAsync(Bus.Chofer, Usuario);
+        _grabando = false;
+        if (!r.Ok) { _error = r.Error; return; }
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cerrar() => MudDialog.Close();
+
+    private static string Dato(string? s) => string.IsNullOrWhiteSpace(s) ? "—" : s.Trim();
+
+    private RenderFragment F(string label, string valor, string? cssValor = null, bool acento = false, int ancho = 1) => b =>
+    {
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", $"zoom-field zoom-field--{ancho}");
+        b.OpenElement(2, "div"); b.AddAttribute(3, "class", "zoom-field__label");
+        b.AddContent(4, label); b.CloseElement();
+        var cls = acento ? "zoom-field__value zoom-field__value--acento" : "zoom-field__value";
+        if (!string.IsNullOrEmpty(cssValor)) cls += " " + cssValor;
+        b.OpenElement(5, "div");
+        b.AddAttribute(6, "class", cls);
+        b.AddContent(7, valor);
+        b.CloseElement();
+        b.CloseElement();
+    };
+}

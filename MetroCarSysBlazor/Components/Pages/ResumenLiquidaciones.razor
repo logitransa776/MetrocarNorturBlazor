@@ -64,7 +64,10 @@
 else
 {
     @* ── KPIs ── *@
-    <div class="d-flex flex-wrap mb-2" style="gap:10px;">
+    @* rfs-kpis (grid): contrato de responsividad del proyecto — ver skill `responsive-nortur`.
+       Con d-flex las tarjetas quedaban con su ancho natural y los importes largos
+       ("$ 6.962.279.957") desbordaban la fila. *@
+    <div class="rfs-kpis mb-2">
         <KpiCard Label="Liquidaciones" Value="@Fmt(_liquidaciones.Count)" />
         <KpiCard Label="Total general" Value="@($"$ {Money(_liquidaciones.Sum(l => l.TotalGral))}")" Color="@NorturColors.Naranja" />
         <KpiCard Label="Con factura" Value="@Fmt(_liquidaciones.Count(l => l.TieneFactura))" />

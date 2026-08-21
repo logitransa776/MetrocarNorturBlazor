@@ -1,0 +1,178 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   F1 · Ayuda de comandos — reemplazo de la ventana "Zoon" del Metrocar.
+
+   El FoxPro muestra un cuadro de texto plano que lista las teclas sin decir qué hacen
+   ("F8 - Cambia Cronograma a Fletero"). Acá cada tecla arranca COLAPSADA en una línea —
+   para el que ya sabe y solo quiere acordarse cuál era — y se despliega con tres datos:
+   qué hace, cuándo se usa y si escribe en la reserva o solo cambia la vista.
+   Formato elegido por el usuario (04/08/2026) sobre 4 propuestas.
+
+   Las teclas se muestran agrupadas por FAMILIA, que es lo que el cuadro del FoxPro no deja
+   ver: cinco de las nueve hacen lo mismo (mover la unidad prevista) con distinto atajo.
+
+   El contenido se filtra por permiso: no tiene sentido explicarle el modo diagramador a
+   alguien que no lo puede usar. Ver seguridad-nortur para las letras D / T / C.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+<MudDialog Class="zoom-viaje-dialog ayuda-dialog">
+    <TitleContent>
+        <div class="zoom-title-bar" style="width:100%; display:flex; align-items:center;">
+            <MudIcon Icon="@Icons.Material.Filled.Keyboard" Class="me-2" Style="color:#F99410;" />
+            <span class="zoom-title-bar__text">Atajos de la Planilla de Tráfico</span>
+            <span style="flex:1;"></span>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Style="color:rgba(255,255,255,0.85); margin:-4px -6px -4px 0;"
+                           title="Cerrar" OnClick="Cerrar" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <div class="ayuda-intro">
+            Con el cursor sobre la grilla. Tocá una tecla para ver qué hace.
+        </div>
+
+        @foreach (var familia in Familias)
+        {
+            var teclas = Atajos.Where(a => a.Familia == familia && Visible(a)).ToList();
+            if (teclas.Count == 0) continue;
+
+            <div class="ayuda-fam">@familia</div>
+            <div class="ayuda-lista">
+                @foreach (var a in teclas)
+                {
+                    var abierta = _abierta == a.Tecla;
+                    <div class="ayuda-item @(abierta ? "ayuda-item--on" : "")">
+                        <button type="button" class="ayuda-item__head" @onclick="@(() => Alternar(a.Tecla))"
+                                aria-expanded="@abierta">
+                            <span class="ayuda-kbd">@a.Tecla</span>
+                            <span class="ayuda-item__titulo">@a.Titulo</span>
+                            @if (a.Escribe)
+                            {
+                                <span class="ayuda-badge" title="Modifica datos de la reserva">escribe</span>
+                            }
+                            <MudIcon Icon="@(abierta ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                     Size="Size.Small" Style="margin-left:auto; opacity:.5;" />
+                        </button>
+                        @if (abierta)
+                        {
+                            <div class="ayuda-item__cuerpo">
+                                <p class="ayuda-que">@a.Que</p>
+                                <p class="ayuda-cuando"><strong>Cuándo:</strong> @a.Cuando</p>
+                                @if (a.Nota is not null)
+                                {
+                                    <p class="ayuda-nota">@a.Nota</p>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        <div class="ayuda-pie">
+            Las mismas acciones están en el menú del clic derecho sobre una fila, con el atajo
+            escrito al costado.
+        </div>
+    </DialogContent>
+
+    <DialogActions>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Cerrar">Cerrar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>Tiene el permiso 'D' → ve el modo diagramador (masivo, cambia también U/Pr).</summary>
+    [Parameter] public bool EsDiagramador { get; set; }
+    /// <summary>Tiene el permiso 'C' → ve la tecla de avisos.</summary>
+    [Parameter] public bool VeAvisos { get; set; }
+    /// <summary>Nombre de la empresa propia (parametro.id_cliente_prueba, hoy NORTUR).</summary>
+    [Parameter] public string NombreEmpresa { get; set; } = "NORTUR";
+
+    private string? _abierta;
+
+    private void Alternar(string tecla) => _abierta = _abierta == tecla ? null : tecla;
+    private void Cerrar() => MudDialog.Close();
+
+    private static readonly string[] Familias =
+        { "Ver la planilla", "Anotar sobre el servicio", "Cambiar la unidad prevista" };
+
+    private record Atajo(
+        string Tecla, string Familia, string Titulo, string Que, string Cuando,
+        bool Escribe = false, string? Nota = null, char? Permiso = null);
+
+    private bool Visible(Atajo a) => a.Permiso switch
+    {
+        'D' => EsDiagramador,
+        'C' => VeAvisos,
+        _   => true
+    };
+
+    // El texto está escrito con las palabras de la mesa de tráfico, no con las de la base:
+    // "unidad prevista" y no "cronograma", "la que sale a la calle" y no "id_interno".
+    private List<Atajo> Atajos => new()
+    {
+        new("F1", "Ver la planilla", "Ayuda online",
+            "Abre el manual de Buslink en una pestaña nueva, sin perder la planilla.",
+            "querés leer cómo funciona una pantalla, no solo acordarte de una tecla.",
+            Nota: "También está en el botón «Ayuda» de la barra de arriba."),
+
+        new("Ctrl+F1", "Ver la planilla", "Esta lista de atajos",
+            "Abre esta lista de atajos.",
+            "cuando no te acordás cuál era la tecla."),
+
+        new("F3", "Ver la planilla", "Actualizar ahora",
+            "Vuelve a traer los servicios del día desde la base.",
+            "casi nunca: la planilla ya se actualiza sola cada 60 segundos y resalta lo que cambió. Está por si querés forzarla."),
+
+        new("F5", "Ver la planilla", "Cambiar el rango de fechas",
+            "Deja ver varios días juntos en vez de uno solo.",
+            "cuando estás diagramando y necesitás mirar la semana completa.",
+            Permiso: 'D'),
+
+        new("F2", "Anotar sobre el servicio", "Cargar una novedad",
+            "Escribe una anotación en el libro de guardia. Si la cargás sobre una fila queda colgada de esa reserva; si no, queda como novedad suelta del día.",
+            "pasó algo que el turno siguiente tiene que saber.",
+            Escribe: true,
+            Nota: "El aviso por correo al cliente se sigue mandando desde el Metrocar."),
+
+        new("F4", "Anotar sobre el servicio", "Poner hora de aviso",
+            "Fija a qué hora el sistema te va a golpear la puerta por este servicio. Sin esto, todos avisan solos unos minutos antes de salir.",
+            "querés que te avise antes de lo habitual, porque el servicio es delicado o el chofer es nuevo.",
+            Escribe: true,
+            Permiso: 'C'),
+
+        new("F6", "Cambiar la unidad prevista", "Dejar sin unidad (S/C)",
+            "Le saca la unidad prevista al servicio y lo deja sin cronograma.",
+            "se cayó la unidad que iba a cubrirlo y todavía no sabés con qué reemplazarla.",
+            Escribe: true),
+
+        new("F7", "Cambiar la unidad prevista", "Pasar a la empresa",
+            $"Marca el servicio como cubierto por {NombreEmpresa}, sin especificar interno.",
+            "sabés que lo cubre la empresa pero todavía no cuál unidad.",
+            Escribe: true),
+
+        new("F8", "Cambiar la unidad prevista", "Pasar a un fletero",
+            "Cambia la unidad prevista a una de un transportista contratado: elegís la empresa y el interno, y queda como TT0012.",
+            "ese servicio no lo va a cubrir la flota propia.",
+            Escribe: true,
+            Nota: "Ojo: esto NO asigna chofer ni saca la unidad a la calle. La asignación real es Asig U/P."),
+
+        new("F9", "Cambiar la unidad prevista", "Pasar a flota propia",
+            "Cambia la unidad prevista a un interno propio, y queda como NT0049.",
+            "es el camino normal cuando el servicio lo cubre una unidad de la casa.",
+            Escribe: true),
+
+        new("Ctrl+F8", "Cambiar la unidad prevista", "Copiar la del diagramador",
+            "Pisa la unidad vigente con la que había planificado el diagramador, sin abrir ningún diálogo.",
+            "se probó un cambio sobre la marcha y hay que volver al plan original.",
+            Escribe: true),
+
+        new("A-Z 0-9", "Cambiar la unidad prevista", "Escribir para buscar la unidad",
+            "Tipear cualquier letra o número sobre la grilla abre el cambio de unidad, ya posicionado en el interno que empieza así.",
+            "es el atajo de los que vienen del Metrocar: se tipea el número de interno directo.",
+            Escribe: true),
+    };
+}

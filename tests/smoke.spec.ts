@@ -308,3 +308,37 @@ test('Reservas por Plantillas (armado) — levanta con combo y días', async ({ 
   // La barra de días de la semana está presente (Lun..Dom + Feriados).
   await expect(page.getByText('Feriados').first()).toBeVisible({ timeout: 15_000 });
 });
+
+// ── Sistema: Parámetros Empresa y Generales (solo lectura + andamiaje ABM) ──
+// Una sola página con 2 solapas: las dos pantallas del FoxPro escriben la MISMA fila
+// de `parametro`. Ver docs/PlanoFoxPro/sistema/PARAMETROS.md.
+
+test('Parámetros del sistema — solapa Empresa con los datos cargados', async ({ page }) => {
+  await irA(page, '/parametros');
+  await expect(page).not.toHaveURL(/\/login/);
+  // Los datos de la fila única de `parametro` llegaron a la pantalla.
+  await expect(page.getByLabel('Nombre', { exact: true })).toHaveValue(/\S/, { timeout: 15_000 });
+  await expect(page.getByLabel('Nº de CUIT')).toHaveValue(/^\d{2}-\d{8}-\d$/);
+  // parametro ya es de Buslink (watcher apagado): la escritura está HABILITADA.
+  await expect(page.getByRole('button', { name: /^Grabar/i })).toBeEnabled();
+});
+
+test('Parámetros del sistema — solapa Generales con contadores editables y su aviso', async ({ page }) => {
+  await irAInteractivo(page, '/parametros');
+  await page.getByRole('tab', { name: 'Generales' }).click();
+  await expect(page.getByText('Contadores y rutas del Metrocar')).toBeVisible({ timeout: 15_000 });
+  // Los contadores son editables desde el 12/08/2026, pero con aviso de divergencia.
+  await expect(page.getByLabel('Último Lote de Plantillas')).toBeEditable();
+  await expect(page.getByText(/las dos copias divergen/i)).toBeVisible();
+});
+
+test('Parámetros del sistema — solapa GPS con el diagnóstico', async ({ page }) => {
+  await irAInteractivo(page, '/parametros');
+  await page.getByRole('tab', { name: 'GPS' }).click();
+  await expect(page.getByText('Conexión al SQL del GPS')).toBeVisible({ timeout: 15_000 });
+  // Los 2 diagnósticos de lectura están disponibles aunque la escritura esté apagada…
+  await expect(page.getByRole('button', { name: /Probar conexión/i })).toBeEnabled();
+  await expect(page.getByRole('button', { name: /Ver últimas filas/i })).toBeEnabled();
+  // …y el destructivo NO (GpsTruncateActivo = false).
+  await expect(page.getByRole('button', { name: /Vaciar tabla/i })).toBeDisabled();
+});

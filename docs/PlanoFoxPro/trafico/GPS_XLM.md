@@ -10,37 +10,61 @@
 
 ---
 
-## ⚡ Hallazgo central: HOY ES UN NO-OP
+## 🔴 CORREGIDO EL 12/08/2026 — la integración está VIVA, NO es un no-op
 
-La función arranca leyendo `parametro` y **sale sin hacer nada** si los dos flags están
-apagados:
+> **Este doc afirmaba lo contrario hasta el 12/08/2026 y estaba equivocado.** La conclusión
+> "hoy es un NO-OP" se sacó leyendo la **réplica local** (`DESKTOP-CV6LF0O\SQLEXPRESS`), que
+> es un snapshot viejo (17/07/2026). Contra los servidores **productivos** el flag SQL está
+> **encendido**. Cualquier decisión tomada sobre la versión anterior de este doc hay que
+> revisarla.
+
+La función arranca leyendo `parametro` y sale sin hacer nada **sólo si los DOS flags están
+apagados** — es un OR, no un AND:
 
 ```foxpro
-If tmpParametroXLM.xml_envia Or tmpParametroXLM.SQL_GPS   && si ambos = .F. → no-op
+If tmpParametroXLM.xml_envia Or tmpParametroXLM.SQL_GPS   && basta UNO en .T. para que corra
 ```
 
-**Verificado contra la réplica (02/07/2026): `parametro.xml_envia = 0` y
-`parametro.sql_gps = 0`** → cada llamada desde asignar/reasignar/finalizar/cancelar/armar
-hoy **no envía nada a ningún lado**. Configuración residual encontrada:
+### Estado real, verificado el 12/08/2026 en los tres servidores
 
-| Campo `parametro` (nombre SQL) | Valor actual | Para qué era |
+| Servidor | `sql_gps` | `sql_server` | `_updated_at` |
+| --- | --- | --- | --- |
+| **172.25.69.217** (productivo nuevo) | **1 — ACTIVO** | `192.168.0.8` | 22/07/2026 |
+| **172.25.80.234** (productivo) | **1 — ACTIVO** | `192.168.0.8` | **12/08/2026** (réplica viva) |
+| `DESKTOP-CV6LF0O` (local, snapshot viejo) | 0 | `SISTEMA01\SQLEXPRESS_AXOFT` | 17/07/2026 |
+
+| Campo `parametro` (nombre SQL) | Valor productivo | Para qué es |
 | --- | --- | --- |
-| `xml_envia` | **0** | habilita la vía 1 (XML file-drop) |
-| `sql_gps` | **0** | habilita la vía 2 (SQL Server externo) |
-| `dir_xml` | `O:\METROCARSYS\XML\` | carpeta destino de los XML |
-| `sql_server` | `SISTEMA01\SQLEXPRESS_AXOFT` | server SQL del sistema GPS |
+| `xml_envia` | **0** | vía 1 (XML file-drop) — **ésta sí está muerta** |
+| `sql_gps` | **1 — ACTIVO** | vía 2 (SQL Server externo) — **ésta CORRE** |
+| `dir_xml` | `O:\METROCARSYS\XML\` | carpeta destino de los XML (sin uso) |
+| `sql_server` | **`192.168.0.8`** | server SQL del sistema GPS (cambió: antes `SISTEMA01\SQLEXPRESS_AXOFT`) |
 | `sql_base` / `sql_tabla` | `MetroCarSQL` / `Servicios` | base y tabla destino |
-| `sql_usuari` / `sql_passwo` | `sa` / … | credenciales |
+| `sql_usuari` / `sql_passwo` | `sa` / … | credenciales (texto plano) |
 | `url_gps` | `http://metrocar.nortur.ar` | usado por otras pantallas (mapa), no por esta función |
 
-Además, **136 clientes activos tienen `cliente.envia_gps = 1`** — configuración que quedó
-cargada de cuando la integración estaba viva.
+### Cuánto pesa (medido contra producción, 12/08/2026)
 
-> **Implicancia para la decisión de Fase 0:** la evidencia apunta a **"confirmar muerto"**
-> (flags apagados en producción). Preguntas para cerrar con el dueño: ① ¿el server
-> `SISTEMA01\SQLEXPRESS_AXOFT` existe todavía? ② ¿el proveedor GPS consume la tabla
-> `Servicios` o la carpeta `O:\...\XML`? ③ ¿hay OTRO mecanismo GPS vigente (la pantalla
-> del mapa usa `url_gps`)? Si se confirma muerto → stub no-op con log en `ViajeAbmService`.
+- **136 clientes** con `cliente.envia_gps = 1` — incluida **AEROLINEAS ARGENTINAS**.
+- **3.466 de 3.713 viajes** del último mes (**93 %**) pertenecen a esos clientes.
+- Se dispara en **ASIGNO, RE-ASIGNO, FINALIZO, CANCELO** y en el armado de plantillas.
+
+> ### 🔴 Implicancia para el día D
+>
+> **`gps_xlm()` NO se puede stubbear.** Si Buslink toma el circuito `viaje` sin replicar la
+> vía 2, el feed que alimenta el seguimiento de 136 clientes se corta **en silencio** (nadie
+> recibe un error: simplemente dejan de entrar filas en `Servicios`). Pasa de "riesgo 4,
+> confirmar muerto" a **integración viva de entrega obligatoria antes del corte**.
+>
+> **Lo que falta confirmar** (no se pudo desde la PC de desarrollo): `192.168.0.8` responde
+> ping, pero **el puerto SQL no contesta** desde ahí, así que está verificado que la bandera
+> está en 1 y que el host vive, **pero no que los INSERT estén realmente entrando**. Hay que
+> confirmarlo con el cliente o desde el servidor de Buslink — para eso está el botón
+> **Conexión** de la solapa GPS de `/parametros`, que prueba exactamente eso.
+>
+> Preguntas que siguen abiertas con el dueño: ① ¿quién consume `MetroCarSQL.Servicios`
+> (proveedor GPS, app propia)? ② ¿el cambio de `SISTEMA01\SQLEXPRESS_AXOFT` a `192.168.0.8`
+> fue una migración de ese sistema? ③ ¿la vía XML se puede dar de baja formalmente?
 
 ---
 

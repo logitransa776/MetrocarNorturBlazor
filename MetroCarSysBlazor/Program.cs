@@ -1,9 +1,10 @@
-using MetroCarSysBlazor.Components;
+﻿using MetroCarSysBlazor.Components;
 using MetroCarSysBlazor.Data;
 using MetroCarSysBlazor.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using ApexCharts;
 using MudBlazor.Services;
@@ -52,12 +53,54 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<ExcelExportService>();
 // Capa de escritura (INSERT/UPDATE). Estrena la escritura con el ABM de Usuarios.
 builder.Services.AddScoped<AbmService>();
+// Envío de correos del Libro de Novedades (form libro_novedad_envia_correo.scx). Scoped porque
+// depende de ReportService y AbmService, que también lo son. Ver AbmFeatureFlags.EnvioCorreosActivo.
+builder.Services.AddScoped<CorreoNovedadesService>();
+// Control de acceso por origen de red (LAN vs Internet). Singleton: parsea los rangos
+// CIDR de RedInterna una sola vez. Dormido mientras RedInterna:Activo = false.
+builder.Services.AddSingleton<AccesoRedService>();
+
+// Forwarded headers — para cuando Buslink quede detrás de un reverse proxy (IIS ARR, nginx,
+// Cloudflare). Solo se confía en X-Forwarded-For si la conexión viene de un proxy CONOCIDO
+// (RedInterna:ProxiesConfiables). Sin proxies configurados, el header se ignora y se usa la
+// IP real de la conexión TCP (no falsificable). Esto es lo que hace fiable el control de
+// acceso por red: un cliente de Internet no puede mentir su IP con un header.
+builder.Services.Configure<ForwardedHeadersOptions>(opt =>
+{
+    opt.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    opt.ForwardLimit = 1;
+    opt.KnownProxies.Clear();
+    opt.KnownIPNetworks.Clear();
+    foreach (var p in builder.Configuration.GetSection("RedInterna:ProxiesConfiables").Get<string[]>()
+                      ?? Array.Empty<string>())
+        if (System.Net.IPAddress.TryParse(p, out var addr)) opt.KnownProxies.Add(addr);
+});
 // Adjuntos de viajes (Tráfico → Ver Datos Extras → Ver Adjunto). Singleton: solo lee config.
 builder.Services.AddSingleton<AdjuntoService>();
+
+// Logo de la empresa (Sistema → Parámetros → Empresa). Mismo problema que los adjuntos:
+// parametro.logo guarda una ruta con unidad de red mapeada que el servidor no ve.
+builder.Services.AddSingleton<LogoEmpresaService>();
+
+// Prueba de la configuración SMTP (botón «Probar envío» de Parámetros Empresa). Sin estado.
+builder.Services.AddSingleton<CorreoPruebaService>();
+
+// Diagnóstico del SQL EXTERNO del sistema de GPS (Parámetros → solapa GPS). Sin estado.
+builder.Services.AddSingleton<GpsSqlService>();
+
+// Cierre de sesión al cerrar el navegador. El tracker (singleton) vigila los circuitos
+// vivos de cada sesión; el handler + el contexto son por circuito. Ver
+// SesionCircuitoTracker para el porqué del diseño y la gracia de 5 minutos.
+builder.Services.AddSingleton<SesionCircuitoTracker>();
+builder.Services.AddScoped<SesionCircuitoContexto>();
+builder.Services.AddScoped<Microsoft.AspNetCore.Components.Server.Circuits.CircuitHandler, SesionCircuitHandler>();
 
 // Autenticación por COOKIE — el navegador la manda en cada petición HTTP (pestaña
 // nueva / F5 incluidas), así el servidor reconoce al usuario antes de renderizar.
 // Expiración DESLIZANTE de 8h (jornada laboral): cada actividad renueva el reloj.
+// La cookie es DE SESIÓN (no persistente, ver IsPersistent en /auth/login): al cerrar el
+// navegador el propio navegador la borra, así que al volver a entrar pide usuario y clave.
+// El tope de 8 hs sigue rigiendo dentro de la misma corrida del navegador.
 builder.Services.AddAuthentication(NorturIdentityFactory.AuthScheme)
     .AddCookie(NorturIdentityFactory.AuthScheme, opt =>
     {
@@ -83,6 +126,10 @@ builder.Services.AddCascadingAuthenticationState();
 
 var app = builder.Build();
 
+// Reescribe RemoteIpAddress con la IP real del cliente cuando la petición viene de un proxy
+// conocido (ver ForwardedHeadersOptions). Debe ir ANTES de todo lo que lea la IP (auth, login).
+app.UseForwardedHeaders();
+
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {
@@ -105,7 +152,7 @@ app.UseAntiforgery();
 // SignInAsync/SignOutAsync escriben la cookie y SOLO funcionan en contexto de
 // request HTTP (no en un circuito interactivo). Por eso el login es un POST a
 // este endpoint, no un @onclick de Blazor.
-app.MapPost("/auth/login", async (HttpContext http, AuthService auth, AbmService abm) =>
+app.MapPost("/auth/login", async (HttpContext http, AuthService auth, AbmService abm, AccesoRedService red) =>
 {
     var form = await http.Request.ReadFormAsync();
     var usuario = form["usuario"].ToString();
@@ -126,6 +173,16 @@ app.MapPost("/auth/login", async (HttpContext http, AuthService auth, AbmService
         return Results.Redirect($"/login?error={Uri.EscapeDataString(res.Error ?? "Error de acceso")}");
     }
 
+    // Control de acceso por origen de red (LAN vs Internet). Dormido si RedInterna:Activo=false.
+    // El permiso de acceso remoto es la letra 'I' del string `acceso` (reemplazó a Scheduler).
+    // Credenciales OK pero IP externa y usuario SIN la letra 'I' → se rechaza y se registra
+    // (fail-closed: IP indeterminable se trata según la política de RedInterna).
+    if (!red.PermitirIngreso(ip, PermisosCatalogo.Tiene(res.Acceso, 'I')))
+    {
+        await abm.RegistrarLoginFallidoAsync(usuario, ip, hostname, "Acceso por Internet no autorizado");
+        return Results.Redirect($"/login?error={Uri.EscapeDataString("Tu usuario no está habilitado para ingresar desde fuera de la red de la empresa.")}");
+    }
+
     // Registrar el ingreso ANTES de crear la cookie: así obtenemos el session_id (GUID)
     // y lo guardamos como claim en la cookie, para poder cruzar el logout con su login.
     var sessionId = await abm.RegistrarLoginAsync(res.Usuario, ip, hostname);
@@ -134,7 +191,9 @@ app.MapPost("/auth/login", async (HttpContext http, AuthService auth, AbmService
     await http.SignInAsync(NorturIdentityFactory.AuthScheme, principal,
         new Microsoft.AspNetCore.Authentication.AuthenticationProperties
         {
-            IsPersistent = true,
+            // IsPersistent = false → cookie de sesión: muere cuando se cierra el navegador
+            // (al reabrir, login de nuevo). El ticket igual vence a las 8 hs.
+            IsPersistent = false,
             ExpiresUtc = DateTimeOffset.UtcNow.AddHours(8)
         });
 
@@ -184,6 +243,27 @@ app.MapGet("/adjunto/{idViaje:int}", async (
         enableRangeProcessing: true);
 });
 
+// ── Logo de la empresa (Sistema → Parámetros → Empresa) ────────────────────
+// Sirve la imagen de parametro.logo mapeada a la carpeta accesible por el servidor, para
+// poder mostrar la vista previa que el FoxPro tiene en el form. Requiere sesión iniciada.
+// Si no está configurado o no se encuentra, devuelve 404 con el motivo en texto plano
+// (la pantalla muestra un cartel en su lugar, no se rompe).
+app.MapGet("/logo-empresa", async (
+    HttpContext http, ReportService reports, LogoEmpresaService logos) =>
+{
+    if (http.User?.Identity?.IsAuthenticated != true)
+        return Results.Unauthorized();
+
+    var p = await reports.GetParametrosEmpresaAsync();
+    var res = logos.Resolver(p.Logo);
+    if (!res.Ok)
+        return Results.Text(res.Error ?? "No se pudo abrir el logo.", "text/plain; charset=utf-8",
+            statusCode: StatusCodes.Status404NotFound);
+
+    var stream = new FileStream(res.RutaFisica!, FileMode.Open, FileAccess.Read, FileShare.Read);
+    return Results.File(stream, AdjuntoService.ContentType(res.NombreArchivo!));
+});
+
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
@@ -192,14 +272,16 @@ app.Run();
 
 // ── Helpers de registro de sesión (usados por /auth/login) ──────────────────
 
-// IP del cliente. Respeta X-Forwarded-For si la app corre detrás de un proxy/IIS
-// (toma la primera IP de la cadena); si no, la IP remota de la conexión.
+// IP real del cliente. NO se lee X-Forwarded-For a mano (sería falsificable): el middleware
+// UseForwardedHeaders ya reescribió RemoteIpAddress con la IP del cliente cuando la petición
+// vino de un proxy CONOCIDO. Se normaliza IPv4-mapped-IPv6 (::ffff:192.168.0.8 → 192.168.0.8)
+// para que el log y el control de red muestren/comparen la IPv4 tal cual.
 static string? ObtenerIpCliente(HttpContext http)
 {
-    var fwd = http.Request.Headers["X-Forwarded-For"].ToString();
-    if (!string.IsNullOrWhiteSpace(fwd))
-        return fwd.Split(',')[0].Trim();
-    return http.Connection.RemoteIpAddress?.ToString();
+    var ip = http.Connection.RemoteIpAddress;
+    if (ip is null) return null;
+    if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
+    return ip.ToString();
 }
 
 // Nombre de la máquina por DNS inverso (best-effort). En web NO llega del navegador

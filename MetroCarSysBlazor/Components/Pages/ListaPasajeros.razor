@@ -107,7 +107,7 @@ else
 
     private void OnRowClick(TableRowClickEventArgs<ViajeBuscadorRow> args)
     {
-        if (args.MouseEventArgs.Detail >= 2)
+        if (args.MouseEventArgs.Detail >= 2 && args.Item is not null)
             _ = VerPasajeros(args.Item.IdViaje);
     }
 

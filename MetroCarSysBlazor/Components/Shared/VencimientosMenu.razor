@@ -1,0 +1,69 @@
+@* ───────────────────────────────────────────────────────────────────────────────
+   Botón "Vencimientos" del AppBar (11/08/2026) — reemplaza la franja azul oscura
+   que vivía debajo de la barra (<TableroAlertas />, borrada en este cambio).
+
+   Por qué se movió: la franja ocupaba un renglón entero de alto en TODAS las
+   pantallas para mostrar 7 números que se miran una vez por día. Ahora esos 7
+   números viven en un modal y la pantalla recupera ese espacio — que en la
+   Planilla de Tráfico (viewport fijo) son filas de grilla de verdad.
+
+   Es el PRIMERO de los tres chips de la barra (Vencimientos · Ayuda · Usuario) y
+   comparte estructura con sus hermanos: mismo wrapper .nt-drop y misma caja
+   .appbar-* sobre el azul. La diferencia es que este NO despliega un panel: un
+   clic abre el modal directo, porque no hay submenú que elegir.
+
+   El botón va SIN número (decisión de Claudio, 11/08/2026): llegó a tener un badge
+   con el total de vencimientos y se sacó — el cartel solo, y los números se leen
+   adentro del modal.
+   ─────────────────────────────────────────────────────────────────────────────── *@
+
+@inject ReportService ReportSvc
+@inject IDialogService DialogService
+@inject NorturAuthStateProvider AuthState
+
+@if (_puede)
+{
+<div class="nt-drop">
+    <button type="button" class="appbar-vto" title="Vencimientos de la flota y de los choferes" @onclick="Abrir">
+        <MudIcon Icon="@Icons.Material.Outlined.NotificationsNone" Size="Size.Small" />
+        <span>Vencimientos</span>
+    </button>
+</div>
+}
+
+@code {
+    private bool _puede;
+    private TableroDto? _datos;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // 🔴 El permiso se chequea ACÁ dentro, y NO con un @if en el layout (11/08/2026).
+        // PermissionService.Tiene() lee un CACHE (NorturAuthStateProvider.Principal) que
+        // recién se llena cuando alguien llama GetAuthenticationStateAsync(); en el layout
+        // eso pasa en OnAfterRenderAsync, o sea DESPUÉS del primer render. Un @if en el
+        // AppBar evalúa false en ese primer pase y el chip no aparece hasta el render
+        // siguiente (el tick del reloj: hasta 30s más tarde). Pidiendo el estado acá, el
+        // componente se re-renderiza solo cuando vuelve el await y el chip sale siempre.
+        var state = await AuthState.GetAuthenticationStateAsync();
+        _puede = state.User.HasClaim(NorturClaims.Modulo, "V");   // 'V' = Vehículos y Choferes
+        if (!_puede) return;
+
+        // Mismo método que usaba la franja: cacheado 10 minutos en ReportService.
+        _datos = await ReportSvc.GetTableroAsync();
+    }
+
+    private Task Abrir()
+    {
+        if (_datos is null) return Task.CompletedTask;
+
+        var parametros = new DialogParameters<VencimientosDialog> { { x => x.Datos, _datos } };
+        return DialogService.ShowAsync<VencimientosDialog>("Vencimientos", parametros, new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+            CloseButton = false,
+            CloseOnEscapeKey = true,
+            BackdropClick = true
+        });
+    }
+}

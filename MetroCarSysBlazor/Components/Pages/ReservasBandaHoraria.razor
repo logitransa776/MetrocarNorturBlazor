@@ -1,4 +1,4 @@
-@page "/reservas-banda-horaria"
+﻿@page "/reservas-banda-horaria"
 @using ApexCharts
 @using MudColor = MudBlazor.Color
 @using MudSize = MudBlazor.Size
@@ -9,6 +9,7 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject IDialogService DialogService
+@inject ISnackbar Snackbar
 @rendermode InteractiveServer
 
 <PageTitle>BusLink</PageTitle>
@@ -19,7 +20,7 @@
         Reservas por banda horaria
     </MudText>
     <MudText Typo="Typo.body2" Style="color:#7A90AD; margin-top:2px;">
-        Metrocar Nortur · viajes de transportación por franja horaria de inicio
+        Nortur · ocupación por franja horaria de inicio — transporte de personal, turismo e internos
     </MudText>
 </div>
 
@@ -39,6 +40,19 @@
                        Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:160px;" />
     </div>
 
+    @* Tipo de servicio (30/07/2026): antes el informe traía SOLO Turismo (origen='T') y escondía
+       el 93% de la operación. Las 3 categorías vienen tildadas; destildando Empresa y Nortur se
+       recupera exactamente la vista histórica. *@
+    <MudSelect T="string" Label="Tipo de servicio" MultiSelection="true" @bind-SelectedValues="_categoriasSel"
+               SelectAll="true" SelectAllText="Todos" Dense="true"
+               Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:200px;"
+               MultiSelectionTextFunc="@(s => s.Count == ReportService.CategoriasServicio.Count ? "Todos" : string.Join(", ", s))">
+        @foreach (var c in ReportService.CategoriasServicio)
+        {
+            <MudSelectItem T="string" Value="@c">@EtiquetaCategoria(c)</MudSelectItem>
+        }
+    </MudSelect>
+
     <MudSelect T="string" Label="Tipo de vehículo" MultiSelection="true" @bind-SelectedValues="_vehiculosSel"
                SelectAll="true" SelectAllText="Todos" Dense="true"
                Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:200px;"
@@ -57,6 +71,14 @@
         {
             <MudSelectItem T="string" Value="@e">@e</MudSelectItem>
         }
+    </MudSelect>
+
+    @* Agrupación de las columnas: las 6 bandas del FoxPro o las 24 horas de inicio. Es un
+       recálculo en MEMORIA (el dataset ya trae banda y hora) → cambia al instante, sin Aplicar. *@
+    <MudSelect T="bool" Label="Agrupar por" Value="_porHora" ValueChanged="CambiarAgrupacion" Dense="true"
+               Margin="Margin.Dense" Variant="Variant.Outlined" Style="width:150px;">
+        <MudSelectItem T="bool" Value="@false">Bandas (6)</MudSelectItem>
+        <MudSelectItem T="bool" Value="@true">Horas (24)</MudSelectItem>
     </MudSelect>
 
     <div class="rfs-metrica">
@@ -91,21 +113,27 @@ else
         <KpiCard Label="@(_metrica == "Pax" ? "Total pax" : "Total viajes")" Value="@Fmt(_totalMetrica)"
                  Sub="@($"prom. {Fmt(_promedioDiario)} {UnidadMetrica}/día")" Color="@NorturColors.Azul" />
         <KpiCard Label="Días con actividad" Value="@_diasConActividad.ToString()" Sub="en el período" Color="@NorturColors.Verde" />
-        <KpiCard Label="Banda más cargada" Value="@_bandaMasCargada"
+        <KpiCard Label="@(_porHora ? "Hora pico" : "Banda más cargada")" Value="@_bandaMasCargada"
                  Sub="@($"{Fmt(_maxBanda)} {UnidadMetrica}")" Color="@NorturColors.Naranja" />
+        @* El valor va con el nombre CORTO ("Empresa"): el largo ("Empresa (Transp. de Personal)")
+           no entra en la tarjeta y tapa la etiqueta y el subtítulo. *@
+        @* Label corto ("Servicio líder"): con 5 KPIs en la fila, "Tipo de servicio líder" empujaba
+           el subtítulo hasta cortarlo ("3." en vez de "3.946 viajes"). *@
+        <KpiCard Label="Servicio líder" Value="@_categoriaLider"
+                 Sub="@($"{Fmt(_maxCategoria)} {UnidadMetrica}")" Color="@NorturColors.Violeta" />
         <KpiCard Label="Vehículo líder" Value="@_vehiculoLider"
                  Sub="@($"{Fmt(_maxVehiculo)} {UnidadMetrica}")" Color="@NorturColors.Rojo" />
     </div>
 
     <div @key="_chartsKey">
-        @* ── Gráfico barras apiladas por fecha × banda ── *@
+        @* ── Gráfico barras apiladas por fecha × banda (u hora) ── *@
         <MudPaper Class="pa-4 mb-3" Elevation="1" Style="border-radius:14px;">
-            @CabeceraFoco($"{(_metrica == "Pax" ? "Pax" : "Viajes")} por día y banda horaria")
-            <ApexChart TItem="ChartItem" Options="_optsBar" Height="240" @ref="_barChart"
+            @CabeceraFoco($"{(_metrica == "Pax" ? "Pax" : "Viajes")} por día y {TituloDimension}")
+            <ApexChart TItem="ChartItem" Options="_optsBar" Height="@(_porHora ? 300 : 240)" @ref="_barChart"
                        OnDataPointSelection="OnBarSelection" OnLegendClicked="OnBarLegendClicked">
-                @foreach (var banda in _bandasPresentes)
+                @foreach (var col in _colsPresentes)
                 {
-                    var b = banda;
+                    var b = col;
                     <ApexPointSeries TItem="ChartItem"
                                      Items="_chartData.Where(x => x.Banda == b).ToList()"
                                      Name="@b"
@@ -116,16 +144,17 @@ else
             </ApexChart>
         </MudPaper>
 
-        @* ── Donuts: por banda + por vehículo ── *@
+        @* ── Distribución: por banda/hora + por tipo de servicio + por vehículo ──
+           Tres dimensiones de cross-filter combinables con AND (patrón blazor-nortur). *@
         <MudGrid Spacing="3" Class="mb-3" Style="align-items:stretch;">
-            <MudItem xs="12" md="6" Style="display:flex; flex-direction:column;">
+            <MudItem xs="12" md="5" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
-                    @CabeceraFoco("Distribución por banda horaria")
+                    @CabeceraFoco($"Distribución por {TituloDimension}")
                     @* @key propio que cambia con cada foco: fuerza el REMONTE de este chart de barras
                        al enfocar. Es necesario porque el update en el lugar (UpdateOptions+UpdateSeries)
                        reposiciona MAL los datalabels de barra (quedan con y del render anterior, fuera
                        de la caja). El remonte los redibuja bien. Solo remonta este panel, no los otros. *@
-                    <ApexChart @key="_bandaChartKey" TItem="DonutItem" Options="_optsPieBanda" Height="320" @ref="_pieBandaChart"
+                    <ApexChart @key="_bandaChartKey" TItem="DonutItem" Options="_optsPieBanda" Height="@_altoBarrasCol" @ref="_pieBandaChart"
                                OnDataPointSelection="OnPieBandaSelection" OnLegendClicked="OnPieBandaLegendClicked">
                         <ApexPointSeries TItem="DonutItem"
                                          Items="_donutBanda"
@@ -137,12 +166,28 @@ else
                     </ApexChart>
                 </MudPaper>
             </MudItem>
-            <MudItem xs="12" md="6" Style="display:flex; flex-direction:column;">
+            <MudItem xs="12" md="3" Style="display:flex; flex-direction:column;">
+                <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
+                    @CabeceraFoco("Tipo de servicio")
+                    @* La dimensión que pidió el frente final: cuánto pesa Transporte de Personal
+                       (Empresa) frente a Turismo. Mismo patrón que el pie de vehículo. *@
+                    <ApexChart @key="_catChartKey" TItem="DonutItem" Options="_optsPieCat" Height="@_altoBarrasCol" @ref="_pieCatChart"
+                               OnDataPointSelection="OnPieCatSelection" OnLegendClicked="OnPieCatLegendClicked">
+                        <ApexPointSeries TItem="DonutItem"
+                                         Items="_donutCategoria"
+                                         Name="@UnidadMetrica"
+                                         SeriesType="SeriesType.Pie"
+                                         XValue="@(x => x.Label)"
+                                         YValue="@(x => x.Valor)" />
+                    </ApexChart>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="4" Style="display:flex; flex-direction:column;">
                 <MudPaper Class="pa-4" Elevation="1" Style="border-radius:14px; flex:1;">
                     @CabeceraFoco("Distribución por tipo de vehículo")
                     @* @key propio: se remonta en cada foco para redibujar bien la torta + su leyenda
                        (el update en el lugar dejaba la leyenda con valores/posiciones del render previo). *@
-                    <ApexChart @key="_vehChartKey" TItem="DonutItem" Options="_optsPieVeh" Height="320" @ref="_pieVehChart"
+                    <ApexChart @key="_vehChartKey" TItem="DonutItem" Options="_optsPieVeh" Height="@_altoBarrasCol" @ref="_pieVehChart"
                                OnDataPointSelection="OnPieVehSelection" OnLegendClicked="OnPieVehLegendClicked">
                         <ApexPointSeries TItem="DonutItem"
                                          Items="_donutVehiculo"
@@ -161,10 +206,10 @@ else
         <div class="d-flex justify-space-between align-center flex-wrap mb-3" style="gap:8px;">
             <div>
                 <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">
-                    Detalle: @(_metrica == "Pax" ? "pax" : "viajes") por fecha y banda horaria
+                    Detalle: @(_metrica == "Pax" ? "pax" : "viajes") por fecha y @TituloDimension
                 </MudText>
                 <MudText Typo="Typo.caption" Style="color:#8FA3BC;">
-                    Click en una celda para ver los viajes uno por uno · click en el encabezado de una banda para enfocar el tablero
+                    Click en una celda para ver los viajes uno por uno · click en el encabezado de una @(_porHora ? "hora" : "banda") para enfocar el tablero
                 </MudText>
             </div>
             <MudButton Variant="Variant.Filled" Color="MudColor.Success"
@@ -183,11 +228,11 @@ else
                 <thead>
                     <tr>
                         <th class="rfs-col-fecha">Fecha</th>
-                        @foreach (var b in _bandas)
+                        @foreach (var b in _cols)
                         {
                             var banda = b;
                             <th class="rfs-th-serv rfs-click @(EnFocoBanda(banda) ? "rfs-th-foco" : "")"
-                                title="Clic para enfocar el tablero en la banda @banda"
+                                title="@($"Clic para enfocar el tablero en {(_porHora ? "la hora" : "la banda")} {banda}")"
                                 @onclick="() => ToggleFocoBanda(banda)">
                                 <span class="rbh-legend-dot" style="background:@ColorBanda(banda);"></span>@banda
                             </th>
@@ -202,14 +247,14 @@ else
                     <Virtualize Items="_pivFechas" Context="f" ItemSize="30" OverscanCount="12" SpacerElement="tr">
                         <tr>
                             <td class="rfs-col-fecha @(EsFinde(f) ? "rfs-finde" : "")">@FmtFecha(f)</td>
-                            @foreach (var b in _bandas)
+                            @foreach (var b in _cols)
                             {
                                 var banda = b;
                                 var v = PivVal(f, banda);
                                 var atenua = _bandaFocus is not null && !EnFocoBanda(banda) ? "rfs-atenua" : "";
                                 if (v > 0)
                                 {
-                                    <td class="rfs-num rfs-click @atenua" title="Ver viajes de la banda @banda el @f.ToString("dd/MM")"
+                                    <td class="rfs-num rfs-click @atenua" title="@($"Ver viajes de {banda} el {f:dd/MM}")"
                                         @onclick="() => AbrirDetalleCelda(f, banda)">@Fmt(v)</td>
                                 }
                                 else
@@ -225,11 +270,11 @@ else
                 <tfoot>
                     <tr>
                         <td class="rfs-col-fecha rfs-tot">TOTAL</td>
-                        @foreach (var b in _bandas)
+                        @foreach (var b in _cols)
                         {
                             var banda = b;
                             <td class="rfs-num rfs-tot rfs-click @(EnFocoBanda(banda) ? "rfs-col-foco" : "")"
-                                title="Clic para enfocar el tablero en la banda @banda"
+                                title="@($"Clic para enfocar el tablero en {(_porHora ? "la hora" : "la banda")} {banda}")"
                                 @onclick="() => ToggleFocoBanda(banda)">@Fmt(PivTotCol(banda))</td>
                         }
                         <td class="rfs-num rfs-tot rfs-grantot">@Fmt(_granTotal)</td>
@@ -251,16 +296,29 @@ else
     // Default: todos los estados MENOS cancelado (fiel al FoxPro, que hardcodea <> CANCELADO).
     private IReadOnlyCollection<string> _estadosSel =
         new HashSet<string>(ReportService.EstadosViaje.Where(e => e != "CANCELADO"));
+    // Tipo de servicio: las 3 categorías tildadas (30/07/2026). El informe histórico era solo
+    // Turismo; ahora el default es la operación COMPLETA y el recorte lo elige el usuario.
+    private IReadOnlyCollection<string> _categoriasSel =
+        new HashSet<string>(ReportService.CategoriasServicio);
     private string _metrica = "Reservas";   // "Reservas" (viajes) | "Pax"
     private bool _todosVehiculos => _vehiculos.Count > 0 && _vehiculosSel.Count == _vehiculos.Count;
+    private bool _todasCategorias => _categoriasSel.Count == ReportService.CategoriasServicio.Count;
 
-    // ── Foco / cross-filter (estilo Power BI) — DOS dimensiones combinables ──
+    // Agrupación de las columnas: false = las 6 bandas del FoxPro, true = las 24 horas de inicio.
+    // Cambia en memoria (el dataset trae banda y hora juntas), sin volver a SQL.
+    private bool _porHora;
+    // Se marca en cuanto el usuario elige la agrupación a mano: a partir de ahí su elección manda
+    // y el auto-posicionamiento por rango de un solo día ya no la pisa.
+    private bool _agrupacionManual;
+
+    // ── Foco / cross-filter (estilo Power BI) — TRES dimensiones combinables ──
     // Cada dimensión enfocada RESALTA en sus propios visuales (las demás categorías se atenúan,
-    // para poder cambiar de foco) y FILTRA los visuales de la otra dimensión, los KPIs y la
-    // tabla. Los dos focos se combinan (banda AND vehículo), como en Power BI. Todo en memoria,
-    // sin re-query. null = sin foco.
-    private string? _bandaFocus;
+    // para poder cambiar de foco) y FILTRA los visuales de las otras dimensiones, los KPIs y la
+    // tabla. Los tres focos se combinan con AND (banda/hora × tipo de servicio × vehículo), como
+    // en Power BI. Todo en memoria, sin re-query. null = sin foco.
+    private string? _bandaFocus;        // banda horaria U hora, según _porHora
     private string? _vehiculoFocus;
+    private string? _categoriaFocus;
     private bool EnFocoBanda(string banda) => _bandaFocus is null || _bandaFocus == banda;
 
     // ── Filtros APLICADOS (snapshot al tocar "Aplicar"): el drill-down y el Excel
@@ -268,22 +326,34 @@ else
     private DateOnly _fDesdeAp, _fHastaAp;
     private List<string> _vehAp = new();
     private List<string> _estAp = new();
+    private List<string> _catAp = new();
 
     private List<VehiculoTipoDto> _vehiculos = new();
     private List<BandaHorariaRow> _filas = new();
     private List<BandaHorariaDetalleRow>? _detalle;   // lazy: se trae al primer drill-down/Excel
     private bool _cargando;
     private bool _cargandoDet;
-    private bool _yaConsultado;
     private Guid _chartsKey = Guid.NewGuid();
     // Key propio del chart de barras "Distribución por banda": cambia con cada foco para forzar su
     // remonte (el update en el lugar reposiciona mal sus datalabels — ver nota en el markup).
     private Guid _bandaChartKey = Guid.NewGuid();
     // Ídem para el pie "Distribución por tipo de vehículo" (mismo bug de posición de datalabels).
     private Guid _vehChartKey = Guid.NewGuid();
+    // Ídem para el pie "Tipo de servicio".
+    private Guid _catChartKey = Guid.NewGuid();
 
-    // Las 6 bandas en orden fijo (desde el service).
+    // Las 6 bandas y las 24 horas en orden fijo (desde el service). `_cols` es la dimensión de
+    // columna vigente: una u otra según _porHora. Todo lo que dice "banda" en el resto del
+    // archivo opera sobre `_cols` (el nombre quedó por historia; la semántica es "columna").
     private static readonly IReadOnlyList<string> _bandas = ReportService.BandasHorarias;
+    private static readonly IReadOnlyList<string> _horas = ReportService.HorasDelDia;
+    private IReadOnlyList<string> _cols => _porHora ? _horas : _bandas;
+    private string TituloDimension => _porHora ? "hora de inicio" : "banda horaria";
+    // La etiqueta de columna de una fila agregada / de detalle, según la agrupación vigente.
+    private string ColDe(BandaHorariaRow f) => _porHora ? $"{f.Hora:00}:00" : f.Banda;
+    private string ColDe(BandaHorariaDetalleRow d) => _porHora ? $"{d.Hora:00}:00" : d.Banda;
+    // Alto de los paneles de distribución: con 24 horas las barras necesitan mucho más aire.
+    private int _altoBarrasCol => _porHora ? 620 : 320;
 
     // KPIs
     private int _totalMetrica;
@@ -293,27 +363,50 @@ else
     private int _maxBanda;
     private string _vehiculoLider = "—";
     private int _maxVehiculo;
+    private string _categoriaLider = "—";
+    private int _maxCategoria;
     private string PeriodoTxt => $"{_fDesdeAp:dd/MM/yyyy} – {_fHastaAp:dd/MM/yyyy}";
     private string UnidadMetrica => _metrica == "Pax" ? "pax" : "viajes";
+
+    // Nombre "de negocio" de cada categoría: en la UI se lee "Empresa (Transp. de Personal)"
+    // porque así lo nombra el frente final; el valor interno sigue siendo "Empresa".
+    private static string EtiquetaCategoria(string cat) => cat switch
+    {
+        "Empresa" => "Empresa (Transp. de Personal)",
+        "Nortur" => "Nortur (servicios propios)",
+        _ => cat
+    };
 
     // ── Gráficos ApexCharts ──
     private record ChartItem(string Fecha, string Banda, decimal Valor);
     private record DonutItem(string Label, decimal Valor);
     private List<ChartItem> _chartData = new();
-    private List<string> _bandasPresentes = new();
+    private List<string> _colsPresentes = new();
     private List<DonutItem> _donutBanda = new();
     private List<DonutItem> _donutVehiculo = new();
+    private List<DonutItem> _donutCategoria = new();
 
     // Referencias a los charts para actualizarlos EN SU LUGAR al cambiar el foco (sin remontar
     // → sin parpadeo). El @key/_chartsKey se reserva para cuando cambian los datos (Aplicar/métrica).
     private ApexChart<ChartItem>? _barChart;
     private ApexChart<DonutItem>? _pieBandaChart;
     private ApexChart<DonutItem>? _pieVehChart;
+    private ApexChart<DonutItem>? _pieCatChart;
 
     // Paleta por banda (una por franja, orden fijo). Frío → cálido siguiendo la hora del día.
     private static readonly List<string> _paletteBanda = new()
     {
         "#0EA5E9", "#7C3AED", "#16A34A", "#2058D0", "#F99410", "#DC2626"
+    };
+    // Paleta de las 24 horas: rampa CÍCLICA que sigue el reloj (noche azul → mañana verde →
+    // mediodía dorado → tarde naranja → noche roja/violeta). Acá el color es ORDINAL, no
+    // categórico: no se busca máxima separación entre vecinos sino que se "lea" la hora del día.
+    private static readonly List<string> _paletteHora = new()
+    {
+        "#1E3A8A", "#24479F", "#2B55B5", "#3B82F6", "#0EA5E9", "#06B6D4",
+        "#14B8A6", "#10B981", "#16A34A", "#4D9F1F", "#84CC16", "#A3A712",
+        "#CA9A04", "#EAB308", "#F59E0B", "#F99410", "#F97316", "#EA580C",
+        "#EF4444", "#DC2626", "#B91C1C", "#9D174D", "#7E22CE", "#4C1D95"
     };
     // Paleta categórica para vehículos (validada dataviz; gris neutro al final para "Otros").
     private static readonly List<string> _paletteVeh = new()
@@ -321,11 +414,24 @@ else
         "#2058D0", "#F99410", "#16A34A", "#DC2626",
         "#0EA5E9", "#7C3AED", "#B45309", "#94A3B8"
     };
-
-    private static string ColorBanda(string banda)
+    // Colores FIJOS por categoría de servicio (color por entidad: Empresa siempre azul, Turismo
+    // siempre naranja, Nortur siempre verde — en todos los gráficos y en el chip de foco).
+    // Nortur = ex "Interno", renombrado 19/08/2026 (pedido del frente final); el verde es el
+    // color elegido para esta categoría en toda la app, igual en los 3 informes que la usan.
+    private static readonly Dictionary<string, string> _colorCategoria = new()
     {
-        var i = _bandas.ToList().IndexOf(banda);
-        return i >= 0 && i < _paletteBanda.Count ? _paletteBanda[i] : "#94A3B8";
+        ["Empresa"] = "#2058D0",
+        ["Turismo"] = "#F99410",
+        ["Nortur"] = "#16A34A",
+    };
+    private static string ColorCat(string cat) => _colorCategoria.TryGetValue(cat, out var c) ? c : "#94A3B8";
+
+    // Color de una columna (banda u hora) por su posición en la dimensión vigente.
+    private string ColorBanda(string col)
+    {
+        var paleta = _porHora ? _paletteHora : _paletteBanda;
+        var i = _cols.ToList().IndexOf(col);
+        return i >= 0 && i < paleta.Count ? paleta[i] : "#94A3B8";
     }
 
     // Mapa vehículo → color por ranking del dataset COMPLETO (color y orden estables: no
@@ -339,6 +445,8 @@ else
         (_bandaFocus is null || banda == _bandaFocus) ? ColorBanda(banda) : "#D9E1EC";
     private string ColorFocoVeh(string veh) =>
         (_vehiculoFocus is null || veh == _vehiculoFocus) ? ColorVeh(veh) : "#D9E1EC";
+    private string ColorFocoCat(string cat) =>
+        (_categoriaFocus is null || cat == _categoriaFocus) ? ColorCat(cat) : "#D9E1EC";
 
     // Cabecera de un panel de gráfico: título a la izquierda + chips de foco (o hint) a la
     // derecha. Duplicada en los tres paneles (control repetido, como en Reservas por fecha y
@@ -347,16 +455,26 @@ else
     {
         <div class="rfs-bar-head mb-3">
             <MudText Typo="Typo.subtitle2" Style="font-weight:700; color:#112F5B;">@titulo</MudText>
-            @if (_bandaFocus is not null || _vehiculoFocus is not null)
+            @if (_bandaFocus is not null || _vehiculoFocus is not null || _categoriaFocus is not null)
             {
                 <div style="display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap;">
                     @if (_bandaFocus is not null)
                     {
                         <div class="rfs-focus">
-                            <span class="rfs-focus__lbl">Banda:</span>
+                            <span class="rfs-focus__lbl">@(_porHora ? "Hora:" : "Banda:")</span>
                             <span class="rfs-focus__val" style="@($"background:{ColorBanda(_bandaFocus)};")">@_bandaFocus</span>
                             <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
-                                           OnClick="LimpiarFocoBanda" Title="Quitar filtro de banda"
+                                           OnClick="LimpiarFocoBanda" title="Quitar filtro de banda"
+                                           Style="color:#64748B; padding:2px;" />
+                        </div>
+                    }
+                    @if (_categoriaFocus is not null)
+                    {
+                        <div class="rfs-focus">
+                            <span class="rfs-focus__lbl">Servicio:</span>
+                            <span class="rfs-focus__val" style="@($"background:{ColorCat(_categoriaFocus)};")">@_categoriaFocus</span>
+                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
+                                           OnClick="LimpiarFocoCategoria" title="Quitar filtro de tipo de servicio"
                                            Style="color:#64748B; padding:2px;" />
                         </div>
                     }
@@ -366,7 +484,7 @@ else
                             <span class="rfs-focus__lbl">Vehículo:</span>
                             <span class="rfs-focus__val" style="@($"background:{ColorVeh(_vehiculoFocus)};")">@_vehiculoFocus</span>
                             <MudIconButton Icon="@Icons.Material.Filled.Close" Size="MudSize.Small"
-                                           OnClick="LimpiarFocoVehiculo" Title="Quitar filtro de vehículo"
+                                           OnClick="LimpiarFocoVehiculo" title="Quitar filtro de vehículo"
                                            Style="color:#64748B; padding:2px;" />
                         </div>
                     }
@@ -374,7 +492,9 @@ else
             }
             else
             {
-                <span class="rfs-focus-hint">💡 Clic en una banda o un tipo de vehículo para enfocar el tablero</span>
+                @* Hint corto a propósito: el panel de "Tipo de servicio" es angosto (md=3) y un
+                   texto largo se corta contra el borde. *@
+                <span class="rfs-focus-hint">💡 Clic en una categoría para enfocar el tablero</span>
             }
         </div>
     };
@@ -464,6 +584,26 @@ else
         },
     };
 
+    // "Tipo de servicio": misma receta que el pie de vehículo (torta limpia + cantidad y % en la
+    // leyenda). Es el visual de la dimensión nueva pedida por el frente final.
+    private readonly ApexChartOptions<DonutItem> _optsPieCat = new()
+    {
+        Chart = new() { Toolbar = new() { Show = false }, Background = "transparent", Animations = new() { Enabled = false } },
+        Legend = new()
+        {
+            Show = true, Position = LegendPosition.Bottom, FontSize = "12px",
+            OnItemClick = new() { ToggleDataSeries = false },
+            Formatter = "function(name, opts){ var v = opts.w.globals.series[opts.seriesIndex]; var p = __TOTALCAT__ > 0 ? Math.round(v * 100 / __TOTALCAT__) : 0; return name + ': ' + v.toLocaleString('es-AR') + ' (' + p + '%)'; }",
+        },
+        DataLabels = new() { Enabled = false },
+        Tooltip = new() { Y = new() { Formatter = "function(val){ return val.toLocaleString('es-AR'); }" } },
+        States = new()
+        {
+            Active = new() { AllowMultipleDataPointsSelection = false, Filter = new() { Type = StatesFilterType.none } },
+            Hover = new() { Filter = new() { Type = StatesFilterType.none } },
+        },
+    };
+
     // ── Pivote ──
     private List<DateOnly> _pivFechas = new();
     private Dictionary<(DateOnly, string), int> _pivMap = new();
@@ -492,9 +632,29 @@ else
         await Cargar();
     }
 
+    // El período Desde–Hasta no puede superar este ancho: rangos más largos pegan contra
+    // millones de filas de viaje y afectan la performance del servidor (pedido del usuario, 30/07/2026).
+    private const int RangoMaximoDias = 60;
+
     private async Task Cargar()
     {
         if (_desde is null || _hasta is null) return;
+
+        var dias = (_hasta.Value.Date - _desde.Value.Date).TotalDays;
+        if (dias > RangoMaximoDias)
+        {
+            // Cartel "Contorno" — estándar del proyecto para validaciones bloqueantes (ver app.css § nt-toast-contorno).
+            Snackbar.Add(
+                $"El rango Desde–Hasta no puede superar los {RangoMaximoDias} días (elegiste {(int)dias}). Achicá el período e intentá de nuevo.",
+                Severity.Error,
+                config =>
+                {
+                    config.SnackbarVariant = Variant.Outlined;
+                    config.SnackbarTypeClass = "nt-toast-contorno";
+                });
+            return;
+        }
+
         _cargando = true;
         StateHasChanged();
 
@@ -503,13 +663,19 @@ else
         _fHastaAp = DateOnly.FromDateTime(_hasta.Value);
         _vehAp = _todosVehiculos ? new List<string>() : _vehiculosSel.ToList();
         _estAp = _estadosSel.Count == ReportService.EstadosViaje.Count ? new List<string>() : _estadosSel.ToList();
+        _catAp = _todasCategorias ? new List<string>() : _categoriasSel.ToList();
         _detalle = null;
         // Un nuevo conjunto de filtros descarta los focos anteriores (el dataset puede no contenerlos).
         _bandaFocus = null;
         _vehiculoFocus = null;
+        _categoriaFocus = null;
 
-        _filas = await Reports.GetReservasPorBandaHorariaAsync(_fDesdeAp, _fHastaAp, _vehAp, _estAp);
-        _yaConsultado = true;
+        // Default inteligente: si se pide UN solo día, la vista útil es por hora ("capacidad
+        // operativa de un día determinado", pedido del frente final). Se posiciona el selector,
+        // que queda visible y cambiable — salvo que el usuario ya lo haya elegido a mano.
+        if (!_agrupacionManual) _porHora = _fDesdeAp == _fHastaAp;
+
+        _filas = await Reports.GetReservasPorBandaHorariaAsync(_fDesdeAp, _fHastaAp, _vehAp, _estAp, _catAp);
         Recalcular();
         _chartsKey = Guid.NewGuid();   // datos nuevos → remontar los charts (el key fuerza el remount)
 
@@ -528,25 +694,47 @@ else
         }
     }
 
+    // Bandas ↔ horas: recálculo en memoria (el dataset trae las dos), sin nueva query. Cambia la
+    // cantidad de columnas/series → hay que remontar los charts, no actualizarlos en el lugar.
+    // El foco de columna se descarta: "08:30-14:00" no existe como hora ni al revés.
+    private void CambiarAgrupacion(bool porHora)
+    {
+        _porHora = porHora;
+        _agrupacionManual = true;
+        _bandaFocus = null;
+        if (_filas.Count > 0)
+        {
+            Recalcular();
+            _chartsKey = Guid.NewGuid();
+            _bandaChartKey = Guid.NewGuid();
+            _catChartKey = Guid.NewGuid();
+            _vehChartKey = Guid.NewGuid();
+        }
+    }
+
     private void Recalcular()
     {
         Func<BandaHorariaRow, int> val = _metrica == "Pax" ? f => f.Pax : f => f.Reservas;
 
-        // Subconjuntos según el foco (modelo Power BI: donde clickeás resalta, en el resto
-        // filtra): los visuales de BANDA usan los datos filtrados por vehículo (el foco de banda
-        // en ellos se expresa como resaltado por color), el visual de VEHÍCULO usa los filtrados
-        // por banda, y los KPIs / totales de fila usan AMBOS focos combinados.
-        var datosVeh = _vehiculoFocus is null ? _filas : _filas.Where(f => f.TipoVehiculo == _vehiculoFocus).ToList();
-        var datosBanda = _bandaFocus is null ? _filas : _filas.Where(f => f.Banda == _bandaFocus).ToList();
-        var datos = _bandaFocus is null ? datosVeh : datosVeh.Where(f => f.Banda == _bandaFocus).ToList();
+        // Predicados de los TRES focos. Modelo Power BI: cada visual se filtra por los focos de
+        // las OTRAS dimensiones (el foco de su propia dimensión lo expresa resaltando por color,
+        // así se puede cambiar de foco sin perder de vista el resto de las categorías).
+        bool PasaCol(BandaHorariaRow f) => _bandaFocus is null || ColDe(f) == _bandaFocus;
+        bool PasaVehF(BandaHorariaRow f) => _vehiculoFocus is null || f.TipoVehiculo == _vehiculoFocus;
+        bool PasaCatF(BandaHorariaRow f) => _categoriaFocus is null || f.Categoria == _categoriaFocus;
 
-        // ── KPIs: sobre el dataset con ambos focos ──
+        var datosCol = _filas.Where(f => PasaVehF(f) && PasaCatF(f)).ToList();   // visuales de banda/hora
+        var datosVeh = _filas.Where(f => PasaCol(f) && PasaCatF(f)).ToList();    // visual de vehículo
+        var datosCat = _filas.Where(f => PasaCol(f) && PasaVehF(f)).ToList();    // visual de tipo de servicio
+        var datos = _filas.Where(f => PasaCol(f) && PasaVehF(f) && PasaCatF(f)).ToList();   // KPIs / totales
+
+        // ── KPIs: sobre el dataset con los tres focos ──
         _totalMetrica = datos.Sum(val);
         _diasConActividad = datos.Select(f => f.Fecha).Distinct().Count();
         _promedioDiario = _diasConActividad > 0 ? (int)Math.Round((double)_totalMetrica / _diasConActividad) : 0;
 
-        // Banda más cargada
-        var porBanda = datos.GroupBy(f => f.Banda)
+        // Banda (u hora) más cargada
+        var porBanda = datos.GroupBy(ColDe)
             .Select(g => (Banda: g.Key, Total: g.Sum(val)))
             .OrderByDescending(x => x.Total).ToList();
         _bandaMasCargada = porBanda.FirstOrDefault().Banda ?? "—";
@@ -559,31 +747,38 @@ else
         _vehiculoLider = porVeh.FirstOrDefault().Veh ?? "—";
         _maxVehiculo = porVeh.FirstOrDefault().Total;
 
-        // ── Pivote: celdas y totales de columna con foco de VEHÍCULO (las columnas de banda
-        //    quedan todas visibles — el foco de banda se expresa atenuando por CSS); las filas,
-        //    el total de fila y el gran total llevan AMBOS focos (como los KPIs) ──
+        // Tipo de servicio líder (Empresa / Turismo / Nortur)
+        var porCat = datos.GroupBy(f => f.Categoria)
+            .Select(g => (Cat: g.Key, Total: g.Sum(val)))
+            .OrderByDescending(x => x.Total).ToList();
+        _categoriaLider = porCat.FirstOrDefault().Cat ?? "—";
+        _maxCategoria = porCat.FirstOrDefault().Total;
+
+        // ── Pivote: celdas y totales de columna con los focos de las OTRAS dimensiones (las
+        //    columnas quedan todas visibles — el foco de columna se expresa atenuando por CSS);
+        //    las filas, el total de fila y el gran total llevan los TRES focos (como los KPIs) ──
         _pivFechas = datos.Select(f => f.Fecha).Distinct().OrderBy(d => d).ToList();
-        _pivMap = datosVeh
-            .GroupBy(f => (f.Fecha, f.Banda))
+        _pivMap = datosCol
+            .GroupBy(f => (f.Fecha, Col: ColDe(f)))
             .ToDictionary(g => g.Key, g => g.Sum(val));
         _pivTotFila = datos.GroupBy(f => f.Fecha).ToDictionary(g => g.Key, g => g.Sum(val));
-        _pivTotCol = datosVeh.GroupBy(f => f.Banda).ToDictionary(g => g.Key, g => g.Sum(val));
+        _pivTotCol = datosCol.GroupBy(ColDe).ToDictionary(g => g.Key, g => g.Sum(val));
         _granTotal = _totalMetrica;
 
         // ── Barras apiladas: las series son las bandas del dataset COMPLETO (cantidad estable
         //    para poder actualizar en el lugar, sin remontar) con valores del foco de vehículo.
         //    El eje de fechas NO se recorta con el foco de banda (highlight, no filter). ──
-        _bandasPresentes = _bandas.Where(b => _filas.Any(f => f.Banda == b)).ToList();
-        var chartFechas = datosVeh.Select(f => f.Fecha).Distinct().OrderBy(d => d).ToList();
+        _colsPresentes = _cols.Where(b => _filas.Any(f => ColDe(f) == b)).ToList();
+        var chartFechas = datosCol.Select(f => f.Fecha).Distinct().OrderBy(d => d).ToList();
         _chartData = chartFechas
-            .SelectMany(fecha => _bandasPresentes.Select(banda =>
+            .SelectMany(fecha => _colsPresentes.Select(banda =>
                 new ChartItem(fecha.ToString("dd/MM"), banda, PivVal(fecha, banda))))
             .ToList();
 
-        // ── Distribución por banda (barras) + por vehículo (donut): categorías SIEMPRE completas
-        //    y en orden estable (con 0 si el foco de la otra dimensión las vacía) — así el update
-        //    en el lugar no reordena ──
-        _donutBanda = _bandasPresentes
+        // ── Distribución por banda/hora (barras) + por vehículo y tipo de servicio (tortas):
+        //    categorías SIEMPRE completas y en orden estable (con 0 si el foco de otra dimensión
+        //    las vacía) — así el update en el lugar no reordena ──
+        _donutBanda = _colsPresentes
             .Select(b => new DonutItem(b, PivTotCol(b)))
             .ToList();
 
@@ -598,17 +793,30 @@ else
         if (_optsPieBanda.Xaxis is not null) { _optsPieBanda.Xaxis.Min = 0; _optsPieBanda.Xaxis.Max = maxBanda > 0 ? maxBanda * 1.30 : 1; }
 
         // Vehículos: ranking por volumen del dataset COMPLETO (color y orden estables) con
-        // valores del foco de banda.
+        // valores de los focos de las otras dos dimensiones.
         var rankingVeh = _filas.GroupBy(f => f.TipoVehiculo)
             .Select(g => (Veh: g.Key, Total: g.Sum(val)))
             .OrderByDescending(x => x.Total).ThenBy(x => x.Veh).ToList();
         _colorPorVehiculo = rankingVeh
             .Select((x, i) => (x.Veh, i))
             .ToDictionary(t => t.Veh, t => t.i < _paletteVeh.Count ? _paletteVeh[t.i] : "#94A3B8");
-        var vehValores = datosBanda.GroupBy(f => f.TipoVehiculo).ToDictionary(g => g.Key, g => g.Sum(val));
+        var vehValores = datosVeh.GroupBy(f => f.TipoVehiculo).ToDictionary(g => g.Key, g => g.Sum(val));
         _donutVehiculo = rankingVeh
             .Select(x => new DonutItem(x.Veh, vehValores.TryGetValue(x.Veh, out var v) ? v : 0))
             .ToList();
+
+        // Tipo de servicio: SIEMPRE las categorías presentes en el dataset completo, en el orden
+        // fijo del catálogo (Empresa · Turismo · Nortur) — orden y color estables.
+        var catsPresentes = ReportService.CategoriasServicio
+            .Where(c => _filas.Any(f => f.Categoria == c)).ToList();
+        var catValores = datosCat.GroupBy(f => f.Categoria).ToDictionary(g => g.Key, g => g.Sum(val));
+        _donutCategoria = catsPresentes
+            .Select(c => new DonutItem(c, catValores.TryGetValue(c, out var v) ? v : 0))
+            .ToList();
+        var totalCat = _donutCategoria.Sum(d => (int)d.Valor);
+        if (_optsPieCat.Legend is not null)
+            _optsPieCat.Legend.Formatter =
+                $"function(name, opts){{ var v = opts.w.globals.series[opts.seriesIndex]; var p = {totalCat} > 0 ? Math.round(v * 100 / {totalCat}) : 0; return name + ': ' + v.toLocaleString('es-AR') + ' (' + p + '%)'; }}";
 
         // "Distribución por tipo de vehículo" es torta con la cantidad y el % en la LEYENDA: inyectar
         // el total en el Legend.Formatter (reemplaza __TOTALVEH__) para calcular el % de cada ítem.
@@ -618,9 +826,10 @@ else
                 $"function(name, opts){{ var v = opts.w.globals.series[opts.seriesIndex]; var p = {totalVeh} > 0 ? Math.round(v * 100 / {totalVeh}) : 0; return name + ': ' + v.toLocaleString('es-AR') + ' (' + p + '%)'; }}";
 
         // Colores de cada gráfico, atenuando lo no enfocado (efecto highlight de Power BI).
-        _optsBar.Colors = _bandasPresentes.Select(ColorFocoBanda).ToList();
+        _optsBar.Colors = _colsPresentes.Select(ColorFocoBanda).ToList();
         _optsPieBanda.Colors = _donutBanda.Select(d => ColorFocoBanda(d.Label)).ToList();
         _optsPieVeh.Colors = _donutVehiculo.Select(d => ColorFocoVeh(d.Label)).ToList();
+        _optsPieCat.Colors = _donutCategoria.Select(d => ColorFocoCat(d.Label)).ToList();
     }
 
     private int PivVal(DateOnly f, string b) => _pivMap.TryGetValue((f, b), out var v) ? v : 0;
@@ -631,25 +840,38 @@ else
 
     private async Task ToggleFocoBanda(string banda)
     {
-        // Toggle: clic en la misma banda enfocada la quita.
+        // Toggle: clic en la misma banda/hora enfocada la quita.
         _bandaFocus = _bandaFocus == banda ? null : banda;
-        Recalcular();                 // recalcula KPIs/tabla/valores/colores (en memoria, sin re-query)
-        _bandaChartKey = Guid.NewGuid(); // remonta el chart de barras de banda (sus datalabels se reposicionan bien)
-        _vehChartKey = Guid.NewGuid();   // ídem el pie de vehículo (sus valores cambian con el foco de banda)
-        await ActualizarGraficos();   // repinta los OTROS charts EN SU LUGAR (sin remontar → sin parpadeo)
+        await AplicarFoco();
     }
 
     private async Task ToggleFocoVehiculo(string veh)
     {
         _vehiculoFocus = _vehiculoFocus == veh ? null : veh;
-        Recalcular();
-        _bandaChartKey = Guid.NewGuid(); // el foco de vehículo también cambia los valores de banda → remonte
-        _vehChartKey = Guid.NewGuid();   // y el propio pie de vehículo (highlight + reposición de datalabels)
-        await ActualizarGraficos();
+        await AplicarFoco();
+    }
+
+    private async Task ToggleFocoCategoria(string cat)
+    {
+        _categoriaFocus = _categoriaFocus == cat ? null : cat;
+        await AplicarFoco();
+    }
+
+    // Un foco de cualquiera de las 3 dimensiones cambia los VALORES de los otros dos visuales →
+    // los tres paneles de distribución se remontan con su @key (el update en el lugar les rompe
+    // la posición de los datalabels / los valores de la leyenda).
+    private async Task AplicarFoco()
+    {
+        Recalcular();                 // KPIs/tabla/valores/colores, en memoria y sin re-query
+        _bandaChartKey = Guid.NewGuid();
+        _vehChartKey = Guid.NewGuid();
+        _catChartKey = Guid.NewGuid();
+        await ActualizarGraficos();   // repinta el apilado EN SU LUGAR (sin remontar → sin parpadeo)
     }
 
     private Task LimpiarFocoBanda() => ToggleFocoBanda(_bandaFocus ?? "");
     private Task LimpiarFocoVehiculo() => ToggleFocoVehiculo(_vehiculoFocus ?? "");
+    private Task LimpiarFocoCategoria() => ToggleFocoCategoria(_categoriaFocus ?? "");
 
     // A diferencia de Reservas por fecha y servicio (donde el foco solo cambiaba COLORES),
     // acá el foco de una dimensión también cambia los VALORES de los otros gráficos →
@@ -661,9 +883,9 @@ else
             await _barChart.UpdateOptionsAsync(true, true, false);
             await _barChart.UpdateSeriesAsync(true);
         }
-        // _pieBandaChart y _pieVehChart NO se actualizan acá: se remontan vía _bandaChartKey /
-        // _vehChartKey (el update en el lugar les rompía la posición de los datalabels). El remonte
-        // los redibuja completos y bien.
+        // Los tres charts de distribución NO se actualizan acá: se remontan vía _bandaChartKey /
+        // _vehChartKey / _catChartKey (el update en el lugar les rompía la posición de los
+        // datalabels y los valores de la leyenda). El remonte los redibuja completos y bien.
     }
 
     // ApexCharts entrega el punto clickeado en e.DataPoint; sus Items son los TItem agrupados
@@ -707,6 +929,18 @@ else
         if (veh is not null) await ToggleFocoVehiculo(veh);
     }
 
+    private async Task OnPieCatSelection(SelectedData<DonutItem> e)
+    {
+        var cat = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (cat is not null) await ToggleFocoCategoria(cat);
+    }
+
+    private async Task OnPieCatLegendClicked(LegendClicked<DonutItem> e)
+    {
+        var cat = e.DataPoint?.Items?.FirstOrDefault()?.Label;
+        if (cat is not null) await ToggleFocoCategoria(cat);
+    }
+
     // ── Drill-down: los viajes uno por uno detrás del número ──
 
     // El detalle del período se trae UNA vez por combinación de filtros (con caché en el
@@ -717,25 +951,29 @@ else
         {
             _cargandoDet = true;
             StateHasChanged();
-            _detalle = await Reports.GetReservasBandaHorariaDetalleAsync(_fDesdeAp, _fHastaAp, _vehAp, _estAp);
+            _detalle = await Reports.GetReservasBandaHorariaDetalleAsync(_fDesdeAp, _fHastaAp, _vehAp, _estAp, _catAp);
             _cargandoDet = false;
         }
         return _detalle;
     }
 
-    // Los drills respetan el foco activo: el número visible en la celda/fila corresponde al
+    // Los drills respetan los focos activos: el número visible en la celda/fila corresponde al
     // subconjunto enfocado y el detalle tiene que mostrar EXACTAMENTE esos viajes.
     private bool PasaFocoVeh(BandaHorariaDetalleRow d) => _vehiculoFocus is null || d.TipoVehiculo == _vehiculoFocus;
-    private bool PasaFocoBanda(BandaHorariaDetalleRow d) => _bandaFocus is null || d.Banda == _bandaFocus;
-    private string SufijoFocoVeh => _vehiculoFocus is null ? "" : $" · {_vehiculoFocus}";
+    private bool PasaFocoBanda(BandaHorariaDetalleRow d) => _bandaFocus is null || ColDe(d) == _bandaFocus;
+    private bool PasaFocoCat(BandaHorariaDetalleRow d) => _categoriaFocus is null || d.Categoria == _categoriaFocus;
+    // Sufijo del subtítulo del dialog: canta los focos que están recortando el detalle.
+    private string SufijoFocoVeh =>
+        (_categoriaFocus is null ? "" : $" · {_categoriaFocus}") +
+        (_vehiculoFocus is null ? "" : $" · {_vehiculoFocus}");
 
     private Task AbrirDetalleCelda(DateOnly f, string banda) =>
-        AbrirDetalle(d => d.Reserva.Fecha == f && d.Banda == banda && PasaFocoVeh(d),
-                     $"Banda {banda} — {FmtFecha(f)}{SufijoFocoVeh}");
+        AbrirDetalle(d => d.Reserva.Fecha == f && ColDe(d) == banda && PasaFocoVeh(d) && PasaFocoCat(d),
+                     $"{(_porHora ? "Hora" : "Banda")} {banda} — {FmtFecha(f)}{SufijoFocoVeh}");
 
     private Task AbrirDetalleDia(DateOnly f) =>
-        AbrirDetalle(d => d.Reserva.Fecha == f && PasaFocoBanda(d) && PasaFocoVeh(d),
-                     $"{(_bandaFocus is null ? "Todas las bandas" : $"Banda {_bandaFocus}")} — {FmtFecha(f)}{SufijoFocoVeh}");
+        AbrirDetalle(d => d.Reserva.Fecha == f && PasaFocoBanda(d) && PasaFocoVeh(d) && PasaFocoCat(d),
+                     $"{(_bandaFocus is null ? (_porHora ? "Todas las horas" : "Todas las bandas") : $"{(_porHora ? "Hora" : "Banda")} {_bandaFocus}")} — {FmtFecha(f)}{SufijoFocoVeh}");
 
     private async Task AbrirDetalle(Func<BandaHorariaDetalleRow, bool> filtro, string subtitulo)
     {
@@ -762,8 +1000,8 @@ else
     private async Task DescargarExcel()
     {
         var viajes = await GetDetalleAsync();
-        var bytes = Excel.BandaHoraria(_filas, _metrica, viajes);
-        var nombre = $"banda_horaria_{_fDesdeAp:yyyyMMdd}_{_fHastaAp:yyyyMMdd}.xlsx";
+        var bytes = Excel.BandaHoraria(_filas, _metrica, _porHora, viajes);
+        var nombre = $"{(_porHora ? "por_hora" : "banda_horaria")}_{_fDesdeAp:yyyyMMdd}_{_fHastaAp:yyyyMMdd}.xlsx";
         using var stream = new MemoryStream(bytes);
         using var streamRef = new DotNetStreamReference(stream);
         await JS.InvokeVoidAsync("descargarArchivo", nombre, streamRef);
